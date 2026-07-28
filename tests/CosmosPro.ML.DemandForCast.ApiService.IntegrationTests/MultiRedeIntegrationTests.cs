@@ -18,17 +18,23 @@ public sealed class MultiRedeIntegrationTests(AppHostFixture fixture)
     {
         // Arrange — contagens de loja diferentes dão a cada rede uma assinatura
         // verificável no Stage.
+        //
+        // Redes próprias, não a demo (id 1): a UI escreve na demo, e `dotnet test`
+        // na solução roda os projetos de teste em paralelo — o E2E subindo o próprio
+        // AppHost importaria na mesma rede e as contagens divergiriam. A isolação do
+        // teste não pode depender de ninguém mais tocar num inquilino compartilhado.
+        var redeA = await EnsureRedeAsync("Rede A", "rede-a");
         var redeB = await EnsureRedeAsync("Rede B", "rede-b");
 
         using var zipA = BuildZip(qtdLojas: 3, seed: 200);
         using var zipB = BuildZip(qtdLojas: 2, seed: 300);
 
         // Act
-        var cargaA = await ImportarAsync(zipA, "rede-a.zip", AppHostFixture.RedeDemoId);
+        var cargaA = await ImportarAsync(zipA, "rede-a.zip", redeA);
         var cargaB = await ImportarAsync(zipB, "rede-b.zip", redeB);
 
         // Assert — cada rede mantém exatamente as suas lojas
-        var lojasA = await fixture.StageApi.BrowseAsync("lojas", redeId: AppHostFixture.RedeDemoId);
+        var lojasA = await fixture.StageApi.BrowseAsync("lojas", redeId: redeA);
         var lojasB = await fixture.StageApi.BrowseAsync("lojas", redeId: redeB);
 
         lojasA.Content!.Total.Should().Be(3,
