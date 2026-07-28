@@ -10,16 +10,15 @@ namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 /// <c>DELETE FROM dbo.{tabela}</c> sem filtro: o import da segunda rede apagava
 /// o Stage da primeira.
 /// </summary>
-public sealed class MultiRedeIntegrationTests(AppHostFixture fixture) : IClassFixture<AppHostFixture>
+[Collection(AspireCollection.Name)]
+public sealed class MultiRedeIntegrationTests(AppHostFixture fixture)
 {
     [Fact]
     public async Task Import_de_duas_redes_preserva_os_dados_de_ambas()
     {
         // Arrange — contagens de loja diferentes dão a cada rede uma assinatura
         // verificável no Stage.
-        var criacao = await fixture.RedesApi.CreateAsync(new CreateRedeRequest("Rede B", "rede-b"));
-        criacao.IsSuccessStatusCode.Should().BeTrue("a rede B precisa existir antes do import");
-        var redeB = criacao.Content!.Id;
+        var redeB = await EnsureRedeAsync("Rede B", "rede-b");
 
         using var zipA = BuildZip(qtdLojas: 3, seed: 200);
         using var zipB = BuildZip(qtdLojas: 2, seed: 300);
@@ -48,9 +47,7 @@ public sealed class MultiRedeIntegrationTests(AppHostFixture fixture) : IClassFi
     [Fact]
     public async Task Reimport_na_mesma_rede_substitui_o_conteudo_anterior()
     {
-        var criacao = await fixture.RedesApi.CreateAsync(new CreateRedeRequest("Rede C", "rede-c"));
-        criacao.IsSuccessStatusCode.Should().BeTrue();
-        var redeC = criacao.Content!.Id;
+        var redeC = await EnsureRedeAsync("Rede C", "rede-c");
 
         using var primeiro = BuildZip(qtdLojas: 4, seed: 400);
         using var segundo = BuildZip(qtdLojas: 2, seed: 401);
@@ -66,6 +63,29 @@ public sealed class MultiRedeIntegrationTests(AppHostFixture fixture) : IClassFi
             "reimportar a mesma rede é refresh completo, não acúmulo");
     }
 
+    /// <summary>
+    /// Cria a rede ou devolve a existente. O Slug é único, então sem isto a segunda
+    /// execução do teste falharia com 409 — os containers do Aspire são persistentes
+    /// e o banco sobrevive entre runs.
+    /// </summary>
+    private async Task<int> EnsureRedeAsync(string nome, string slug)
+    {
+        var criacao = await fixture.RedesApi.CreateAsync(new CreateRedeRequest(nome, slug));
+        if (criacao.IsSuccessStatusCode)
+        {
+            return criacao.Content!.Id;
+        }
+
+        criacao.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            because: "só conflito de slug é aceitável aqui; outro status é falha real");
+
+        var lista = await fixture.RedesApi.ListAsync();
+        lista.IsSuccessStatusCode.Should().BeTrue();
+        var existente = lista.Content!.SingleOrDefault(r => r.Slug == slug);
+        existente.Should().NotBeNull($"rede '{slug}' deu 409 mas não apareceu na listagem");
+        return existente!.Id;
+    }
+
     private async Task<CargaStageView> ImportarAsync(Stream zip, string nome, int redeId)
     {
         zip.Position = 0;
@@ -79,6 +99,17 @@ public sealed class MultiRedeIntegrationTests(AppHostFixture fixture) : IClassFi
         return carga;
     }
 
+    /// <summary>
+    /// Gera um ZIP mínimo mas válido. A contagem de lojas é a assinatura que os
+    /// testes verificam no Stage.
+    /// <para>
+    /// Os fakers sorteiam as chaves, então volume alto em janela curta colide com as
+    /// PKs do Stage e a carga falha por motivo alheio ao que se está testando.
+    /// Defesas: janela de um ano (dilui <c>Vendas</c>/<c>EstoquesDiarios</c>) e uma
+    /// única linha de IQVIA — a PK dela é (Mes, PrincipioAtivo, UF), e com um só
+    /// princípio ativo e uma só UF duas linhas colidem sempre que caem no mesmo mês.
+    /// </para>
+    /// </summary>
     private static Stream BuildZip(int qtdLojas, int seed)
     {
         var lojas = new LojaFaker(seed: seed).Generate(qtdLojas);
@@ -86,7 +117,7 @@ public sealed class MultiRedeIntegrationTests(AppHostFixture fixture) : IClassFi
         var lojaIds = lojas.Select(l => l.LojaId).ToList();
         var skus = produtos.Select(p => p.Sku).ToList();
         var inicio = new DateOnly(2026, 1, 1);
-        var fim = new DateOnly(2026, 3, 1);
+        var fim = new DateOnly(2026, 12, 31);
 
         return new CsvZipBuilder()
             .WithLojas(lojas)
@@ -95,7 +126,7 @@ public sealed class MultiRedeIntegrationTests(AppHostFixture fixture) : IClassFi
             .WithEstoquesDiarios(new EstoqueDiarioFaker(lojaIds, skus, inicio, fim, seed: seed + 3).Generate(8))
             .WithCompras(new CompraFaker(lojaIds, skus, inicio, fim, seed: seed + 4).Generate(2))
             .WithPromocoes(new PromocaoFaker(lojaIds, skus, inicio, fim, seed: seed + 5).Generate(1))
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], inicio, fim, seed: seed + 6).Generate(2))
+            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], inicio, fim, seed: seed + 6).Generate(1))
             .Build();
     }
 }

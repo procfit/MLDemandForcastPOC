@@ -5,7 +5,8 @@ using Refit;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 
-public sealed class ImportsIntegrationTests(AppHostFixture fixture) : IClassFixture<AppHostFixture>
+[Collection(AspireCollection.Name)]
+public sealed class ImportsIntegrationTests(AppHostFixture fixture)
 {
     [Fact]
     public async Task Upload_de_ZIP_valido_retorna_202_e_aparece_na_listagem()
