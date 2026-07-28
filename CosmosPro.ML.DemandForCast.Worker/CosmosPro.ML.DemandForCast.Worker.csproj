@@ -18,6 +18,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.Worker.Tests" />
+    <!-- O extrator duplica o contrato de colunas do Stage; o teste de contrato
+         compara os dois para que não divirjam. -->
+    <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.Extractor.Tests" />
   </ItemGroup>
 
   <ItemGroup>
