@@ -27,7 +27,12 @@ public sealed class StageContractTests
     {
         foreach (var (file, table) in Mapeamento)
         {
-            var esperado = TableSchemas.ByTable[table].Select(c => c.Name).ToArray();
+            // Colunas ServerSupplied (RedeId) são injetadas pelo Worker a partir da
+            // CargaStage e não existem no CSV — o extrator não deve produzi-las.
+            var esperado = TableSchemas.ByTable[table]
+                .Where(c => !c.ServerSupplied)
+                .Select(c => c.Name)
+                .ToArray();
 
             StageContract.Headers[file].Should().Equal(
                 esperado,
