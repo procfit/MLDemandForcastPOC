@@ -39,8 +39,13 @@ public sealed class StageBrowser(SqlConnection connection)
 
     public static bool TryGetTable(string alias, out TableInfo info) => Tables.TryGetValue(alias, out info!);
 
+    /// <remarks>
+    /// <paramref name="redeId"/> filtra toda leitura. RedeId não está na whitelist de
+    /// colunas exibidas de propósito — é escopo, não conteúdo, e mostrá-lo em toda
+    /// grid só polui.
+    /// </remarks>
     public async Task<PageResult> QueryAsync(
-        TableInfo table, int skip, int take, string? orderBy, bool descending, CancellationToken ct)
+        TableInfo table, int redeId, int skip, int take, string? orderBy, bool descending, CancellationToken ct)
     {
         // Sanitiza o ORDER BY contra a whitelist de colunas. Fallback no default.
         var orderClause = table.DefaultOrderBy;
@@ -60,7 +65,8 @@ public sealed class StageBrowser(SqlConnection connection)
         long total;
         await using (var countCmd = connection.CreateCommand())
         {
-            countCmd.CommandText = $"SELECT COUNT_BIG(*) FROM dbo.[{table.TableName}]";
+            countCmd.CommandText = $"SELECT COUNT_BIG(*) FROM dbo.[{table.TableName}] WHERE RedeId = @redeId";
+            countCmd.Parameters.Add(new SqlParameter("@redeId", SqlDbType.Int) { Value = redeId });
             total = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
         }
 
@@ -72,8 +78,10 @@ public sealed class StageBrowser(SqlConnection connection)
             cmd.CommandText = $@"
                 SELECT {colList}
                 FROM dbo.[{table.TableName}]
+                WHERE RedeId = @redeId
                 ORDER BY {orderClause}
                 OFFSET @skip ROWS FETCH NEXT @take ROWS ONLY";
+            cmd.Parameters.Add(new SqlParameter("@redeId", SqlDbType.Int) { Value = redeId });
             cmd.Parameters.Add(new SqlParameter("@skip", SqlDbType.Int) { Value = skip });
             cmd.Parameters.Add(new SqlParameter("@take", SqlDbType.Int) { Value = take });
 

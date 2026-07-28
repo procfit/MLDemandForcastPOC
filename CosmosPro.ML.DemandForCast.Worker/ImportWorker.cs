@@ -54,11 +54,26 @@ internal sealed class ImportWorker(
             return false;
         }
 
-        logger.LogInformation("Processando carga {Id} ({Arquivo}).", claimed.Id, claimed.NomeArquivoOriginal);
+        logger.LogInformation(
+            "Processando carga {Id} ({Arquivo}) da rede {RedeId}.",
+            claimed.Id, claimed.NomeArquivoOriginal, claimed.RedeId);
 
         try
         {
-            var totalRows = await processor.ProcessAsync(claimed, ct);
+            // Rede inexistente ou inativa falha a carga com mensagem clara, em vez
+            // de estourar violação de FK no meio do SqlBulkCopy.
+            var rede = await db.Redes.AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == claimed.RedeId, ct)
+                ?? throw new InvalidOperationException(
+                    $"Rede {claimed.RedeId} não existe. Cadastre a rede antes de importar.");
+
+            if (!rede.Ativo)
+            {
+                throw new InvalidOperationException(
+                    $"Rede {rede.Id} ('{rede.Nome}') está inativa e não aceita importação.");
+            }
+
+            var totalRows = await processor.ProcessAsync(claimed, rede, ct);
 
             await db.CargasStage
                 .Where(c => c.Id == claimed.Id)
@@ -105,7 +120,7 @@ internal sealed class ImportWorker(
             UPDATE cte
                 SET Status = 'Processando',
                     DataInicioProcessamento = SYSDATETIMEOFFSET()
-                OUTPUT INSERTED.Id, INSERTED.BlobKey, INSERTED.NomeArquivoOriginal;
+                OUTPUT INSERTED.Id, INSERTED.BlobKey, INSERTED.NomeArquivoOriginal, INSERTED.RedeId;
             """;
 
         await using var conn = new SqlConnection(connStr);
@@ -120,6 +135,7 @@ internal sealed class ImportWorker(
             Id = reader.GetGuid(0),
             BlobKey = reader.GetString(1),
             NomeArquivoOriginal = reader.GetString(2),
+            RedeId = reader.GetInt32(3),
             Status = CargaStageStatus.Processando,
             DataAgendamento = default,
         };

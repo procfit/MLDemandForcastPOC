@@ -47,8 +47,11 @@ internal static class ImportsEndpoints
         EngineDbContext db,
         IMinioClient minio,
         ILogger<Program> logger,
-        CancellationToken ct)
+        CancellationToken ct,
+        [FromQuery] int redeId = 1)
     {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
         var errors = new List<string>();
         if (req.NumLojas is < 1 or > 200) errors.Add("NumLojas deve estar entre 1 e 200.");
         if (req.NumSkus is < 1 or > 5000) errors.Add("NumSkus deve estar entre 1 e 5000.");
@@ -82,6 +85,7 @@ internal static class ImportsEndpoints
         var carga = new CargaStage
         {
             Id = Guid.CreateVersion7(),
+            RedeId = redeId,
             Status = CargaStageStatus.Pendente,
             DataAgendamento = DateTimeOffset.UtcNow,
             NomeArquivoOriginal = $"sintetico-{options.NumLojas}lojas-{options.NumSkus}skus-{options.DataInicio:yyyyMMdd}-{options.DataFim:yyyyMMdd}.zip",
@@ -116,8 +120,11 @@ internal static class ImportsEndpoints
         EngineDbContext db,
         IMinioClient minio,
         ILogger<Program> logger,
-        CancellationToken ct)
+        CancellationToken ct,
+        [FromQuery] int redeId = 1)
     {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
         if (file is null || file.Length == 0)
         {
             return Results.BadRequest(new ValidationErrorResponse(["Arquivo vazio."]));
@@ -147,6 +154,7 @@ internal static class ImportsEndpoints
         var carga = new CargaStage
         {
             Id = Guid.CreateVersion7(),
+            RedeId = redeId,
             Status = CargaStageStatus.Pendente,
             DataAgendamento = DateTimeOffset.UtcNow,
             NomeArquivoOriginal = file.FileName,
@@ -202,10 +210,12 @@ internal static class ImportsEndpoints
     private static async Task<IResult> ListAsync(
         EngineDbContext db,
         CancellationToken ct,
-        [FromQuery] int take = 50)
+        [FromQuery] int take = 50,
+        [FromQuery] int redeId = 1)
     {
         var cargas = await db.CargasStage
             .AsNoTracking()
+            .Where(c => c.RedeId == redeId)
             .OrderByDescending(c => c.DataAgendamento)
             .Take(Math.Clamp(take, 1, 200))
             .Select(ProjectToView)

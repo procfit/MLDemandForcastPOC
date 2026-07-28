@@ -16,28 +16,28 @@ namespace CosmosPro.ML.DemandForCast.Worker.Training;
 /// </summary>
 internal sealed class StageObservationLoader(string connectionString, ILogger logger)
 {
-    public async Task<IReadOnlyList<DailyObservation>> LoadAsync(int maxSkus, CancellationToken ct)
+    public async Task<IReadOnlyList<DailyObservation>> LoadAsync(int redeId, int maxSkus, CancellationToken ct)
     {
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(ct);
 
-        var (selectedSkus, abcBySku) = await SelectTopSkusAndAbcAsync(conn, maxSkus, ct);
+        var (selectedSkus, abcBySku) = await SelectTopSkusAndAbcAsync(conn, redeId, maxSkus, ct);
         if (selectedSkus.Count == 0)
         {
-            logger.LogWarning("Stage não tem vendas — nada a treinar.");
+            logger.LogWarning("Stage da rede {RedeId} não tem vendas — nada a treinar.", redeId);
             return [];
         }
-        logger.LogInformation("Treino sobre {N} SKUs (top por volume).", selectedSkus.Count);
+        logger.LogInformation("Treino da rede {RedeId} sobre {N} SKUs (top por volume).", redeId, selectedSkus.Count);
 
-        var produtos = await LoadProdutosAsync(conn, ct);
-        var lojas = await LoadLojasAsync(conn, ct);
-        var promosBySku = await LoadPromocoesAsync(conn, ct);
+        var produtos = await LoadProdutosAsync(conn, redeId, ct);
+        var lojas = await LoadLojasAsync(conn, redeId, ct);
+        var promosBySku = await LoadPromocoesAsync(conn, redeId, ct);
 
         // Acumulador mutável por (Sku, LojaId, Data).
         var acc = new Dictionary<(string Sku, int Loja, DateOnly Data), Mutable>();
 
-        await ReadVendasAsync(conn, selectedSkus, acc, ct);
-        await MarkRupturasAsync(conn, selectedSkus, acc, ct);
+        await ReadVendasAsync(conn, redeId, selectedSkus, acc, ct);
+        await MarkRupturasAsync(conn, redeId, selectedSkus, acc, ct);
 
         // Materializa as observações, aplicando promoção e atributos estáticos.
         var result = new List<DailyObservation>(acc.Count);
@@ -76,13 +76,22 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         public bool EmRuptura;
     }
 
+    /// <remarks>
+    /// O ranking é <b>por rede</b>. Sem o filtro, a rede maior monopolizaria o corte
+    /// de <c>maxSkus</c> e a menor treinaria com quase nada.
+    /// </remarks>
     private static async Task<(HashSet<string> Skus, Dictionary<string, string> Abc)> SelectTopSkusAndAbcAsync(
-        SqlConnection conn, int maxSkus, CancellationToken ct)
+        SqlConnection conn, int redeId, int maxSkus, CancellationToken ct)
     {
         var totals = new List<(string Sku, decimal Vol)>();
         await using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = "SELECT Sku, SUM(Quantidade) AS Vol FROM dbo.Vendas GROUP BY Sku ORDER BY Vol DESC";
+            cmd.CommandText = @"
+                SELECT Sku, SUM(Quantidade) AS Vol
+                FROM dbo.Vendas
+                WHERE RedeId = @redeId
+                GROUP BY Sku ORDER BY Vol DESC";
+            cmd.Parameters.AddWithValue("@redeId", redeId);
             cmd.CommandTimeout = 300;
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct))
@@ -105,14 +114,15 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     }
 
     private static async Task ReadVendasAsync(
-        SqlConnection conn, HashSet<string> skus,
+        SqlConnection conn, int redeId, HashSet<string> skus,
         Dictionary<(string, int, DateOnly), Mutable> acc, CancellationToken ct)
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $@"
             SELECT Data, LojaId, Sku, Quantidade, PrecoUnitario
             FROM dbo.Vendas
-            WHERE Sku IN ({InClause(skus, cmd)})";
+            WHERE RedeId = @redeId AND Sku IN ({InClause(skus, cmd)})";
+        cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.CommandTimeout = 600;
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
@@ -128,7 +138,7 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     }
 
     private static async Task MarkRupturasAsync(
-        SqlConnection conn, HashSet<string> skus,
+        SqlConnection conn, int redeId, HashSet<string> skus,
         Dictionary<(string, int, DateOnly), Mutable> acc, CancellationToken ct)
     {
         // Dias com estoque <= 0 são ruptura. Podem não ter linha em Vendas (não
@@ -138,7 +148,8 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         cmd.CommandText = $@"
             SELECT Data, LojaId, Sku
             FROM dbo.EstoquesDiarios
-            WHERE QuantidadeEmEstoque <= 0 AND Sku IN ({InClause(skus, cmd)})";
+            WHERE RedeId = @redeId AND QuantidadeEmEstoque <= 0 AND Sku IN ({InClause(skus, cmd)})";
+        cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.CommandTimeout = 600;
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
@@ -150,11 +161,12 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     }
 
     private static async Task<Dictionary<string, (string? Categoria, string? PrincipioAtivo)>> LoadProdutosAsync(
-        SqlConnection conn, CancellationToken ct)
+        SqlConnection conn, int redeId, CancellationToken ct)
     {
         var d = new Dictionary<string, (string?, string?)>(StringComparer.OrdinalIgnoreCase);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT Sku, Categoria, PrincipioAtivo FROM dbo.Produtos";
+        cmd.CommandText = "SELECT Sku, Categoria, PrincipioAtivo FROM dbo.Produtos WHERE RedeId = @redeId";
+        cmd.Parameters.AddWithValue("@redeId", redeId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
             d[r.GetString(0)] = (r.IsDBNull(1) ? null : r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2));
@@ -162,11 +174,12 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     }
 
     private static async Task<Dictionary<int, (string? UF, string? Regiao, string? Perfil)>> LoadLojasAsync(
-        SqlConnection conn, CancellationToken ct)
+        SqlConnection conn, int redeId, CancellationToken ct)
     {
         var d = new Dictionary<int, (string?, string?, string?)>();
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT LojaId, UF, Regiao, Perfil FROM dbo.Lojas";
+        cmd.CommandText = "SELECT LojaId, UF, Regiao, Perfil FROM dbo.Lojas WHERE RedeId = @redeId";
+        cmd.Parameters.AddWithValue("@redeId", redeId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
             d[r.GetInt32(0)] = (
@@ -177,11 +190,12 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     }
 
     private static async Task<Dictionary<string, List<(DateOnly Ini, DateOnly Fim, int? Loja)>>> LoadPromocoesAsync(
-        SqlConnection conn, CancellationToken ct)
+        SqlConnection conn, int redeId, CancellationToken ct)
     {
         var d = new Dictionary<string, List<(DateOnly, DateOnly, int?)>>(StringComparer.OrdinalIgnoreCase);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT DataInicio, DataFim, Sku, LojaId FROM dbo.Promocoes";
+        cmd.CommandText = "SELECT DataInicio, DataFim, Sku, LojaId FROM dbo.Promocoes WHERE RedeId = @redeId";
+        cmd.Parameters.AddWithValue("@redeId", redeId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
         {

@@ -33,8 +33,11 @@ internal static class TrainingEndpoints
         [FromBody] EnqueueTrainingRequest? req,
         EngineDbContext db,
         ILogger<Program> logger,
-        CancellationToken ct)
+        CancellationToken ct,
+        [FromQuery] int redeId = 1)
     {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
         var maxSkus = req?.MaxSkus ?? 80;
         if (maxSkus is < 1 or > 5000)
             return Results.BadRequest(new ValidationErrorResponse(["MaxSkus deve estar entre 1 e 5000."]));
@@ -42,6 +45,7 @@ internal static class TrainingEndpoints
         var job = new TreinoJob
         {
             Id = Guid.CreateVersion7(),
+            RedeId = redeId,
             Status = TreinoStatus.Pendente,
             DataAgendamento = DateTimeOffset.UtcNow,
             MaxSkus = maxSkus,
@@ -54,10 +58,11 @@ internal static class TrainingEndpoints
     }
 
     private static async Task<IResult> ListAsync(
-        EngineDbContext db, CancellationToken ct, [FromQuery] int take = 50)
+        EngineDbContext db, CancellationToken ct, [FromQuery] int take = 50, [FromQuery] int redeId = 1)
     {
         var jobs = await db.TreinoJobs
             .AsNoTracking()
+            .Where(j => j.RedeId == redeId)
             .OrderByDescending(j => j.DataAgendamento)
             .Take(Math.Clamp(take, 1, 200))
             // ResultadoJson pode ser grande — não traz na listagem.

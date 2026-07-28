@@ -43,7 +43,7 @@ internal sealed class CargaProcessor(
         ("sinais_externos.csv", "SinaisExternos"),
     ];
 
-    public async Task<long> ProcessAsync(CargaStage carga, CancellationToken ct)
+    public async Task<long> ProcessAsync(CargaStage carga, Rede rede, CancellationToken ct)
     {
         var workDir = Path.Combine(Path.GetTempPath(), $"carga-{carga.Id}");
         Directory.CreateDirectory(workDir);
@@ -51,7 +51,7 @@ internal sealed class CargaProcessor(
         try
         {
             await DownloadAndExtractAsync(carga.BlobKey, workDir, ct);
-            return await LoadIntoStageAsync(workDir, ct);
+            return await LoadIntoStageAsync(workDir, rede, ct);
         }
         finally
         {
@@ -76,7 +76,7 @@ internal sealed class CargaProcessor(
         File.Delete(zipPath);
     }
 
-    private async Task<long> LoadIntoStageAsync(string workDir, CancellationToken ct)
+    private async Task<long> LoadIntoStageAsync(string workDir, Rede rede, CancellationToken ct)
     {
         var connStr = config.GetConnectionString("Stage")
             ?? throw new InvalidOperationException("Connection string 'Stage' não encontrada.");
@@ -87,10 +87,16 @@ internal sealed class CargaProcessor(
 
         try
         {
-            // Limpa em ordem reversa de FK (filhos antes de pais).
+            // Projeta a rede no Stage antes de tudo: as FKs das tabelas de dado
+            // apontam para dbo.Redes, que precisa ter a linha.
+            await UpsertRedeAsync(rede, conn, tx, ct);
+
+            // Limpa em ordem reversa de FK (filhos antes de pais), **só desta rede** —
+            // sem o filtro, importar uma rede apagaria o Stage das outras.
             foreach (var table in DeleteOrder)
             {
-                await using var cmd = new SqlCommand($"DELETE FROM dbo.{table};", conn, tx);
+                await using var cmd = new SqlCommand($"DELETE FROM dbo.{table} WHERE RedeId = @redeId;", conn, tx);
+                cmd.Parameters.AddWithValue("@redeId", rede.Id);
                 cmd.CommandTimeout = 300;
                 await cmd.ExecuteNonQueryAsync(ct);
             }
@@ -99,8 +105,8 @@ internal sealed class CargaProcessor(
             long total = 0;
             foreach (var (csv, table) in InsertOrder)
             {
-                var rows = await BulkInsertAsync(workDir, csv, table, conn, tx, ct);
-                logger.LogInformation("BULK INSERT {Table}: {Rows} linhas.", table, rows);
+                var rows = await BulkInsertAsync(workDir, csv, table, rede.Id, conn, tx, ct);
+                logger.LogInformation("BULK INSERT {Table} (rede {RedeId}): {Rows} linhas.", table, rede.Id, rows);
                 total += rows;
             }
 
@@ -114,8 +120,27 @@ internal sealed class CargaProcessor(
         }
     }
 
+    /// <summary>
+    /// Sincroniza a projeção da rede no Stage. UPDATE-então-INSERT em vez de
+    /// IF NOT EXISTS: dentro da transação do import, evita a corrida do
+    /// check-then-insert.
+    /// </summary>
+    private static async Task UpsertRedeAsync(
+        Rede rede, SqlConnection conn, SqlTransaction tx, CancellationToken ct)
+    {
+        await using var cmd = new SqlCommand("""
+            UPDATE dbo.Redes SET Nome = @nome, Slug = @slug WHERE RedeId = @redeId;
+            IF @@ROWCOUNT = 0
+                INSERT INTO dbo.Redes (RedeId, Nome, Slug) VALUES (@redeId, @nome, @slug);
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("@redeId", rede.Id);
+        cmd.Parameters.AddWithValue("@nome", rede.Nome);
+        cmd.Parameters.AddWithValue("@slug", rede.Slug);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     private async Task<long> BulkInsertAsync(
-        string workDir, string csvName, string table,
+        string workDir, string csvName, string table, int redeId,
         SqlConnection conn, SqlTransaction tx, CancellationToken ct)
     {
         var csvPath = Path.Combine(workDir, csvName);
@@ -172,6 +197,11 @@ internal sealed class CargaProcessor(
             var row = dataTable.NewRow();
             foreach (var col in schema)
             {
+                if (col.ServerSupplied)
+                {
+                    row[col.Name] = redeId;
+                    continue;
+                }
                 if (!headerIdx.TryGetValue(col.Name, out var idx))
                 {
                     row[col.Name] = col.Nullable

@@ -37,7 +37,7 @@ internal sealed class TreinoProcessor(
             ?? throw new InvalidOperationException("Connection string 'Stage' não encontrada.");
 
         var loader = new StageObservationLoader(connStr, logger);
-        var observations = await loader.LoadAsync(job.MaxSkus, ct);
+        var observations = await loader.LoadAsync(job.RedeId, job.MaxSkus, ct);
         if (observations.Count == 0)
             throw new InvalidOperationException("Sem observações no Stage. Importe dados antes de treinar.");
 

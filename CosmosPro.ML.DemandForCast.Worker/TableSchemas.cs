@@ -9,12 +9,24 @@ namespace CosmosPro.ML.DemandForCast.Worker;
 /// </summary>
 internal static class TableSchemas
 {
-    internal record Column(string Name, Type Type, bool Nullable);
+    /// <param name="ServerSupplied">
+    /// Coluna que o Worker preenche, não o CSV. Nunca é procurada no header e
+    /// nunca passa por <see cref="Parse"/>.
+    /// </param>
+    internal record Column(string Name, Type Type, bool Nullable, bool ServerSupplied = false);
+
+    /// <summary>
+    /// RedeId nunca vem do CSV: o Worker injeta a partir da CargaStage. Isso mantém
+    /// o contrato CSV intacto e impede que um cliente reivindique a rede de outro
+    /// escrevendo um id no arquivo.
+    /// </summary>
+    private static readonly Column RedeId = new("RedeId", typeof(int), false, ServerSupplied: true);
 
     public static readonly IReadOnlyDictionary<string, Column[]> ByTable = new Dictionary<string, Column[]>(StringComparer.OrdinalIgnoreCase)
     {
         ["Lojas"] =
         [
+            RedeId,
             new("LojaId", typeof(int), false),
             new("Nome", typeof(string), false),
             new("UF", typeof(string), false),
@@ -27,6 +39,7 @@ internal static class TableSchemas
         ],
         ["Produtos"] =
         [
+            RedeId,
             new("Sku", typeof(string), false),
             new("Nome", typeof(string), false),
             new("Categoria", typeof(string), true),
@@ -42,6 +55,7 @@ internal static class TableSchemas
         ],
         ["Vendas"] =
         [
+            RedeId,
             new("Data", typeof(DateTime), false),
             new("LojaId", typeof(int), false),
             new("Sku", typeof(string), false),
@@ -51,6 +65,7 @@ internal static class TableSchemas
         ],
         ["EstoquesDiarios"] =
         [
+            RedeId,
             new("Data", typeof(DateTime), false),
             new("LojaId", typeof(int), false),
             new("Sku", typeof(string), false),
@@ -58,6 +73,7 @@ internal static class TableSchemas
         ],
         ["Compras"] =
         [
+            RedeId,
             new("DataPedido", typeof(DateTime), false),
             new("DataRecebimento", typeof(DateTime), true),
             new("LojaId", typeof(int), false),
@@ -67,6 +83,7 @@ internal static class TableSchemas
         ],
         ["Promocoes"] =
         [
+            RedeId,
             new("DataInicio", typeof(DateTime), false),
             new("DataFim", typeof(DateTime), false),
             new("Sku", typeof(string), false),
@@ -76,6 +93,7 @@ internal static class TableSchemas
         ],
         ["MercadoIqvia"] =
         [
+            RedeId,
             new("Mes", typeof(DateTime), false),
             new("PrincipioAtivo", typeof(string), false),
             new("UF", typeof(string), false),
@@ -84,6 +102,7 @@ internal static class TableSchemas
         ],
         ["SinaisExternos"] =
         [
+            RedeId,
             new("Data", typeof(DateTime), false),
             new("Geografia", typeof(string), false),
             new("Tipo", typeof(string), false),

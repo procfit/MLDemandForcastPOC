@@ -17,6 +17,7 @@ namespace CosmosPro.ML.DemandForCast.Worker.Purchasing;
 internal sealed class StageEstoqueInicialLoader(string connectionString, ILogger logger)
 {
     public async Task<Dictionary<(string Sku, int LojaId), decimal>> LoadAsync(
+        int redeId,
         IReadOnlyCollection<string> skus,
         DateOnly primeiroDiaSimulacao,
         CancellationToken ct)
@@ -30,6 +31,7 @@ internal sealed class StageEstoqueInicialLoader(string connectionString, ILogger
         await using var cmd = conn.CreateCommand();
         var inClause = BuildInClause(skus, cmd);
         cmd.Parameters.AddWithValue("@cutoff", primeiroDiaSimulacao.ToDateTime(TimeOnly.MinValue));
+        cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.CommandTimeout = 300;
         cmd.CommandText = $@"
             SELECT Sku, LojaId, QuantidadeEmEstoque
@@ -37,7 +39,7 @@ internal sealed class StageEstoqueInicialLoader(string connectionString, ILogger
                 SELECT Sku, LojaId, QuantidadeEmEstoque,
                        ROW_NUMBER() OVER (PARTITION BY Sku, LojaId ORDER BY Data DESC) AS rn
                 FROM dbo.EstoquesDiarios
-                WHERE Data < @cutoff AND Sku IN ({inClause})
+                WHERE RedeId = @redeId AND Data < @cutoff AND Sku IN ({inClause})
             ) t WHERE rn = 1";
 
         await using var r = await cmd.ExecuteReaderAsync(ct);

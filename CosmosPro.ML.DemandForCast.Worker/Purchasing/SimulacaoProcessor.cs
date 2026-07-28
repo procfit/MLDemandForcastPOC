@@ -46,7 +46,7 @@ internal sealed class SimulacaoProcessor(
 
         // 2) Observações (mesmas regras do treino: top MaxSkus, ABC dinâmica, ruptura marcada).
         var loader = new StageObservationLoader(connStr, logger);
-        var observations = await loader.LoadAsync(treino.MaxSkus, ct);
+        var observations = await loader.LoadAsync(job.RedeId, treino.MaxSkus, ct);
         if (observations.Count == 0)
             throw new InvalidOperationException("Sem observações no Stage para simular.");
 
@@ -58,7 +58,7 @@ internal sealed class SimulacaoProcessor(
         // 3) Estoque inicial no dia anterior à janela.
         var skus = observations.Select(o => o.Sku).Distinct().ToArray();
         var estoqueLoader = new StageEstoqueInicialLoader(connStr, logger);
-        var estoqueInicialRaw = await estoqueLoader.LoadAsync(skus, inicio, ct);
+        var estoqueInicialRaw = await estoqueLoader.LoadAsync(job.RedeId, skus, inicio, ct);
         var estoqueInicial = estoqueInicialRaw.ToDictionary(
             kv => new PurchasingSimulator.SerieKey(kv.Key.Sku, kv.Key.LojaId),
             kv => kv.Value);
