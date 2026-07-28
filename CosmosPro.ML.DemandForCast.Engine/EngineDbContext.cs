@@ -1,9 +1,12 @@
 using CosmosPro.ML.DemandForCast.Engine.Entities;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
 namespace CosmosPro.ML.DemandForCast.Engine;
 
-public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options) : DbContext(options)
+public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
+    : IdentityDbContext<Usuario, IdentityRole<Guid>, Guid>(options)
 {
     public DbSet<Rede> Redes => Set<Rede>();
     public DbSet<CargaStage> CargasStage => Set<CargaStage>();
@@ -12,6 +15,22 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options) :
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // OBRIGATÓRIO e fácil de esquecer: sem esta chamada as tabelas do Identity
+        // ficam sem configuração e a migration sai incompleta.
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<Usuario>(b =>
+        {
+            b.Property(x => x.NomeCompleto).IsRequired().HasMaxLength(160);
+
+            // Restrict: rede com usuário vinculado não pode ser apagada. A UI
+            // desativa em vez de excluir.
+            b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            b.HasIndex(x => x.RedeId).HasDatabaseName("IX_Usuarios_RedeId");
+        });
+
         modelBuilder.Entity<Rede>(b =>
         {
             b.ToTable("Redes");

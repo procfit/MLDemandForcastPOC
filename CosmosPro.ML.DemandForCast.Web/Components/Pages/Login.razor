@@ -1,0 +1,78 @@
+@page "/login"
+@layout Layout.LoginLayout
+@attribute [AllowAnonymous]
+
+<PageTitle>Entrar — DemandForCast</PageTitle>
+
+<div class="login-wrap">
+    <RadzenCard Variant="Variant.Outlined" class="login-card">
+        <RadzenStack Gap="1.25rem">
+            <RadzenStack Gap="0.25rem">
+                <RadzenText TextStyle="TextStyle.H5">Previsão de demanda</RadzenText>
+                <RadzenText TextStyle="TextStyle.Body2" class="rz-color-on-surface-variant">
+                    Entre com a conta que o administrador criou para você.
+                </RadzenText>
+            </RadzenStack>
+
+            @if (Erro is not null)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat"
+                             Shade="Shade.Lighter" AllowClose="false">
+                    @MensagemErro
+                </RadzenAlert>
+            }
+
+            @* Form HTML puro com POST: o cookie precisa ser escrito na resposta,
+               o que não é possível de dentro do render interativo. *@
+            <form method="post" action="/api/auth/login">
+                <RadzenStack Gap="1rem">
+                    <RadzenFormField Text="E-mail" Variant="Variant.Outlined" Style="width: 100%">
+                        <ChildContent>
+                            <input type="email" name="email" required autofocus
+                                   autocomplete="username" class="rz-textbox" style="width: 100%" />
+                        </ChildContent>
+                    </RadzenFormField>
+
+                    <RadzenFormField Text="Senha" Variant="Variant.Outlined" Style="width: 100%">
+                        <ChildContent>
+                            <input type="password" name="senha" required
+                                   autocomplete="current-password" class="rz-textbox" style="width: 100%" />
+                        </ChildContent>
+                    </RadzenFormField>
+
+                    <button type="submit" class="rz-button rz-button-md rz-variant-filled rz-primary"
+                            style="width: 100%">
+                        <span class="rz-button-box">
+                            <span class="rz-button-text">Entrar</span>
+                        </span>
+                    </button>
+                </RadzenStack>
+            </form>
+        </RadzenStack>
+    </RadzenCard>
+</div>
+
+<style>
+    .login-wrap {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 1.5rem;
+    }
+    .login-card {
+        width: 100%;
+        max-width: 26rem;
+    }
+</style>
+
+@code {
+    [SupplyParameterFromQuery(Name = "erro")]
+    public string? Erro { get; set; }
+
+    private string MensagemErro => Erro switch
+    {
+        "2" => "Conta temporariamente bloqueada por excesso de tentativas. Tente novamente em alguns minutos.",
+        _ => "E-mail ou senha inválidos.",
+    };
+}

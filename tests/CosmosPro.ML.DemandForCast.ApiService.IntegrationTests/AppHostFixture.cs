@@ -29,6 +29,11 @@ public sealed class AppHostFixture : IAsyncLifetime
 
         builder.Services.AddLogging(l => l.SetMinimumLevel(LogLevel.Warning));
 
+        // 'poweruser-password' é parâmetro secreto sem valor no AppHost (vem de
+        // user-secrets em desenvolvimento). Sem injetar aqui, a Web não sobe.
+        builder.Configuration["Parameters:poweruser-email"] = "admin@local";
+        builder.Configuration["Parameters:poweruser-password"] = "TesteIntegracao!2026";
+
         // CommunityToolkit.Aspire.Hosting.SqlDatabaseProjects descobre o
         // caminho do .dacpac avaliando o .sqlproj via Microsoft.Build em runtime.
         // Sob `dotnet test`, MSBuild não está corretamente resolvido e a carga

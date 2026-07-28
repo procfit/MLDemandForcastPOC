@@ -1,0 +1,10 @@
+@inject NavigationManager Nav
+
+@code {
+    protected override void OnInitialized()
+    {
+        // forceLoad: o cookie de autenticação é escrito por endpoint HTTP, então a
+        // ida ao login tem de ser navegação real, não troca de rota no circuito.
+        Nav.NavigateTo($"/login?retorno={Uri.EscapeDataString(Nav.Uri)}", forceLoad: true);
+    }
+}

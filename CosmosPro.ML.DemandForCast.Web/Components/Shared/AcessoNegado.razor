@@ -1,0 +1,14 @@
+<RadzenStack Gap="1rem" class="rz-p-8">
+    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">Acesso negado</RadzenText>
+        <RadzenText TextStyle="TextStyle.Body1">
+            Sua conta não tem permissão para esta área. Se você precisa de acesso,
+            peça ao administrador do sistema.
+        </RadzenText>
+    </RadzenAlert>
+
+    <RadzenButton Text="Voltar ao início" Icon="home" ButtonStyle="ButtonStyle.Light"
+                  Click="@(() => Nav.NavigateTo("/"))" Style="align-self: flex-start" />
+</RadzenStack>
+
+@inject NavigationManager Nav

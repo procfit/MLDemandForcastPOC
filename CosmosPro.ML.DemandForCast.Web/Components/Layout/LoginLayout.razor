@@ -1,0 +1,11 @@
+@inherits LayoutComponentBase
+
+@* Layout sem menu nem sidebar: quem não está autenticado não deve ver a navegação
+   da aplicação. *@
+<RadzenLayout>
+    <RadzenBody>
+        @Body
+    </RadzenBody>
+</RadzenLayout>
+
+<RadzenComponents @rendermode="InteractiveServer" />

@@ -1,0 +1,85 @@
+@rendermode InteractiveServer
+@inject IRedeContext RedeCtx
+@inject IServiceScopeFactory Escopos
+@inject NavigationManager Nav
+
+<AuthorizeView>
+    <Authorized>
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+
+            @* Seletor só para PowerUser: ele é autorizado em todas as redes, então
+               escolher é legítimo. Para usuário de rede o escopo vem do claim e a
+               rede aparece apenas como rótulo. *@
+            @if (_ehPowerUser && _redes.Count > 0)
+            {
+                <RadzenIcon Icon="store" />
+                <RadzenDropDown TValue="int" Value="@_redeAtual" Data="@_redes"
+                                TextProperty="Nome" ValueProperty="Id"
+                                Change="@(async v => await TrocarRedeAsync((int)v))"
+                                Style="min-width: 14rem" />
+            }
+            else if (_nomeRede is not null)
+            {
+                <RadzenBadge Text="@_nomeRede" BadgeStyle="BadgeStyle.Info" />
+            }
+
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-0">
+                @context.User.Identity?.Name
+            </RadzenText>
+
+            @* Logout por form post: limpar o cookie exige resposta HTTP. *@
+            <form method="post" action="/api/auth/logout" style="margin: 0">
+                <button type="submit" class="rz-button rz-button-sm rz-variant-text rz-base"
+                        title="Sair">
+                    <span class="rz-button-box">
+                        <i class="rzi rz-button-icon-left">logout</i>
+                        <span class="rz-button-text">Sair</span>
+                    </span>
+                </button>
+            </form>
+        </RadzenStack>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private bool _ehPowerUser;
+    private List<Rede> _redes = [];
+    private int _redeAtual;
+    private string? _nomeRede;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _ehPowerUser = await RedeCtx.EhPowerUserAsync();
+            _redeAtual = await RedeCtx.GetRedeIdAtualAsync();
+
+            await using var escopo = Escopos.CreateAsyncScope();
+            var db = escopo.ServiceProvider.GetRequiredService<EngineDbContext>();
+
+            if (_ehPowerUser)
+            {
+                _redes = await db.Redes.AsNoTracking().Where(r => r.Ativo).OrderBy(r => r.Nome).ToListAsync();
+            }
+            else
+            {
+                _nomeRede = await db.Redes.AsNoTracking()
+                    .Where(r => r.Id == _redeAtual).Select(r => r.Nome).FirstOrDefaultAsync();
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Sem rede resolvida (usuário operacional sem vínculo, ou nenhuma rede
+            // ativa cadastrada). A barra apenas não mostra o escopo; as páginas de
+            // dados exibem o erro real quando tentarem carregar.
+        }
+    }
+
+    private async Task TrocarRedeAsync(int redeId)
+    {
+        await RedeCtx.SelecionarRedeAsync(redeId);
+        _redeAtual = redeId;
+        // Recarrega para as páginas refazerem as consultas no novo escopo.
+        Nav.NavigateTo(Nav.Uri, forceLoad: true);
+    }
+}

@@ -7,12 +7,20 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.4.3" />
     <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="Radzen.Blazor" Version="10.3.1" />
   </ItemGroup>
 
   <ItemGroup>
+    <!-- RedeContext e os endpoints de login são internal de propósito (detalhe de DI);
+         os testes precisam alcançá-los sem ampliar a API pública. -->
+    <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.Web.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.ServiceDefaults\CosmosPro.ML.DemandForCast.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Engine\CosmosPro.ML.DemandForCast.Engine.csproj" />
   </ItemGroup>
 
 </Project>

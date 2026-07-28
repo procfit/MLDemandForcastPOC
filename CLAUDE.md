@@ -69,7 +69,7 @@ POC de **engine de previsão de demanda** para varejo farmacêutico, alimentando
 | Banco | Servidor | Schema gerenciado por | Conteúdo |
 |---|---|---|---|
 | `Stage` | SQL Server | **DACPAC** — SQL Server Project `CosmosPro.ML.DemandForCast.Database`, publicado pelo Aspire via `AddSqlProject` (`stage-schema` resource, one-shot, `WaitForCompletion`). | Staging area dos dados importados pelo usuário via UI (CSV/ZIP). Tabelas plural: `Redes`, `Lojas`, `Produtos`, `Vendas`, `EstoquesDiarios`, `Compras`, `Promocoes`, `MercadoIqvia`, `SinaisExternos`. Engine só lê, nunca escreve — o **Worker** é o único que escreve. |
-| `engine` | SQL Server | **EF Core migrations** via `Aspire.Hosting.EntityFrameworkCore.AddEFMigrations` + `RunDatabaseUpdateOnStart` (pacote prerelease 13.3.4-preview). Source-of-truth no projeto `CosmosPro.ML.DemandForCast.Engine`. | Metadados do engine: `CargasStage` (jobs de import), futuros experimentos, runs, modelos, métricas. |
+| `engine` | SQL Server | **EF Core migrations** via `Aspire.Hosting.EntityFrameworkCore.AddEFMigrations` + `RunDatabaseUpdateOnStart` (pacote prerelease 13.3.4-preview). Source-of-truth no projeto `CosmosPro.ML.DemandForCast.Engine`. | Metadados do engine: `Redes` (registro dos inquilinos, fonte de verdade do `RedeId`), `CargasStage`, `TreinoJobs`, `SimulacoesCompra`, e as 7 tabelas do ASP.NET Core Identity (`AspNetUsers` com `RedeId` + FK para `Redes`, `AspNetRoles`, etc). |
 | `vendas-olap` | ClickHouse | Runner one-shot `CosmosPro.ML.DemandForCast.OlapSchema` (console .NET) que aplica scripts `Scripts/*.sql` embarcados, controlando versão via tabela `__schema_migrations`. AppHost wires com `AddProject(...).WithReference(vendasOlapDb)`; apiservice usa `WaitForCompletion(olapSchema)`. | Histórico denso para varredura analítica e feature extraction em massa. |
 
 **Regra:** schema do `Stage` **só** muda via SQL Project (não por script ad-hoc). Schema do `engine` **só** muda via EF Core migration. Sem migrations imperativas no banco `Stage`; sem CREATE TABLE manual em código consumidor. Esta separação é deliberada para manter `Stage` como contrato declarativo das fontes que o engine consome.
@@ -77,6 +77,8 @@ POC de **engine de previsão de demanda** para varejo farmacêutico, alimentando
 **Multi-inquilino (F10):** toda tabela de `Stage` tem `RedeId` com FK. `Lojas` e `Produtos` têm PK `(RedeId, <chave>)` porque `LojaId` e `Sku` são códigos de ERP e **colidem entre redes**; as filhas usam FK **composta** `(RedeId, Sku)` / `(RedeId, LojaId)`, que amarra a linha ao inquilino transitivamente sem FK redundante no caminho do `SqlBulkCopy`. `Redes` existe nos dois bancos porque FK entre bancos não existe no SQL Server: `engine.Redes` é o registro (fonte de verdade do id) e `Stage.dbo.Redes` é projeção que o Worker sincroniza no início de cada import.
 
 **`RedeId` nunca trafega em CSV.** O Worker injeta a partir da `CargaStage` (coluna marcada `ServerSupplied` em `TableSchemas`). Isso mantém o contrato CSV, o Extractor e os fakers intactos, e impede que um cliente reivindique a rede de outro escrevendo um id no arquivo. Ao adicionar tabela nova ao Stage, replique o padrão — e lembre que o polling do Worker é **cross-rede** (pega a próxima pendente de qualquer inquilino), então `RedeId` não entra nos índices de polling.
+
+**Identidade e escopo (F11):** login com ASP.NET Core Identity hospedado na **Web** (é o único processo que o navegador alcança — a `apiservice` não tem endpoint externo, e isso é invariante, não acidente). Papéis: `PowerUser` global (`RedeId` nulo) e `UsuarioRede` escopado. Nenhum código deve ler `redeId` de rota, query ou formulário para decidir escopo — use `IRedeContext`, que o deriva do usuário autenticado. A `apiservice` recebe `redeId` na query porque é interna; se algum dia for publicada, este modelo cai e ela precisa de auth própria.
 
 **Object storage (MinIO):** recursos do tipo Container com `WithLifetime(Persistent) + WithDataVolume()`. Acesso via `CommunityToolkit.Aspire.Hosting.Minio` 13.3.0. Credenciais (access key + secret key) injetadas como `ParameterResource` Aspire (user-secrets para o secret). Usado para armazenar ZIPs de import.
 
@@ -112,7 +114,7 @@ Repositório **não é git** ainda (verificado no bootstrap). Não rodar `git in
 ## 7. Quando o usuário pedir algo que cheire a fora-de-escopo do POC
 
 Diga isso explicitamente e pergunte. Exemplos:
-- "Posso adicionar autenticação?" → POC, provavelmente não. Confirme.
+- ~~"Posso adicionar autenticação?" → POC, provavelmente não.~~ **Desatualizado desde F11.** O sistema tem ASP.NET Core Identity com login, papéis (`PowerUser` global e `UsuarioRede` escopado) e área administrativa. Foi necessário porque usuários de redes reais distintas operam a aplicação e o dado comercial de uma não pode alcançar a outra.
 - "Vamos deployar no Azure?" → fora do roadmap atual (F0–F6 em [README.md](README.md)).
 - "Adicionar GraphQL/gRPC/SignalR?" → não há demanda; provavelmente *over-engineering*.
 

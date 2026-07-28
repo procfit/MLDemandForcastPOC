@@ -1,0 +1,197 @@
+@page "/admin/redes"
+@attribute [Authorize(Roles = Papeis.PowerUser)]
+@rendermode InteractiveServer
+@inject IServiceScopeFactory Escopos
+@inject NotificationService Notificacao
+
+<PageTitle>Redes — Administração</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+        <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-mb-0">Redes</RadzenText>
+        <HelpTip Text="Cada rede é um cliente do sistema — uma rede de farmácias. Os dados de uma rede são completamente isolados dos das outras: quem pertence a uma nunca vê os dados de outra." />
+        <div style="flex: 1"></div>
+        <RadzenButton Text="Nova rede" Icon="add" Click="@AbrirNova" />
+    </RadzenStack>
+
+    <RadzenDataGrid @ref="_grid" Data="@_redes" TItem="Rede" AllowSorting="true"
+                    EmptyText="Nenhuma rede cadastrada." PageSize="20" AllowPaging="true">
+        <Columns>
+            <RadzenDataGridColumn TItem="Rede" Property="Id" Title="Id" Width="70px" />
+            <RadzenDataGridColumn TItem="Rede" Property="Nome" Title="Nome" />
+            <RadzenDataGridColumn TItem="Rede" Property="Slug" Title="Identificador" Width="160px" />
+            <RadzenDataGridColumn TItem="Rede" Property="CnpjRaiz" Title="CNPJ" Width="150px" />
+            <RadzenDataGridColumn TItem="Rede" Title="Situação" Width="120px" Sortable="false">
+                <Template Context="r">
+                    <RadzenBadge Text="@(r.Ativo ? "Ativa" : "Inativa")"
+                                 BadgeStyle="@(r.Ativo ? BadgeStyle.Success : BadgeStyle.Light)" />
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="Rede" Title="Usuários" Width="100px" Sortable="false">
+                <Template Context="r">
+                    @(_usuariosPorRede.GetValueOrDefault(r.Id, 0))
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="Rede" Title="" Width="190px" Sortable="false">
+                <Template Context="r">
+                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                  Click="@(() => AbrirEdicao(r))" title="Editar" />
+                    <RadzenButton Icon="@(r.Ativo ? "block" : "check_circle")" Size="ButtonSize.Small"
+                                  ButtonStyle="@(r.Ativo ? ButtonStyle.Warning : ButtonStyle.Success)"
+                                  Click="@(() => AlternarAtivoAsync(r))"
+                                  title="@(r.Ativo ? "Desativar" : "Reativar")" class="rz-ml-1" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+
+    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        Redes não são excluídas, apenas desativadas. Apagar uma rede destruiria o
+        histórico de importações, treinos e simulações ligados a ela.
+    </RadzenAlert>
+</RadzenStack>
+
+@if (_editando is not null)
+{
+    <RadzenCard Variant="Variant.Outlined" class="rz-mt-4">
+        <RadzenTemplateForm TItem="FormRede" Data="@_editando" Submit="@SalvarAsync">
+            <RadzenStack Gap="1rem">
+                <RadzenText TextStyle="TextStyle.H6">
+                    @(_editando.Id is null ? "Nova rede" : $"Editar rede #{_editando.Id}")
+                </RadzenText>
+
+                <RadzenFormField Text="Nome" Variant="Variant.Outlined">
+                    <RadzenTextBox @bind-Value="_editando.Nome" Name="Nome" MaxLength="120" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Nome" Text="Nome é obrigatório." Popup="false" />
+
+                <RadzenFormField Text="Identificador (minúsculas, dígitos e hífen)" Variant="Variant.Outlined">
+                    <RadzenTextBox @bind-Value="_editando.Slug" Name="Slug" MaxLength="40" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Slug" Text="Identificador é obrigatório." Popup="false" />
+
+                <RadzenFormField Text="CNPJ (opcional)" Variant="Variant.Outlined">
+                    <RadzenTextBox @bind-Value="_editando.CnpjRaiz" Name="Cnpj" MaxLength="14" />
+                </RadzenFormField>
+
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                    <RadzenButton ButtonType="ButtonType.Submit" Text="Salvar" Icon="save" />
+                    <RadzenButton Text="Cancelar" ButtonStyle="ButtonStyle.Light"
+                                  Click="@(() => _editando = null)" />
+                </RadzenStack>
+            </RadzenStack>
+        </RadzenTemplateForm>
+    </RadzenCard>
+}
+
+@code {
+    private RadzenDataGrid<Rede>? _grid;
+    private List<Rede> _redes = [];
+    private Dictionary<int, int> _usuariosPorRede = [];
+    private FormRede? _editando;
+
+    private sealed class FormRede
+    {
+        public int? Id { get; set; }
+        public string Nome { get; set; } = "";
+        public string Slug { get; set; } = "";
+        public string? CnpjRaiz { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync() => await CarregarAsync();
+
+    /// <summary>
+    /// Escopo por operação em vez de DbContext injetado: em Blazor Server um serviço
+    /// scoped vive o circuito inteiro, e dois cliques rápidos no mesmo contexto
+    /// estouram "A second operation was started on this context".
+    /// </summary>
+    private async Task ComDbAsync(Func<EngineDbContext, Task> acao)
+    {
+        await using var escopo = Escopos.CreateAsyncScope();
+        await acao(escopo.ServiceProvider.GetRequiredService<EngineDbContext>());
+    }
+
+    private async Task CarregarAsync() => await ComDbAsync(async db =>
+    {
+        _redes = await db.Redes.AsNoTracking().OrderBy(r => r.Nome).ToListAsync();
+        _usuariosPorRede = await db.Users.AsNoTracking()
+            .Where(u => u.RedeId != null)
+            .GroupBy(u => u.RedeId!.Value)
+            .Select(g => new { RedeId = g.Key, Qtd = g.Count() })
+            .ToDictionaryAsync(x => x.RedeId, x => x.Qtd);
+    });
+
+    private void AbrirNova() => _editando = new FormRede();
+
+    private void AbrirEdicao(Rede r) => _editando = new FormRede
+    {
+        Id = r.Id, Nome = r.Nome, Slug = r.Slug, CnpjRaiz = r.CnpjRaiz,
+    };
+
+    private async Task SalvarAsync()
+    {
+        if (_editando is null) return;
+
+        var slug = (_editando.Slug ?? "").Trim().ToLowerInvariant();
+        if (!slug.All(c => (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'))
+        {
+            Avisar("Identificador aceita apenas letras minúsculas, dígitos e hífen.", NotificationSeverity.Error);
+            return;
+        }
+
+        var conflito = false;
+        await ComDbAsync(async db =>
+            conflito = await db.Redes.AnyAsync(r => r.Slug == slug && r.Id != (_editando!.Id ?? 0)));
+
+        if (conflito)
+        {
+            Avisar($"Já existe uma rede com o identificador '{slug}'.", NotificationSeverity.Error);
+            return;
+        }
+
+        await ComDbAsync(async db =>
+        {
+            if (_editando!.Id is { } id)
+            {
+                var atual = await db.Redes.FirstAsync(r => r.Id == id);
+                atual.Nome = _editando.Nome.Trim();
+                atual.Slug = slug;
+                atual.CnpjRaiz = string.IsNullOrWhiteSpace(_editando.CnpjRaiz) ? null : _editando.CnpjRaiz.Trim();
+            }
+            else
+            {
+                db.Redes.Add(new Rede
+                {
+                    Nome = _editando.Nome.Trim(),
+                    Slug = slug,
+                    CnpjRaiz = string.IsNullOrWhiteSpace(_editando.CnpjRaiz) ? null : _editando.CnpjRaiz.Trim(),
+                    Ativo = true,
+                    CriadoEm = DateTimeOffset.UtcNow,
+                });
+            }
+            await db.SaveChangesAsync();
+        });
+
+        _editando = null;
+        await CarregarAsync();
+        Avisar("Rede salva.", NotificationSeverity.Success);
+    }
+
+    private async Task AlternarAtivoAsync(Rede r)
+    {
+        var ativoDepois = false;
+        await ComDbAsync(async db =>
+        {
+            var atual = await db.Redes.FirstAsync(x => x.Id == r.Id);
+            atual.Ativo = !atual.Ativo;
+            ativoDepois = atual.Ativo;
+            await db.SaveChangesAsync();
+        });
+
+        await CarregarAsync();
+        Avisar(ativoDepois ? "Rede reativada." : "Rede desativada.", NotificationSeverity.Success);
+    }
+
+    private void Avisar(string msg, NotificationSeverity sev) =>
+        Notificacao.Notify(new NotificationMessage { Severity = sev, Summary = msg, Duration = 4000 });
+}

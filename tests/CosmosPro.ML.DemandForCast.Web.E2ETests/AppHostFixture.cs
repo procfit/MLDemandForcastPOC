@@ -20,12 +20,22 @@ public sealed class AppHostFixture : IAsyncLifetime
     public IBrowser Browser { get; private set; } = null!;
     public string WebfrontendUrl { get; private set; } = null!;
 
+    /// <summary>Credenciais do PowerUser semeado — usadas pelo helper de login.</summary>
+    public const string PowerUserEmail = "admin@local";
+    public const string PowerUserSenha = "TesteE2E!2026";
+
     public async ValueTask InitializeAsync()
     {
         var builder = await DistributedApplicationTestingBuilder
             .CreateAsync<Projects.CosmosPro_ML_DemandForCast_AppHost>();
 
         builder.Services.AddLogging(l => l.SetMinimumLevel(LogLevel.Warning));
+
+        // O AppHost declara 'poweruser-password' como parâmetro secreto sem valor.
+        // Fora dos testes ele vem de user-secrets; aqui precisa ser injetado, senão
+        // o IdentityBootstrapper falha de propósito no startup da Web.
+        builder.Configuration["Parameters:poweruser-email"] = PowerUserEmail;
+        builder.Configuration["Parameters:poweruser-password"] = PowerUserSenha;
 
         OverrideSqlProjectWithBuiltDacpac(builder, "stage-schema");
 
@@ -49,6 +59,34 @@ public sealed class AppHostFixture : IAsyncLifetime
         {
             Headless = true,
         });
+    }
+
+    /// <summary>
+    /// Abre uma página já autenticada como PowerUser. Depois de F11 toda página de
+    /// dados exige login, então os cenários E2E precisam passar por aqui primeiro.
+    /// </summary>
+    public async Task<IPage> NovaPaginaLogadaAsync(
+        string? email = null, string? senha = null)
+    {
+        var page = await Browser.NewPageAsync(new BrowserNewPageOptions
+        {
+            IgnoreHTTPSErrors = true,
+        });
+
+        var baseUrl = WebfrontendUrl.TrimEnd('/');
+        await page.GotoAsync($"{baseUrl}/login");
+
+        await page.FillAsync("input[name='email']", email ?? PowerUserEmail);
+        await page.FillAsync("input[name='senha']", senha ?? PowerUserSenha);
+        await page.ClickAsync("button[type='submit']");
+
+        // O POST redireciona para "/" em caso de sucesso e para /login?erro=N se falhar.
+        await page.WaitForURLAsync(u => !u.Contains("/login"), new PageWaitForURLOptions
+        {
+            Timeout = 30_000,
+        });
+
+        return page;
     }
 
     private static void OverrideSqlProjectWithBuiltDacpac(IDistributedApplicationTestingBuilder builder, string resourceName)

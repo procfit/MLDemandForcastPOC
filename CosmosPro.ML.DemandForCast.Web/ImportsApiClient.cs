@@ -1,18 +1,26 @@
 using System.Net;
 using System.Net.Http.Json;
+using CosmosPro.ML.DemandForCast.Web.Services;
 
 namespace CosmosPro.ML.DemandForCast.Web;
 
-public class ImportsApiClient(HttpClient httpClient)
+/// <summary>
+/// O <c>redeId</c> vem sempre do <see cref="IRedeContext"/>, que o deriva do usuário
+/// autenticado. Nenhuma página informa rede — é o que impede um usuário de alcançar
+/// o dado de outro cliente trocando um valor na tela.
+/// </summary>
+public class ImportsApiClient(HttpClient httpClient, IRedeContext redeContext)
 {
     public async Task<UploadResult> UploadAsync(Stream content, string fileName, long length, CancellationToken ct = default)
     {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+
         using var form = new MultipartFormDataContent();
         var fileContent = new StreamContent(content);
         fileContent.Headers.ContentType = new("application/zip");
         form.Add(fileContent, "file", fileName);
 
-        var resp = await httpClient.PostAsync("/api/imports/upload", form, ct);
+        var resp = await httpClient.PostAsync($"/api/imports/upload?redeId={redeId}", form, ct);
 
         if (resp.StatusCode == HttpStatusCode.Accepted)
         {
@@ -32,7 +40,9 @@ public class ImportsApiClient(HttpClient httpClient)
 
     public async Task<IReadOnlyList<CargaStageView>> ListAsync(int take = 50, CancellationToken ct = default)
     {
-        var result = await httpClient.GetFromJsonAsync<List<CargaStageView>>($"/api/imports?take={take}", ct);
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        var result = await httpClient.GetFromJsonAsync<List<CargaStageView>>(
+            $"/api/imports?take={take}&redeId={redeId}", ct);
         return result ?? [];
     }
 
@@ -46,7 +56,8 @@ public class ImportsApiClient(HttpClient httpClient)
 
     public async Task<UploadResult> GenerateSyntheticAsync(SyntheticRequest req, CancellationToken ct = default)
     {
-        var resp = await httpClient.PostAsJsonAsync("/api/imports/synthetic", req, ct);
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        var resp = await httpClient.PostAsJsonAsync($"/api/imports/synthetic?redeId={redeId}", req, ct);
 
         if (resp.StatusCode == HttpStatusCode.Accepted)
         {

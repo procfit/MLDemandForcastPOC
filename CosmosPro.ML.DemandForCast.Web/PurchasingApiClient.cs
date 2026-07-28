@@ -2,10 +2,13 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 
+using CosmosPro.ML.DemandForCast.Web.Services;
+
 namespace CosmosPro.ML.DemandForCast.Web;
 
 /// <summary>Cliente HTTP da API de simulação de compras (F8).</summary>
-public class PurchasingApiClient(HttpClient httpClient)
+/// <summary>redeId sempre do <see cref="IRedeContext"/> — ver ImportsApiClient.</summary>
+public class PurchasingApiClient(HttpClient httpClient, IRedeContext redeContext)
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
@@ -19,7 +22,8 @@ public class PurchasingApiClient(HttpClient httpClient)
 
     public async Task<IReadOnlyList<SimulacaoView>> ListAsync(int take = 50, CancellationToken ct = default)
     {
-        var r = await httpClient.GetFromJsonAsync<List<SimulacaoView>>($"/api/purchasing?take={take}", JsonOpts, ct);
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        var r = await httpClient.GetFromJsonAsync<List<SimulacaoView>>($"/api/purchasing?take={take}&redeId={redeId}", JsonOpts, ct);
         return r ?? [];
     }
 

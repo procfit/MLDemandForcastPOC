@@ -86,10 +86,19 @@ apiService
     .AddEFMigrations("engine-migrations", "CosmosPro.ML.DemandForCast.Engine.EngineDbContext")
     .RunDatabaseUpdateOnStart();
 
+// Identity (login, papéis, PowerUser) vive na Web e persiste no banco `engine` —
+// por isso a referência a engineDb, que antes não existia aqui.
+var powerUserEmail = builder.AddParameter("poweruser-email", secret: false, value: "admin@local");
+var powerUserPassword = builder.AddParameter("poweruser-password", secret: true);
+
 builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Web>("webfrontend")
     .WithExternalHttpEndpoints()
     .WithHttpHealthCheck("/health")
+    .WithReference(engineDb)
     .WithReference(apiService)
+    .WithEnvironment("PowerUser__Email", powerUserEmail)
+    .WithEnvironment("PowerUser__Password", powerUserPassword)
+    .WaitFor(engineDb)
     .WaitFor(apiService);
 
 // Worker que consome a fila engine.CargasStage e processa os ZIPs do MinIO

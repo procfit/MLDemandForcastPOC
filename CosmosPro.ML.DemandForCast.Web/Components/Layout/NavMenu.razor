@@ -1,6 +1,21 @@
-<RadzenPanelMenu>
-    <RadzenPanelMenuItem Text="Importação" Icon="cloud_upload" Path="/" Match="NavLinkMatch.All" />
-    <RadzenPanelMenuItem Text="Dados de treinamento" Icon="table_view" Path="/dados" />
-    <RadzenPanelMenuItem Text="Treinamento" Icon="model_training" Path="/treinamento" />
-    <RadzenPanelMenuItem Text="Sugestão de compra" Icon="shopping_cart" Path="/sugestao-compra" />
-</RadzenPanelMenu>
+@* Esconder item de menu é cosmético — o controle real é o [Authorize] na página.
+   Os dois existem: o menu apenas evita oferecer o que seria negado. *@
+<AuthorizeView>
+    <Authorized>
+        <RadzenPanelMenu>
+            <RadzenPanelMenuItem Text="Importação" Icon="cloud_upload" Path="/" Match="NavLinkMatch.All" />
+            <RadzenPanelMenuItem Text="Dados de treinamento" Icon="table_view" Path="/dados" />
+            <RadzenPanelMenuItem Text="Treinamento" Icon="model_training" Path="/treinamento" />
+            <RadzenPanelMenuItem Text="Sugestão de compra" Icon="shopping_cart" Path="/sugestao-compra" />
+
+            <AuthorizeView Roles="@Papeis.PowerUser" Context="admin">
+                <Authorized>
+                    <RadzenPanelMenuItem Text="Administração" Icon="admin_panel_settings" Expanded="true">
+                        <RadzenPanelMenuItem Text="Redes" Icon="store" Path="/admin/redes" />
+                        <RadzenPanelMenuItem Text="Usuários" Icon="group" Path="/admin/usuarios" />
+                    </RadzenPanelMenuItem>
+                </Authorized>
+            </AuthorizeView>
+        </RadzenPanelMenu>
+    </Authorized>
+</AuthorizeView>
