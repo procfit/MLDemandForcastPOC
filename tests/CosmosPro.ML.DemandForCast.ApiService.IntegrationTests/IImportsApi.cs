@@ -10,7 +10,10 @@ public interface IImportsApi
 {
     [Multipart]
     [Post("/api/imports/upload")]
-    Task<IApiResponse<UploadResponse>> UploadAsync([AliasAs("file")] StreamPart file, CancellationToken ct = default);
+    Task<IApiResponse<UploadResponse>> UploadAsync(
+        [AliasAs("file")] StreamPart file,
+        [Query] int redeId,
+        CancellationToken ct = default);
 
     [Get("/api/imports/{id}")]
     Task<IApiResponse<CargaStageView>> GetAsync(Guid id, CancellationToken ct = default);

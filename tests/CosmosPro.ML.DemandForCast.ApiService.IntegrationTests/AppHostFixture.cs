@@ -16,6 +16,11 @@ public sealed class AppHostFixture : IAsyncLifetime
 {
     public DistributedApplication App { get; private set; } = null!;
     public IImportsApi ImportsApi { get; private set; } = null!;
+    public IRedesApi RedesApi { get; private set; } = null!;
+    public IStageApi StageApi { get; private set; } = null!;
+
+    /// <summary>Rede semeada pela migration AddRedes — usada pelos testes que não criam rede própria.</summary>
+    public const int RedeDemoId = 1;
 
     public async ValueTask InitializeAsync()
     {
@@ -39,6 +44,8 @@ public sealed class AppHostFixture : IAsyncLifetime
         var httpClient = App.CreateHttpClient("apiservice", endpointName: "https");
         httpClient.Timeout = TimeSpan.FromMinutes(2);
         ImportsApi = RestService.For<IImportsApi>(httpClient);
+        RedesApi = RestService.For<IRedesApi>(httpClient);
+        StageApi = RestService.For<IStageApi>(httpClient);
 
         using var healthyCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         try
@@ -135,6 +142,33 @@ public sealed class AppHostFixture : IAsyncLifetime
         }
 
         return string.Join("\n", output);
+    }
+
+    /// <summary>
+    /// Espera o Worker terminar de processar a carga. Faz polling no GET por id
+    /// porque não há sinal push — é o mesmo mecanismo que a UI usa.
+    /// Devolve a carga em estado terminal (Concluida ou Falha); o teste decide
+    /// se o estado é o esperado.
+    /// </summary>
+    public async Task<CargaStageView> WaitForCargaAsync(
+        Guid id, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var limite = timeout ?? TimeSpan.FromMinutes(3);
+        var deadline = DateTimeOffset.UtcNow + limite;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var resp = await ImportsApi.GetAsync(id, ct);
+            if (resp.Content is { } carga && carga.Status is "Concluida" or "Falha")
+            {
+                return carga;
+            }
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        }
+
+        throw new TimeoutException(
+            $"Carga {id} não atingiu estado terminal em {limite.TotalSeconds:F0}s. " +
+            "Verifique os logs do worker.");
     }
 
     public async ValueTask DisposeAsync()
