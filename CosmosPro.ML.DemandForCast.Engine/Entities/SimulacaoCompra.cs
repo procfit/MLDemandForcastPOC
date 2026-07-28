@@ -11,6 +11,9 @@ public sealed class SimulacaoCompra
 {
     public Guid Id { get; set; }
 
+    /// <summary>Rede simulada. Redundante com o TreinoJob, mas evita join no polling.</summary>
+    public int RedeId { get; set; }
+
     public SimulacaoStatus Status { get; set; }
 
     public DateTimeOffset DataAgendamento { get; set; }

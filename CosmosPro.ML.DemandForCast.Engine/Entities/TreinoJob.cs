@@ -10,6 +10,9 @@ public sealed class TreinoJob
 {
     public Guid Id { get; set; }
 
+    /// <summary>Rede cujos dados serão treinados. Modelo é sempre por rede, nunca cruzando.</summary>
+    public int RedeId { get; set; }
+
     public TreinoStatus Status { get; set; }
 
     public DateTimeOffset DataAgendamento { get; set; }
