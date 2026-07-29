@@ -108,6 +108,45 @@ internal static class TableSchemas
             new("Tipo", typeof(string), false),
             new("Valor", typeof(decimal), false),
         ],
+        ["SugestoesCompra"] =
+        [
+            RedeId,
+            new("SugestaoId", typeof(long), false),
+            new("Descricao", typeof(string), true),
+            new("DataHora", typeof(DateTime), false),
+            new("TipoCalculo", typeof(byte), false),
+            new("LeadTimeDias", typeof(short), true),
+            new("DiasCurvaA", typeof(short), false),
+            new("DiasCurvaB", typeof(short), false),
+            new("DiasCurvaC", typeof(short), false),
+            new("DiasCurvaD", typeof(short), false),
+            new("DiasCurvaE", typeof(short), false),
+            new("Efetividade", typeof(decimal), false),
+            new("ConsideraPedidosPendentes", typeof(bool), false),
+            new("IncluiEstoqueZerado", typeof(bool), false),
+        ],
+        ["SugestoesCompraItens"] =
+        [
+            RedeId,
+            new("SugestaoId", typeof(long), false),
+            new("LojaId", typeof(int), false),
+            new("Sku", typeof(string), false),
+            new("Curva", typeof(string), true),
+            new("DemandaDia", typeof(decimal), false),
+            new("DemandaDiaPonderada", typeof(decimal), true),
+            new("EstoqueSaldo", typeof(decimal), false),
+            // Nullable porque TipoCalculo=2 ("Dias de Reposição") não usa eSeg/eMax.
+            new("EstoqueSeguranca", typeof(decimal), true),
+            new("EstoqueMaximo", typeof(decimal), true),
+            new("EstoqueMinimo", typeof(decimal), true),
+            new("DiasEstoque", typeof(short), false),
+            new("PedidosPendentes", typeof(decimal), false),
+            new("CompraSugerida", typeof(decimal), false),
+            new("CompraAutorizada", typeof(decimal), false),
+            new("PrecoCompra", typeof(decimal), true),
+            new("FatorEmbalagem", typeof(decimal), true),
+            new("Falteiro", typeof(bool), false),
+        ],
     };
 
     public static DataTable BuildEmpty(string table)
@@ -142,6 +181,7 @@ internal static class TableSchemas
 
         if (col.Type == typeof(int)) return int.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
         if (col.Type == typeof(long)) return long.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
+        if (col.Type == typeof(short)) return short.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
         if (col.Type == typeof(byte)) return byte.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
         if (col.Type == typeof(decimal)) return decimal.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
         if (col.Type == typeof(double)) return double.Parse(s, System.Globalization.CultureInfo.InvariantCulture);

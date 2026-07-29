@@ -19,6 +19,9 @@ internal sealed class CargaProcessor(
     /// <summary>Ordem de DELETE: filhos primeiro (FKs apontam para Lojas/Produtos).</summary>
     private static readonly string[] DeleteOrder =
     [
+        // Itens antes do cabeçalho da sugestão, e ambos antes de Produtos/Lojas.
+        "SugestoesCompraItens",
+        "SugestoesCompra",
         "Vendas",
         "EstoquesDiarios",
         "Compras",
@@ -41,6 +44,10 @@ internal sealed class CargaProcessor(
         ("mercado_iqvia.csv", "MercadoIqvia"),
         // Opcional (sem FK): ZIPs antigos podem não trazer — BulkInsert pula se ausente.
         ("sinais_externos.csv", "SinaisExternos"),
+        // Opcionais: só quem extrai do PBS traz sugestão. Cabeçalho antes dos itens
+        // (FK), e ambos depois de Produtos/Lojas (FKs compostas).
+        ("sugestoes_compra.csv", "SugestoesCompra"),
+        ("sugestoes_compra_itens.csv", "SugestoesCompraItens"),
     ];
 
     public async Task<long> ProcessAsync(CargaStage carga, Rede rede, CancellationToken ct)

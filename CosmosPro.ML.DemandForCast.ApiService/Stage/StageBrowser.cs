@@ -35,6 +35,10 @@ public sealed class StageBrowser(SqlConnection connection)
                 ["Mes", "PrincipioAtivo", "UF", "DemandaMercadoUnidades", "MarketShareCategoria"], "Mes DESC"),
             ["sinais"] = new("sinais", "SinaisExternos", "Sinais externos", "thermostat",
                 ["Data", "Geografia", "Tipo", "Valor"], "Data DESC"),
+            ["sugestoes"] = new("sugestoes", "SugestoesCompra", "Sugestões do ERP", "receipt_long",
+                ["SugestaoId", "Descricao", "DataHora", "TipoCalculo", "LeadTimeDias", "DiasCurvaA", "DiasCurvaB", "DiasCurvaC", "DiasCurvaD", "DiasCurvaE", "Efetividade"], "DataHora DESC"),
+            ["sugestoes-itens"] = new("sugestoes-itens", "SugestoesCompraItens", "Itens das sugestões", "list_alt",
+                ["SugestaoId", "LojaId", "Sku", "Curva", "DemandaDia", "EstoqueSaldo", "EstoqueSeguranca", "EstoqueMaximo", "DiasEstoque", "CompraSugerida", "CompraAutorizada", "PrecoCompra", "Falteiro"], "SugestaoId DESC"),
         };
 
     public static bool TryGetTable(string alias, out TableInfo info) => Tables.TryGetValue(alias, out info!);

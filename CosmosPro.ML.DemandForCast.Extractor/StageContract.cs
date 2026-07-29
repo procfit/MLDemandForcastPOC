@@ -15,6 +15,8 @@ internal static class StageContract
     public const string Compras = "compras.csv";
     public const string Promocoes = "promocoes.csv";
     public const string MercadoIqvia = "mercado_iqvia.csv";
+    public const string SugestoesCompra = "sugestoes_compra.csv";
+    public const string SugestoesCompraItens = "sugestoes_compra_itens.csv";
 
     public static readonly IReadOnlyDictionary<string, string[]> Headers =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -26,9 +28,12 @@ internal static class StageContract
             [Compras] = ["DataPedido", "DataRecebimento", "LojaId", "Sku", "Quantidade", "Fornecedor"],
             [Promocoes] = ["DataInicio", "DataFim", "Sku", "LojaId", "Tipo", "DescontoPct"],
             [MercadoIqvia] = ["Mes", "PrincipioAtivo", "UF", "DemandaMercadoUnidades", "MarketShareCategoria"],
+            [SugestoesCompra] = ["SugestaoId", "Descricao", "DataHora", "TipoCalculo", "LeadTimeDias", "DiasCurvaA", "DiasCurvaB", "DiasCurvaC", "DiasCurvaD", "DiasCurvaE", "Efetividade", "ConsideraPedidosPendentes", "IncluiEstoqueZerado"],
+            [SugestoesCompraItens] = ["SugestaoId", "LojaId", "Sku", "Curva", "DemandaDia", "DemandaDiaPonderada", "EstoqueSaldo", "EstoqueSeguranca", "EstoqueMaximo", "EstoqueMinimo", "DiasEstoque", "PedidosPendentes", "CompraSugerida", "CompraAutorizada", "PrecoCompra", "FatorEmbalagem", "Falteiro"],
         };
 
     /// <summary>Ordem de escrita no ZIP — dimensões antes dos fatos, para o log fazer sentido.</summary>
     public static readonly string[] WriteOrder =
-        [Lojas, Produtos, Vendas, EstoquesDiarios, Compras, Promocoes, MercadoIqvia];
+        [Lojas, Produtos, Vendas, EstoquesDiarios, Compras, Promocoes, MercadoIqvia,
+         SugestoesCompra, SugestoesCompraItens];
 }
