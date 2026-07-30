@@ -1,6 +1,7 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
+using CosmosPro.ML.DemandForCast.Tests.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Playwright;
@@ -15,6 +16,14 @@ namespace CosmosPro.ML.DemandForCast.Web.E2ETests;
 /// </summary>
 public sealed class AppHostFixture : IAsyncLifetime
 {
+    /// <summary>
+    /// Impede que este AppHost coexista com o do projeto de integração — ver
+    /// <see cref="AppHostExclusiveLock"/>. Sem isto, `dotnet test` na solução sobe os
+    /// dois em paralelo sobre os mesmos containers persistentes, e a latência extra
+    /// atrasa o carregamento das páginas Blazor além dos tempos de espera do Playwright.
+    /// </summary>
+    private AppHostExclusiveLock? _exclusividade;
+
     public DistributedApplication App { get; private set; } = null!;
     public IPlaywright Playwright { get; private set; } = null!;
     public IBrowser Browser { get; private set; } = null!;
@@ -34,6 +43,8 @@ public sealed class AppHostFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
+        _exclusividade = await AppHostExclusiveLock.AcquireAsync();
+
         var builder = await DistributedApplicationTestingBuilder
             .CreateAsync<Projects.CosmosPro_ML_DemandForCast_AppHost>();
 
@@ -135,6 +146,13 @@ public sealed class AppHostFixture : IAsyncLifetime
         {
             await App.StopAsync();
             await App.DisposeAsync();
+        }
+
+        // Só depois do AppHost realmente parado: soltar antes deixaria o próximo
+        // processo subir enquanto apiservice/worker daqui ainda escrevem.
+        if (_exclusividade is not null)
+        {
+            await _exclusividade.DisposeAsync();
         }
     }
 }

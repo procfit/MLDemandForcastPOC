@@ -1,6 +1,7 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
+using CosmosPro.ML.DemandForCast.Tests.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Refit;
@@ -14,6 +15,14 @@ namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 /// </summary>
 public sealed class AppHostFixture : IAsyncLifetime
 {
+    /// <summary>
+    /// Impede que este AppHost coexista com o do projeto E2E — ver
+    /// <see cref="AppHostExclusiveLock"/>. Os containers são persistentes e
+    /// compartilhados, então dois AppHosts simultâneos são um só ambiente sendo
+    /// escrito por dois donos.
+    /// </summary>
+    private AppHostExclusiveLock? _exclusividade;
+
     public DistributedApplication App { get; private set; } = null!;
     public IImportsApi ImportsApi { get; private set; } = null!;
     public IRedesApi RedesApi { get; private set; } = null!;
@@ -25,6 +34,8 @@ public sealed class AppHostFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
+        _exclusividade = await AppHostExclusiveLock.AcquireAsync();
+
         var builder = await DistributedApplicationTestingBuilder
             .CreateAsync<Projects.CosmosPro_ML_DemandForCast_AppHost>();
 
@@ -187,6 +198,13 @@ public sealed class AppHostFixture : IAsyncLifetime
         {
             await App.StopAsync();
             await App.DisposeAsync();
+        }
+
+        // Só depois do AppHost realmente parado: soltar antes deixaria o próximo
+        // processo subir enquanto apiservice/worker daqui ainda escrevem.
+        if (_exclusividade is not null)
+        {
+            await _exclusividade.DisposeAsync();
         }
     }
 }
