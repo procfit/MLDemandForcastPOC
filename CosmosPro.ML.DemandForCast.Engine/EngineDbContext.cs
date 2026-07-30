@@ -12,6 +12,8 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
     public DbSet<CargaStage> CargasStage => Set<CargaStage>();
     public DbSet<TreinoJob> TreinoJobs => Set<TreinoJob>();
     public DbSet<SimulacaoCompra> SimulacoesCompra => Set<SimulacaoCompra>();
+    public DbSet<ComparacaoSessao> ComparacaoSessoes => Set<ComparacaoSessao>();
+    public DbSet<ComparacaoSessaoItem> ComparacaoSessaoItens => Set<ComparacaoSessaoItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -139,6 +141,59 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
              .HasDatabaseName("IX_CargasStage_Status_DataAgendamento");
             b.HasIndex(x => new { x.RedeId, x.DataAgendamento })
              .HasDatabaseName("IX_CargasStage_Rede_DataAgendamento");
+        });
+
+        modelBuilder.Entity<ComparacaoSessao>(b =>
+        {
+            b.ToTable("ComparacaoSessoes");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Status)
+             .HasConversion<string>()
+             .HasMaxLength(20)
+             .IsRequired();
+
+            b.Property(x => x.RedeId).IsRequired();
+            b.Property(x => x.CriadoEm).IsRequired();
+            b.Property(x => x.AtualizadoEm).IsRequired();
+            b.Property(x => x.MensagemErro).HasMaxLength(2000);
+
+            b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            // Mesmo padrão de polling das cargas e treinos — cross-rede, sem RedeId no índice.
+            b.HasIndex(x => new { x.Status, x.AtualizadoEm })
+             .HasDatabaseName("IX_ComparacaoSessoes_Status_AtualizadoEm");
+            b.HasIndex(x => new { x.RedeId, x.CriadoEm })
+             .HasDatabaseName("IX_ComparacaoSessoes_Rede_CriadoEm");
+        });
+
+        modelBuilder.Entity<ComparacaoSessaoItem>(b =>
+        {
+            b.ToTable("ComparacaoSessaoItens");
+            b.HasKey(x => new { x.SessaoId, x.LojaId, x.Sku });
+
+            // Mesmo NVARCHAR(30) do Sku no Stage (código de ERP, colide entre redes).
+            b.Property(x => x.Sku).IsRequired().HasMaxLength(30);
+
+            // Precisão espelha o Stage (Tables/SugestoesCompraItens.sql): unidades em
+            // DECIMAL(15,3), taxas de demanda/dia em DECIMAL(12,4), valor em DECIMAL(14,4).
+            // Sem isso o EF usa decimal(18,2) por padrão e trunca silenciosamente.
+            b.Property(x => x.CompraSugeridaPbs).HasPrecision(15, 3);
+            b.Property(x => x.CompraSugeridaMl).HasPrecision(15, 3);
+            b.Property(x => x.VendidoNaJanela).HasPrecision(15, 3);
+            b.Property(x => x.DemandaDiaPbs).HasPrecision(12, 4);
+            b.Property(x => x.DemandaDiaMl).HasPrecision(12, 4);
+            b.Property(x => x.DemandaDiaReal).HasPrecision(12, 4);
+            b.Property(x => x.SobraPbsUnidades).HasPrecision(15, 3);
+            b.Property(x => x.SobraMlUnidades).HasPrecision(15, 3);
+            b.Property(x => x.SobraPbsValor).HasPrecision(14, 4);
+            b.Property(x => x.SobraMlValor).HasPrecision(14, 4);
+
+            // Cascade: apagar a sessão apaga o detalhe — diferente das FKs Restrict
+            // dos jobs, que preservam histórico mesmo com o pai removido.
+            b.HasOne<ComparacaoSessao>().WithMany().HasForeignKey(x => x.SessaoId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
