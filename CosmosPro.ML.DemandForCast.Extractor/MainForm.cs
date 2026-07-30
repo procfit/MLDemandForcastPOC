@@ -224,7 +224,17 @@ internal sealed class MainForm : Form
             return;
         }
 
-        var catalogo = _catalogo.First(c => c.SugestaoId == selecionada.SugestaoId);
+        var catalogo = _catalogo.FirstOrDefault(c => c.SugestaoId == selecionada.SugestaoId);
+        if (catalogo is null)
+        {
+            // DataBoundItem ficou apontando para uma seleção que não existe mais no
+            // _catalogo atual (ex.: grid recarregado entre o clique e este handler).
+            _janela = null;
+            _janelaInfo.Text = string.Empty;
+            _extrair.Enabled = false;
+            return;
+        }
+
         _janela = ExtractionWindow.Derive(
             DateOnly.FromDateTime(catalogo.DataHora), catalogo.DiasCoberturaMax, DateOnly.FromDateTime(DateTime.Today));
 

@@ -60,6 +60,17 @@ internal sealed class CsvEntryWriter : IDisposable
 
     public void WriteRow(params object?[] values)
     {
+        // Sem isto, um argumento a mais ou a menos no call site (o construtor
+        // desta entry já sabe a contagem certa via header) emitiria uma linha
+        // deslocada em silêncio — o CSV continua "válido" sintaticamente, só com
+        // os valores nas colunas erradas.
+        if (values.Length != _columnCount)
+        {
+            throw new ArgumentException(
+                $"WriteRow recebeu {values.Length} valor(es), esperado {_columnCount} (contagem do header).",
+                nameof(values));
+        }
+
         for (var i = 0; i < values.Length; i++)
         {
             if (i > 0) _writer.Write(',');

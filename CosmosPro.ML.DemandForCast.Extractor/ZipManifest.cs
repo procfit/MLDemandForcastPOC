@@ -14,7 +14,13 @@ internal sealed record ZipManifest(
     byte SugestaoTipoCalculo,
     DateOnly JanelaInicio,
     DateOnly JanelaFim,
-    string VersaoExtractor)
+    string VersaoExtractor,
+    // Quantos SKUs citados pela sugestão entraram em produtos.csv como
+    // placeholder (sem cadastro em PRODUTOS no PBS). Precisa estar no manifesto
+    // e não só no log do extrator: quem consome o ZIP (a sessão de comparação
+    // F14) precisa avisar "N itens sem cadastro" ao comprador, não deixar ele
+    // descobrir olhando uma célula vazia na tabela de itens.
+    int SkusSemCadastro)
 {
     public const string EntryName = "manifesto.json";
 

@@ -33,7 +33,7 @@ a cada tabela/campo resolvido.
 
 | Parâmetro | Valor |
 |---|---|
-| Lojas | **5** (quais, escolhidas na UI) |
+| Lojas | Derivadas da sugestão de compra escolhida — sem seleção manual (F14) |
 | SKUs | **todos com movimento** (preserva itens intermitentes) |
 | Estoque | grade diária com **carry-forward** |
 | Volume estimado | ~12M linhas de estoque (~50 MB zipado) |

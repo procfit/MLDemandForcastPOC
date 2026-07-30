@@ -14,7 +14,6 @@ internal sealed class AppConfig
     public bool WindowsAuth { get; set; }
     public string Usuario { get; set; } = string.Empty;
     public string PastaSaida { get; set; } = string.Empty;
-    public List<int> Lojas { get; set; } = [];
 
     /// <summary>
     /// Valor de <c>Application Name</c> na conexão. Vazio = deixa o default do

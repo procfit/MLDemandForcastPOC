@@ -111,4 +111,25 @@ public sealed class CsvZipWriterTests
 
         reader.ReadToEnd().Should().Be("""{"a":1}""");
     }
+
+    [Fact]
+    public void WriteText_nao_grava_BOM_utf8()
+    {
+        // StreamReader engole o BOM sozinho — testar via texto lido não provaria
+        // nada aqui. Precisa comparar os bytes crus contra o UTF-8 sem BOM
+        // esperado, senão a ausência de BOM (a propriedade que o comentário da
+        // classe promete) nunca seria verificada.
+        var buffer = new MemoryStream();
+        using (var zip = new CsvZipWriter(buffer))
+        {
+            zip.WriteText("manifesto.json", """{"a":1}""");
+        }
+
+        using var archive = new ZipArchive(new MemoryStream(buffer.ToArray()), ZipArchiveMode.Read);
+        using var entryStream = archive.GetEntry("manifesto.json")!.Open();
+        using var raw = new MemoryStream();
+        entryStream.CopyTo(raw);
+
+        raw.ToArray().Should().Equal(Encoding.UTF8.GetBytes("""{"a":1}"""));
+    }
 }

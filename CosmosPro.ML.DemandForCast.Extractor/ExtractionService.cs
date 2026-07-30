@@ -39,12 +39,13 @@ internal sealed class ExtractionService
                 connection.Open();
 
                 var (lojaIds, skusDaSugestao) = LoadEscopoSugestao(connection, request.SugestaoId, ct);
-                AvisarDivergenciaEmpresaFilial(connection, request.SugestaoId, warnings);
+                AvisarDivergenciaEmpresaFilial(connection, request.SugestaoId, warnings, ct);
 
                 var total = StageContract.WriteOrder.Length;
 
                 rows[StageContract.Lojas] = CopyQuery(connection, "lojas.sql", StageContract.Lojas, zip, lojaIds, request.DataInicial, request.DataFinal, 1, total, progress, ct, InspectLoja(warnings));
-                rows[StageContract.Produtos] = CopyProdutosGarantindoUniao(connection, zip, skusDaSugestao, 2, total, progress, ct, warnings);
+                var (produtosRowCount, skusFabricados) = CopyProdutosGarantindoUniao(connection, zip, skusDaSugestao, 2, total, progress, ct, warnings);
+                rows[StageContract.Produtos] = produtosRowCount;
                 rows[StageContract.Vendas] = CopyQuery(connection, "vendas.sql", StageContract.Vendas, zip, lojaIds, request.DataInicial, request.DataFinal, 3, total, progress, ct);
                 rows[StageContract.EstoquesDiarios] = CopyEstoques(connection, zip, lojaIds, request.DataInicial, request.DataFinal, 4, total, progress, ct);
                 rows[StageContract.Compras] = CopyQuery(connection, "compras.sql", StageContract.Compras, zip, lojaIds, request.DataInicial, request.DataFinal, 5, total, progress, ct);
@@ -68,7 +69,8 @@ internal sealed class ExtractionService
                     cabecalho.TipoCalculo,
                     request.DataInicial,
                     request.DataFinal,
-                    ZipManifest.VersaoAtual())));
+                    ZipManifest.VersaoAtual(),
+                    skusFabricados)));
             }
         }
         catch
@@ -81,7 +83,7 @@ internal sealed class ExtractionService
 
         if (rows[StageContract.Vendas] == 0)
         {
-            warnings.Add("Nenhuma venda no período/lojas selecionados — confira os parâmetros.");
+            warnings.Add("Nenhuma venda na janela de dados derivada da sugestão — confira se a sugestão escolhida faz sentido.");
         }
         if (rows[StageContract.EstoquesDiarios] == 0)
         {
@@ -136,7 +138,12 @@ internal sealed class ExtractionService
                 reader.IsDBNull(1) ? null : reader.GetString(1),
                 reader.GetDateTime(2),
                 reader.GetByte(3),
-                reader.GetInt32(4),
+                // NULL quando os cinco DIAS_CURVA_* da sugestão são todos NULL (ex.:
+                // sugestão TipoCalculo=2 sem curva configurada). 0 é o fallback seguro:
+                // a janela derivada (ExtractionWindow.Derive) fica só até a data da
+                // sugestão, sem cobertura futura — o comprador vê uma janela degenerada
+                // e escolhe outra sugestão, em vez do catálogo inteiro travar.
+                reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
                 reader.GetInt32(5),
                 reader.GetInt32(6)));
         }
@@ -159,6 +166,7 @@ internal sealed class ExtractionService
 
         using var command = new SqlCommand(sql, connection) { CommandTimeout = CommandTimeoutSeconds };
         command.Parameters.Add("@sugestao", SqlDbType.BigInt).Value = sugestaoId;
+        using var cancelRegistration = ct.Register(command.Cancel);
         using var reader = command.ExecuteReader();
 
         var lojaIds = new HashSet<int>();
@@ -182,9 +190,10 @@ internal sealed class ExtractionService
     /// Conta linhas com EMPRESA != FILIAL (ver Queries/sugestoes_compra_diagnostico.sql):
     /// sinal de que LojaId = FILIAL pode não valer nesta instalação do PBS.
     /// </summary>
-    private static void AvisarDivergenciaEmpresaFilial(SqlConnection connection, long sugestaoId, List<string> warnings)
+    private static void AvisarDivergenciaEmpresaFilial(SqlConnection connection, long sugestaoId, List<string> warnings, CancellationToken ct)
     {
         using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra_diagnostico.sql"), sugestaoId);
+        using var cancelRegistration = ct.Register(command.Cancel);
         using var reader = command.ExecuteReader();
         if (reader.Read() && !reader.IsDBNull(0))
         {
@@ -235,7 +244,7 @@ internal sealed class ExtractionService
     /// cadastrados em PRODUTOS. Sem isso o SqlBulkCopy do Worker estoura violação
     /// de FK composta (RedeId, Sku) — ver comentário em SugestoesCompraItens.sql.
     /// </summary>
-    private static long CopyProdutosGarantindoUniao(
+    private static (long RowCount, int SkusFabricados) CopyProdutosGarantindoUniao(
         SqlConnection connection, CsvZipWriter zip, IReadOnlySet<string> skusDaSugestao,
         int fileIndex, int fileCount, IProgress<ExtractionProgress> progress, CancellationToken ct,
         List<string> warnings)
@@ -260,21 +269,53 @@ internal sealed class ExtractionService
             }
         }
 
-        var faltantes = skusDaSugestao.Where(sku => !vistos.Contains(sku)).Order(StringComparer.Ordinal).ToArray();
-        if (faltantes.Length > 0)
+        var faltantes = SkusSemCadastro(skusDaSugestao, vistos);
+        if (faltantes.Count > 0)
         {
             foreach (var sku in faltantes)
             {
+                // Categoria com sentinela (não NULL) para a fabricação ficar visível e
+                // filtrável nos drill-downs e na tabela comparativa por item que o
+                // comprador usa — sem isto o SKU órfão passa por dado real perdido no
+                // bucket NULL de categoria.
                 entry.WriteRow(sku, $"(SKU {sku} não encontrado no cadastro do PBS)",
-                    null, null, null, null, null, null, null, null, null, false);
+                    "(não cadastrado)", null, null, null, null, null, null, null, null, false);
             }
             warnings.Add(
-                $"{faltantes.Length} SKU(s) citados pela sugestão não estão cadastrados em PRODUTOS no PBS; " +
+                $"{faltantes.Count} SKU(s) citados pela sugestão não estão cadastrados em PRODUTOS no PBS; " +
                 $"foram incluídos em produtos.csv com nome genérico para o import não travar na FK: {string.Join(", ", faltantes)}.");
         }
 
         progress.Report(new ExtractionProgress(StageContract.Produtos, fileIndex, fileCount, entry.RowCount));
-        return entry.RowCount;
+        return (entry.RowCount, faltantes.Count);
+    }
+
+    /// <summary>
+    /// SKUs citados pela sugestão que não apareceram no cadastro (PRODUTOS) e por
+    /// isso precisam de linha placeholder em produtos.csv — sem ela o SqlBulkCopy do
+    /// Worker viola a FK composta (RedeId, Sku) ao inserir SugestoesCompraItens.
+    /// <para>
+    /// Comparação ORDINAL, deliberadamente sem normalização (zeros à esquerda,
+    /// caixa, etc). produtos.sql e a query de escopo da sugestão convertem PRODUTO
+    /// com o mesmo <c>CONVERT(varchar(30), ...)</c>, então na prática o texto já sai
+    /// igual — mas o motivo de exigir exatidão aqui não é essa coincidência, é a
+    /// própria FK: o Worker compara a string literal gravada em
+    /// sugestoes_compra_itens.csv contra a string literal gravada em produtos.csv.
+    /// Se "0123" e "123" fossem tratados como o mesmo SKU e o placeholder para
+    /// "0123" fosse pulado por já existir "123", a FK quebraria no import — o SQL
+    /// Server não considera essas strings iguais. Tratar os dois como SKUs
+    /// distintos não é uma limitação da comparação, é o comportamento exigido pelo
+    /// Stage.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<string> SkusSemCadastro(IEnumerable<string> skusDaSugestao, IEnumerable<string> skusCadastrados)
+    {
+        var cadastrados = new HashSet<string>(skusCadastrados, StringComparer.Ordinal);
+        return skusDaSugestao
+            .Where(sku => !cadastrados.Contains(sku))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static long CopyQuery(

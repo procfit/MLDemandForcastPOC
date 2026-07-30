@@ -8,6 +8,9 @@
     <Nullable>enable</Nullable>
     <RootNamespace>CosmosPro.ML.DemandForCast.Extractor</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Sem isto, ZipManifest.VersaoAtual() lê a versão default do assembly
+         (1.0.0.0) pra sempre — bump manual a cada release relevante. -->
+    <Version>0.14.0</Version>
     <!-- RID/self-contained ficam fora daqui de propósito: manter build e testes
          simples. A distribuição usa o comando documentado em README.md. -->
   </PropertyGroup>
