@@ -476,6 +476,19 @@ acompanhar as fases.
 - [ ] **Step 5:** mover a home antiga para `/tecnico/importar`; menu com três blocos
       (Comparações, Administração, Técnico recolhido com `/tecnico/importar`, `/dados`,
       `/treinamento`, `/sugestao-compra`).
+
+- [ ] **Step 5b: Ajustar o E2E existente que a mudança de home quebra.**
+      `tests/CosmosPro.ML.DemandForCast.Web.E2ETests/ImportsE2ETests.cs` navega para `/`
+      e procura `input[type=file]#hidden-zip-input`. Depois desta task `/` é o painel de
+      comparações, então o cenário passa a apontar para `/tecnico/importar`:
+
+```csharp
+// era: fixture.WebfrontendUrl.TrimEnd('/') + "/"
+await page.GotoAsync(fixture.WebfrontendUrl.TrimEnd('/') + "/tecnico/importar");
+```
+
+      Rodar `dotnet test tests/CosmosPro.ML.DemandForCast.Web.E2ETests` e confirmar que
+      os 5 cenários seguem verdes antes de continuar.
 - [ ] **Step 6: E2E**
 
 ```csharp
