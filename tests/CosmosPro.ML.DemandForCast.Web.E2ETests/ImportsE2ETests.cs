@@ -40,10 +40,11 @@ public sealed class ImportsE2ETests(AppHostFixture fixture)
             // redirect pós-login já cai em "/".
             var page = await fixture.NovaPaginaLogadaAsync();
 
-            // Act — em "/" (página única), seta o file no <input> escondido disparado
-            // pelo botão Importar (testa o controle direto pra evitar depender de JS
-            // interop frágil sob test headless).
-            await page.GotoAsync(fixture.WebfrontendUrl.TrimEnd('/') + "/");
+            // Act — depois da F14, "/" é o painel de comparações e o upload avulso
+            // mudou para "/tecnico/importar". Seta o file no <input> escondido
+            // disparado pelo botão Importar (testa o controle direto pra evitar
+            // depender de JS interop frágil sob test headless).
+            await page.GotoAsync(fixture.WebfrontendUrl.TrimEnd('/') + "/tecnico/importar");
             await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
             await page.Locator("input[type=file]#hidden-zip-input").SetInputFilesAsync(tempZip);

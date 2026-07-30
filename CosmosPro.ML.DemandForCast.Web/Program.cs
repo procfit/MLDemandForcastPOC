@@ -70,6 +70,12 @@ builder.Services.AddHttpClient<PurchasingApiClient>(client =>
     client.BaseAddress = new("https+http://apiservice");
 });
 
+builder.Services.AddHttpClient<ComparacoesApiClient>(client =>
+{
+    client.BaseAddress = new("https+http://apiservice");
+    client.Timeout = TimeSpan.FromMinutes(10);
+});
+
 const long MaxUploadBytes = 500L * 1024 * 1024;
 builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(o =>
     o.Limits.MaxRequestBodySize = MaxUploadBytes);

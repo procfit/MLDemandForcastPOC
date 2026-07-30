@@ -3,10 +3,7 @@
 <AuthorizeView>
     <Authorized>
         <RadzenPanelMenu>
-            <RadzenPanelMenuItem Text="Importação" Icon="cloud_upload" Path="/" Match="NavLinkMatch.All" />
-            <RadzenPanelMenuItem Text="Dados de treinamento" Icon="table_view" Path="/dados" />
-            <RadzenPanelMenuItem Text="Treinamento" Icon="model_training" Path="/treinamento" />
-            <RadzenPanelMenuItem Text="Sugestão de compra" Icon="shopping_cart" Path="/sugestao-compra" />
+            <RadzenPanelMenuItem Text="Comparações" Icon="compare_arrows" Path="/" Match="NavLinkMatch.All" />
 
             <AuthorizeView Roles="@Papeis.PowerUser" Context="admin">
                 <Authorized>
@@ -16,6 +13,15 @@
                     </RadzenPanelMenuItem>
                 </Authorized>
             </AuthorizeView>
+
+            @* Etapas técnicas da engenharia — o comprador entra pelas Comparações;
+               isto fica recolhido para quem precisa inspecionar o pipeline direto. *@
+            <RadzenPanelMenuItem Text="Técnico" Icon="build">
+                <RadzenPanelMenuItem Text="Importação manual" Icon="cloud_upload" Path="/tecnico/importar" />
+                <RadzenPanelMenuItem Text="Dados de treinamento" Icon="table_view" Path="/dados" />
+                <RadzenPanelMenuItem Text="Treinamento" Icon="model_training" Path="/treinamento" />
+                <RadzenPanelMenuItem Text="Sugestão de compra" Icon="shopping_cart" Path="/sugestao-compra" />
+            </RadzenPanelMenuItem>
         </RadzenPanelMenu>
     </Authorized>
 </AuthorizeView>

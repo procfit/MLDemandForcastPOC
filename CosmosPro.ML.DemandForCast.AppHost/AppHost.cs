@@ -88,12 +88,13 @@ apiService
 
 // Identity (login, papéis, PowerUser) vive na Web e persiste no banco `engine` —
 // por isso a referência a engineDb, que antes não existia aqui.
-var powerUserEmail = builder.AddParameter("poweruser-email", secret: false, value: "admin@local");
-
-// Sem `value:` de propósito — resolve por configuração, e é isso que faz o default
-// de debug existir só em Development (appsettings.Development.json) e permitir que
-// os fixtures de teste injetem a própria senha. Em qualquer outro ambiente o valor
-// não existe e o IdentityBootstrapper falha no startup pedindo user-secrets.
+// Ambos sem `value:` de propósito — resolvem por configuração, e é isso que faz o
+// default de debug existir só em Development (appsettings.Development.json) e permitir
+// que os fixtures de teste injetem o próprio par e-mail/senha. Um `value:` literal aqui
+// é ignorado silenciosamente na configuração: o fixture semeia um admin com o e-mail
+// dele, o Web semeia outro, e o login do E2E falha com "E-mail ou senha inválidos".
+// Em qualquer outro ambiente o valor não existe e o startup falha pedindo user-secrets.
+var powerUserEmail = builder.AddParameter("poweruser-email", secret: false);
 var powerUserPassword = builder.AddParameter("poweruser-password", secret: true);
 
 builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Web>("webfrontend")

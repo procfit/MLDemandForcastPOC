@@ -1,0 +1,254 @@
+@page "/comparacoes/{Id:guid}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ComparacoesApiClient ComparacoesApi
+@inject NotificationService Notifications
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>@(_sessao?.Nome ?? "Comparação")</PageTitle>
+
+<RadzenStack Orientation="Orientation.Vertical" Gap="1.5rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenButton Icon="arrow_back" Variant="Variant.Text" Click="@(() => Nav.NavigateTo("/"))" />
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">@(_sessao?.Nome ?? "Comparação")</RadzenText>
+        @if (_sessao is not null)
+        {
+            <RadzenBadge Text="@EstadoLabel(_sessao.Status)" BadgeStyle="@BadgeFor(_sessao.Status)" Shade="Shade.Lighter" />
+        }
+    </RadzenStack>
+
+    @if (_loading && _sessao is null)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+            <RadzenText TextStyle="TextStyle.Body2">Carregando…</RadzenText>
+        </RadzenStack>
+    }
+    else if (_sessao is null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+            Comparação não encontrada.
+        </RadzenAlert>
+    }
+    else
+    {
+        @if (_sessao.SugestaoId is { } sugestaoId)
+        {
+            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                Sugestão @sugestaoId — @_sessao.SugestaoDescricao — @_sessao.SugestaoDataHora?.ToString("dd/MM/yyyy")
+            </RadzenText>
+        }
+
+        @if (_sessao.Status == "Inviavel")
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">
+                <strong>Esta sugestão não pôde ser comparada.</strong>
+                <div style="margin-top: 0.5rem">@_sessao.MotivoInviabilidade</div>
+            </RadzenAlert>
+        }
+        else if (_sessao.Status == "Falha")
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+                <strong>Algo deu errado nesta comparação.</strong>
+                <div style="margin-top: 0.5rem">@_sessao.MensagemErro</div>
+            </RadzenAlert>
+        }
+
+        @if (MostraUpload(_sessao.Status))
+        {
+            <RadzenCard Variant="Variant.Outlined">
+                <RadzenStack Gap="1rem">
+                    <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">@TituloUpload(_sessao.Status)</RadzenText>
+                    <ol style="margin: 0; padding-left: 1.25rem; line-height: 1.8">
+                        <li>Baixe o <strong>extrator</strong> e execute-o na máquina com acesso ao PBS.</li>
+                        <li>No extrator, escolha a sugestão de compra do PBS que você quer comparar.</li>
+                        <li>Volte aqui e envie o arquivo .zip gerado pelo extrator.</li>
+                    </ol>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+                        <InputFile id="sessao-zip-input" OnChange="OnFileSelected" accept=".zip"
+                                   style="display: none" disabled="@_uploading" />
+                        <RadzenButton Click="@TriggerFilePicker"
+                                      Icon="@(_uploading ? "hourglass_empty" : "cloud_upload")"
+                                      Text="@(_uploading ? "Enviando…" : "Enviar ZIP")"
+                                      ButtonStyle="ButtonStyle.Primary"
+                                      Disabled="@_uploading" />
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenCard>
+        }
+        else if (_sessao.Status is "ProcessandoDados" or "Treinando" or "Comparando")
+        {
+            var (icon, titulo, descricao) = FaseInfo(_sessao.Status);
+            <RadzenCard Variant="Variant.Outlined">
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.Center">
+                    <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Medium" />
+                    <RadzenIcon Icon="@icon" Style="font-size: 2rem; color: var(--rz-primary)" />
+                    <RadzenStack Gap="0.25rem">
+                        <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">@titulo</RadzenText>
+                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">@descricao</RadzenText>
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenCard>
+        }
+        else if (_sessao.Status == "Concluida")
+        {
+            <RadzenCard Variant="Variant.Outlined">
+                <RadzenStack Gap="0.5rem">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenIcon Icon="check_circle" Style="color: var(--rz-success)" />
+                        <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Comparação concluída</RadzenText>
+                    </RadzenStack>
+                    <RadzenText TextStyle="TextStyle.Body1">
+                        O resultado desta comparação já está pronto. A tela detalhada (manchete, itens e área
+                        técnica) chega em uma próxima entrega.
+                    </RadzenText>
+                </RadzenStack>
+            </RadzenCard>
+        }
+    }
+</RadzenStack>
+
+@code {
+    private const long MaxBytes = 500L * 1024 * 1024;
+
+    [Parameter] public Guid Id { get; set; }
+
+    private SessaoView? _sessao;
+    private bool _loading;
+    private bool _uploading;
+    private Timer? _timer;
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        _timer = new Timer(async _ => await InvokeAsync(RefreshAsync), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_loading) return;
+        _loading = true;
+        try
+        {
+            _sessao = await ComparacoesApi.GetAsync(Id, _cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            // POC: silencia para não quebrar o polling.
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task TriggerFilePicker() =>
+        await JS.InvokeVoidAsync("clickElementById", "sessao-zip-input");
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        if (e.FileCount == 0) return;
+        var file = e.File;
+        if (file is null) return;
+
+        _uploading = true;
+        StateHasChanged();
+        try
+        {
+            await using var stream = file.OpenReadStream(MaxBytes);
+            var result = await ComparacoesApi.UploadDadosAsync(Id, stream, file.Name, _cts.Token);
+
+            if (result.Success)
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Dados enviados",
+                    Detail = "Seu ZIP foi enfileirado para processamento.",
+                    Duration = 5000,
+                });
+                await RefreshAsync();
+            }
+            else
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Error,
+                    Summary = "Falha no envio",
+                    Detail = string.Join(" · ", result.Errors ?? []),
+                    Duration = 8000,
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Erro inesperado",
+                Detail = ex.Message,
+                Duration = 8000,
+            });
+        }
+        finally
+        {
+            _uploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private static bool MostraUpload(string status) =>
+        status is "AguardandoDados" or "Inviavel" or "Falha";
+
+    private static string TituloUpload(string status) => status switch
+    {
+        "Inviavel" => "Envie outra sugestão",
+        "Falha" => "Tente novamente com um novo ZIP",
+        _ => "Envie os dados para começar",
+    };
+
+    private static (string Icon, string Titulo, string Descricao) FaseInfo(string status) => status switch
+    {
+        "ProcessandoDados" => ("autorenew", "Importando seus dados",
+            "Estamos lendo o arquivo que você enviou e carregando vendas, estoques, compras e promoções no banco."),
+        "Treinando" => ("model_training", "Aprendendo o padrão de venda das suas lojas",
+            "O modelo está estudando o histórico para aprender sazonalidade, promoções e o comportamento de cada SKU e loja."),
+        "Comparando" => ("compare_arrows", "Comparando os dois métodos",
+            "Estamos confrontando a sugestão do ERP com a que o ML calcularia para o mesmo período."),
+        _ => ("hourglass_empty", "Processando", ""),
+    };
+
+    private static string EstadoLabel(string status) => status switch
+    {
+        "AguardandoDados" => "Aguardando dados",
+        "ProcessandoDados" => "Processando dados",
+        "Treinando" => "Treinando",
+        "Comparando" => "Comparando",
+        "Concluida" => "Concluída",
+        "Inviavel" => "Inviável",
+        "Falha" => "Falha",
+        _ => status,
+    };
+
+    private static BadgeStyle BadgeFor(string status) => status switch
+    {
+        "AguardandoDados" => BadgeStyle.Secondary,
+        "ProcessandoDados" or "Treinando" or "Comparando" => BadgeStyle.Info,
+        "Concluida" => BadgeStyle.Success,
+        "Inviavel" => BadgeStyle.Warning,
+        "Falha" => BadgeStyle.Danger,
+        _ => BadgeStyle.Light,
+    };
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

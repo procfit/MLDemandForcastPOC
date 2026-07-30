@@ -1,3 +1,4 @@
+using CosmosPro.ML.DemandForCast.ApiService.Comparacoes;
 using CosmosPro.ML.DemandForCast.ApiService.Imports;
 using CosmosPro.ML.DemandForCast.ApiService.Purchasing;
 using CosmosPro.ML.DemandForCast.ApiService.Redes;
@@ -55,6 +56,7 @@ app.MapImportsEndpoints();
 app.MapStageEndpoints();
 app.MapTrainingEndpoints();
 app.MapPurchasingEndpoints();
+app.MapComparacoesEndpoints();
 
 app.MapDefaultEndpoints();
 
