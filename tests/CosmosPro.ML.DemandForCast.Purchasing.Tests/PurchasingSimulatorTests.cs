@@ -58,7 +58,7 @@ public sealed class PurchasingSimulatorTests
         };
         var sim = new PurchasingSimulator();
 
-        var r = sim.Run(options, obs, estoqueInicial, atributos, [new EMaxESegPolicy()]);
+        var r = sim.Run(options, obs, estoqueInicial, atributos, [new ForecastRopPolicy()]);
 
         r.Politicas.Should().HaveCount(1);
         var kpi = r.Politicas[0].Global;
@@ -146,7 +146,7 @@ public sealed class PurchasingSimulatorTests
             LeadTimeDias = 7, CicloDias = 7, FatorServico = 1.65,
         };
 
-        var r = new PurchasingSimulator().Run(options, obs, estoqueInicial, atributos, [new EMaxESegPolicy()]);
+        var r = new PurchasingSimulator().Run(options, obs, estoqueInicial, atributos, [new ForecastRopPolicy()]);
         var porCat = r.Politicas[0].PorDimensao["Categoria"];
 
         porCat.Should().ContainKeys("Cat", "RX");
@@ -174,7 +174,7 @@ public sealed class PurchasingSimulatorTests
 
         var r = new PurchasingSimulator().Run(
             options, obs, estoqueInicial, atributos,
-            [new EMaxESegPolicy(), new EMaxESegPolicy()]);
+            [new ForecastRopPolicy(), new ForecastRopPolicy()]);
 
         // Resultado deve ser bit-exato (mesma política, mesma seed implícita do replay determinístico).
         r.Politicas[0].Global.Should().BeEquivalentTo(r.Politicas[1].Global);
@@ -230,7 +230,7 @@ public sealed class PurchasingSimulatorTests
             LeadTimeDias = 7, CicloDias = 7, FatorServico = 1.65,
         };
 
-        var r = new PurchasingSimulator().Run(options, obs, estoqueInicial, atributos, [new EMaxESegPolicy()]);
+        var r = new PurchasingSimulator().Run(options, obs, estoqueInicial, atributos, [new ForecastRopPolicy()]);
         var snap = r.Politicas[0].ListaCompraFinal;
 
         // Uma linha por série, com S >= s e qtd sugerida = max(0, S - posição) quando dispara.

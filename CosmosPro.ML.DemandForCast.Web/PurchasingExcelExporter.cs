@@ -49,8 +49,11 @@ public static class PurchasingExcelExporter
         var ws = wb.Worksheets.Add("Sugestão de hoje");
         var politicas = output.Resultado.Politicas;
         var produtos = output.Produtos ?? new Dictionary<string, string>();
+        // ClassicPolicy só existe em ResultadoJson de execuções anteriores a F13 (EMaxESegPolicy
+        // removida). Sem ela, não há "clássico" contra o qual calcular um delta.
+        var temClassico = politicas.Any(p => p.Policy == ClassicPolicy);
 
-        // Cabeçalho: SKU, Produto, Loja, [Pos. / Pedir] por política, Δ (ML − clássico).
+        // Cabeçalho: SKU, Produto, Loja, [Pos. / Pedir] por política, Δ (ML − clássico) se aplicável.
         var header = new List<string> { "SKU", "Produto", "Loja" };
         foreach (var p in politicas)
         {
@@ -58,7 +61,7 @@ public static class PurchasingExcelExporter
             header.Add($"Pos. {label}");
             header.Add($"Pedir {label}");
         }
-        header.Add("Δ (ML − clássico)");
+        if (temClassico) header.Add("Δ (ML − clássico)");
         for (int c = 0; c < header.Count; c++)
             ws.Cell(1, c + 1).Value = header[c];
 
@@ -75,8 +78,11 @@ public static class PurchasingExcelExporter
                 ws.Cell(row, col++).Value = r.PosicaoByPolicy.GetValueOrDefault(p.Policy);
                 ws.Cell(row, col++).Value = r.QtdByPolicy.GetValueOrDefault(p.Policy);
             }
-            var delta = r.QtdByPolicy.GetValueOrDefault(ForecastPolicy) - r.QtdByPolicy.GetValueOrDefault(ClassicPolicy);
-            ws.Cell(row, col).Value = delta;
+            if (temClassico)
+            {
+                var delta = r.QtdByPolicy.GetValueOrDefault(ForecastPolicy) - r.QtdByPolicy.GetValueOrDefault(ClassicPolicy);
+                ws.Cell(row, col).Value = delta;
+            }
             row++;
         }
 

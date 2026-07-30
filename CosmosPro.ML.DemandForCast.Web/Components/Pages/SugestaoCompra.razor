@@ -16,6 +16,12 @@
         <div style="flex: 1"></div>
     </RadzenStack>
 
+    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        Ferramenta secundária: replay histórico da política ROP+forecast (não é mais um comparativo —
+        a regra eMax/eSeg reimplementada foi removida em F13). O comparativo do TCC contra o baseline
+        real do ERP fica em outra funcionalidade.
+    </RadzenAlert>
+
     <RadzenCard Variant="Variant.Outlined">
         <RadzenStack Gap="1rem">
             <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Nova simulação</RadzenText>
@@ -118,7 +124,9 @@
         <RadzenCard Variant="Variant.Outlined">
             <RadzenStack Gap="1rem">
                 <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
-                    <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Comparativo global das políticas</RadzenText>
+                    <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">
+                        @(politicas.Count > 1 ? "Comparativo global das políticas" : "KPIs do replay (política única)")
+                    </RadzenText>
                     <HelpTip Text="@TipComparativo" />
                     @if (classico is not null && ml is not null)
                     {
@@ -287,19 +295,22 @@
                                                 </Template>
                                             </RadzenDataGridColumn>
                                         }
-                                        <RadzenDataGridColumn TItem="BuyRow" Title="Δ (ML − clássico)" Width="150px" TextAlign="TextAlign.Right" Sortable="false">
-                                            <HeaderTemplate><span>Δ ML − clássico</span><HelpTip Text="@TipDelta" Size="0.8rem" /></HeaderTemplate>
-                                            <Template Context="b">
-                                                @{
-                                                    var qC = b.QtdByPolicy.GetValueOrDefault(ClassicPolicyName);
-                                                    var qM = b.QtdByPolicy.GetValueOrDefault(ForecastPolicyName);
-                                                    var delta = qM - qC;
-                                                }
-                                                <span style="@(delta == 0 ? "" : delta > 0 ? "color: var(--rz-warning)" : "color: var(--rz-info)")">
-                                                    @(delta > 0 ? "+" : "")@delta.ToString("N0")
-                                                </span>
-                                            </Template>
-                                        </RadzenDataGridColumn>
+                                        @if (classico is not null)
+                                        {
+                                            <RadzenDataGridColumn TItem="BuyRow" Title="Δ (ML − clássico)" Width="150px" TextAlign="TextAlign.Right" Sortable="false">
+                                                <HeaderTemplate><span>Δ ML − clássico</span><HelpTip Text="@TipDelta" Size="0.8rem" /></HeaderTemplate>
+                                                <Template Context="b">
+                                                    @{
+                                                        var qC = b.QtdByPolicy.GetValueOrDefault(ClassicPolicyName);
+                                                        var qM = b.QtdByPolicy.GetValueOrDefault(ForecastPolicyName);
+                                                        var delta = qM - qC;
+                                                    }
+                                                    <span style="@(delta == 0 ? "" : delta > 0 ? "color: var(--rz-warning)" : "color: var(--rz-info)")">
+                                                        @(delta > 0 ? "+" : "")@delta.ToString("N0")
+                                                    </span>
+                                                </Template>
+                                            </RadzenDataGridColumn>
+                                        }
                                     </Columns>
                                 </RadzenDataGrid>
                             }
@@ -371,13 +382,13 @@
     private static readonly string[] _dimensions = ["Categoria", "ClasseAbc", "Loja", "UF"];
 
     private const string TipPagina =
-        "Replay de compras: para cada SKU×loja, simulamos dia-a-dia o que aconteceria sob duas políticas " +
-        "— eMax/eSeg clássico (média histórica × LT) e ROP+forecast (LightGBM acumulado + safety por resíduo). " +
-        "Comparação justa: mesmo estoque inicial, mesma demanda real, mesma janela.";
+        "Replay de compras: para cada SKU×loja, simulamos dia-a-dia o que a política ROP+forecast " +
+        "(LightGBM acumulado + safety por resíduo) teria pedido. Ferramenta secundária — a regra eMax/eSeg " +
+        "reimplementada foi removida em F13; o comparativo do TCC agora usa o baseline real do ERP. " +
+        "Resultados antigos com duas políticas continuam sendo exibidos como comparação.";
     private const string TipTreino =
-        "Qual modelo de previsão treinado a política de ML vai usar. A simulação carrega esse modelo do MinIO para " +
-        "prever a demanda futura. Só aparecem treinos concluídos. A política clássica (eMax/eSeg) não usa o modelo — " +
-        "serve de comparação. Use o mesmo treino para comparações justas.";
+        "Qual modelo de previsão treinado a política ROP+forecast vai usar. A simulação carrega esse modelo do " +
+        "MinIO para prever a demanda futura. Só aparecem treinos concluídos. Use o mesmo treino para replays comparáveis.";
     private const string TipJanela =
         "Quantos dias do passado a gente 'refaz' para testar as políticas. Ex.: 60 = simulamos as compras dos últimos " +
         "60 dias, dia a dia, como se cada política estivesse no comando. Maior janela = avaliação mais robusta, porém mais lenta.";
@@ -427,6 +438,9 @@
         "Diferença entre o que o ML (ROP+forecast) pediria e o que a regra clássica (eMax/eSeg) pediria. " +
         "Positivo = ML compra mais; negativo = ML compra menos. É onde as políticas divergem item a item.";
 
+    // ClassicPolicyName não é mais produzido por nenhuma simulação nova (F13 removeu
+    // EMaxESegPolicy), mas ResultadoJson de execuções antigas ainda traz essa chave —
+    // o label/tooltip continuam mapeados para não regredir a exibição desses resultados.
     private static readonly IReadOnlyDictionary<string, string> _policyTips =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {

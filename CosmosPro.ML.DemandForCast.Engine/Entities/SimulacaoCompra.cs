@@ -2,10 +2,12 @@ namespace CosmosPro.ML.DemandForCast.Engine.Entities;
 
 /// <summary>
 /// Job de simulação de compras (F8). Vive em engine.SimulacoesCompra. O Worker faz
-/// polling com o mesmo padrão competing-consumers das cargas/treinos. Cada
-/// simulação compara políticas de reabastecimento (clássica eMax/eSeg vs ROP
-/// derivado do forecast LightGBM) em uma janela histórica do Stage, com KPIs
-/// globais e por hierarquia.
+/// polling com o mesmo padrão competing-consumers das cargas/treinos. Faz o replay
+/// da política de reabastecimento ROP derivada do forecast LightGBM em uma janela
+/// histórica do Stage, com KPIs globais e por hierarquia. Ferramenta secundária
+/// desde F13 — não compara mais contra uma reimplementação nossa da regra clássica
+/// eMax/eSeg (removida); o comparativo do TCC contra o baseline real do ERP vive em
+/// outro fluxo.
 /// </summary>
 public sealed class SimulacaoCompra
 {

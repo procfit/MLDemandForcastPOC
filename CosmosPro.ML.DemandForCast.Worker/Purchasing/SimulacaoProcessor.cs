@@ -17,8 +17,14 @@ namespace CosmosPro.ML.DemandForCast.Worker.Purchasing;
 /// <summary>
 /// Executa um job de <see cref="SimulacaoCompra"/>: carrega o TreinoJob origem
 /// (modelo LightGBM + parâmetros), reusa o <see cref="StageObservationLoader"/>
-/// para puxar as mesmas SKUs do treino, faz o replay com duas políticas
-/// (eMax/eSeg clássica vs ROP+forecast) e grava o resultado JSON.
+/// para puxar as mesmas SKUs do treino, faz o replay com a política ROP+forecast
+/// e grava o resultado JSON.
+///
+/// <para>
+/// Ferramenta secundária desde F13: não compara mais contra uma reimplementação
+/// nossa da regra eMax/eSeg (removida — ver <see cref="CosmosPro.ML.DemandForCast.Purchasing.IPurchasingPolicy"/>).
+/// O comparativo do TCC contra o baseline real do ERP vive em outro fluxo (F13).
+/// </para>
 /// </summary>
 internal sealed class SimulacaoProcessor(
     IMinioClient minio,
@@ -83,7 +89,7 @@ internal sealed class SimulacaoProcessor(
         using var model = await DownloadModelAsync(treino.ModeloBlobKey!, ct);
         var forecaster = new LightGbmForecaster(model, features);
 
-        // 7) Simula as duas políticas.
+        // 7) Simula a política ROP+forecast (única — ver nota na doc da classe).
         var options = new SimulationOptions
         {
             DataInicio = inicio,
@@ -95,7 +101,6 @@ internal sealed class SimulacaoProcessor(
 
         var policies = new IPurchasingPolicy[]
         {
-            new EMaxESegPolicy { JanelaDias = options.JanelaHistoricoDias },
             new ForecastRopPolicy(),
         };
 
