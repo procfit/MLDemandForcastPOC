@@ -4,6 +4,10 @@ namespace CosmosPro.ML.DemandForCast.Extractor;
 
 internal sealed class MainForm : Form
 {
+    // Sugestões mais antigas que isto não aparecem no catálogo — evita carregar
+    // anos de histórico que o comprador não vai reconhecer.
+    private const int MesesRetroativosCatalogo = 12;
+
     private readonly TextBox _servidor = new() { Width = 260 };
     private readonly NumericUpDown _porta = new() { Width = 80, Minimum = 1, Maximum = 65535, Value = 1433 };
     private readonly TextBox _banco = new() { Width = 260 };
@@ -13,22 +17,35 @@ internal sealed class MainForm : Form
     private readonly TextBox _senha = new() { Width = 160, UseSystemPasswordChar = true };
     private readonly Button _testar = new() { Text = "Testar conexão", Width = 130 };
 
-    private readonly CheckedListBox _lojas = new() { Width = 360, Height = 150, CheckOnClick = true };
-    private readonly Button _carregarLojas = new() { Text = "Carregar lojas", Width = 130 };
-    private readonly DateTimePicker _dataInicial = new() { Format = DateTimePickerFormat.Short, Width = 120 };
-    private readonly DateTimePicker _dataFinal = new() { Format = DateTimePickerFormat.Short, Width = 120 };
+    private readonly Button _carregarSugestoes = new() { Text = "Carregar sugestões", Width = 140 };
+    private readonly DataGridView _sugestoes = new()
+    {
+        Width = 612,
+        Height = 130,
+        ReadOnly = true,
+        AllowUserToAddRows = false,
+        AllowUserToDeleteRows = false,
+        AllowUserToResizeRows = false,
+        MultiSelect = false,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+    };
+    private readonly Label _janelaInfo = new() { Width = 612, Height = 30, AutoSize = false };
 
     private readonly TextBox _pastaSaida = new() { Width = 360 };
     private readonly Button _escolherPasta = new() { Text = "...", Width = 40 };
 
-    private readonly Button _extrair = new() { Text = "Extrair", Width = 120, Height = 32 };
+    private readonly Button _extrair = new() { Text = "Extrair", Width = 120, Height = 32, Enabled = false };
     private readonly Button _cancelar = new() { Text = "Cancelar", Width = 120, Height = 32, Enabled = false };
-    private readonly ProgressBar _progresso = new() { Width = 520, Height = 20, Style = ProgressBarStyle.Continuous, Maximum = 7 };
+    private readonly ProgressBar _progresso = new() { Width = 520, Height = 20, Style = ProgressBarStyle.Continuous, Maximum = StageContract.WriteOrder.Length };
     private readonly Label _status = new() { AutoSize = true, Text = "Pronto." };
     private readonly TextBox _log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Width = 620, Height = 160 };
 
     private readonly AppConfig _config = AppConfig.Load();
     private CancellationTokenSource? _cts;
+
+    private IReadOnlyList<SugestaoCatalogo> _catalogo = [];
+    private ExtractionWindow? _janela;
 
     public MainForm()
     {
@@ -42,7 +59,8 @@ internal sealed class MainForm : Form
         ApplyConfig();
 
         _testar.Click += async (_, _) => await TestarConexaoAsync();
-        _carregarLojas.Click += async (_, _) => await CarregarLojasAsync();
+        _carregarSugestoes.Click += async (_, _) => await CarregarSugestoesAsync();
+        _sugestoes.SelectionChanged += (_, _) => AtualizarJanela();
         _escolherPasta.Click += (_, _) => EscolherPasta();
         _extrair.Click += async (_, _) => await ExtrairAsync();
         _cancelar.Click += (_, _) => _cts?.Cancel();
@@ -69,19 +87,13 @@ internal sealed class MainForm : Form
         ]);
         conexao.Controls.Add(credenciais);
 
-        var escopo = new GroupBox { Text = "Escopo", Location = new Point(12, 172), Size = new Size(636, 230) };
-        escopo.Controls.Add(new Label { Text = "Lojas:", Location = new Point(12, 26), AutoSize = true });
-        _lojas.Location = new Point(100, 24);
-        escopo.Controls.Add(_lojas);
-        _carregarLojas.Location = new Point(474, 24);
-        escopo.Controls.Add(_carregarLojas);
-
-        escopo.Controls.Add(new Label { Text = "Período:", Location = new Point(12, 190), AutoSize = true });
-        _dataInicial.Location = new Point(100, 186);
-        _dataFinal.Location = new Point(240, 186);
-        escopo.Controls.Add(_dataInicial);
-        escopo.Controls.Add(new Label { Text = "até", Location = new Point(226, 190), AutoSize = true });
-        escopo.Controls.Add(_dataFinal);
+        var sugestao = new GroupBox { Text = "Sugestão de compra", Location = new Point(12, 172), Size = new Size(636, 230) };
+        _carregarSugestoes.Location = new Point(12, 24);
+        sugestao.Controls.Add(_carregarSugestoes);
+        _sugestoes.Location = new Point(12, 60);
+        sugestao.Controls.Add(_sugestoes);
+        _janelaInfo.Location = new Point(12, 196);
+        sugestao.Controls.Add(_janelaInfo);
 
         var saida = new GroupBox { Text = "Saída", Location = new Point(12, 412), Size = new Size(636, 60) };
         saida.Controls.Add(new Label { Text = "Pasta:", Location = new Point(12, 26), AutoSize = true });
@@ -96,7 +108,7 @@ internal sealed class MainForm : Form
         _status.Location = new Point(12, 556);
         _log.Location = new Point(12, 580);
 
-        Controls.AddRange([conexao, escopo, saida, _extrair, _cancelar, _progresso, _status, _log]);
+        Controls.AddRange([conexao, sugestao, saida, _extrair, _cancelar, _progresso, _status, _log]);
     }
 
     private static void AddRow(Control parent, string label, Control field, int row)
@@ -118,8 +130,6 @@ internal sealed class MainForm : Form
         _pastaSaida.Text = string.IsNullOrWhiteSpace(_config.PastaSaida)
             ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
             : _config.PastaSaida;
-        _dataFinal.Value = DateTime.Today;
-        _dataInicial.Value = DateTime.Today.AddMonths(-10);
         AtualizarCamposAuth();
     }
 
@@ -137,12 +147,8 @@ internal sealed class MainForm : Form
         _config.WindowsAuth = _authWindows.Checked;
         _config.Usuario = _usuario.Text.Trim();
         _config.PastaSaida = _pastaSaida.Text.Trim();
-        _config.Lojas = [.. LojasSelecionadas()];
         return _config;
     }
-
-    private IEnumerable<int> LojasSelecionadas() =>
-        _lojas.CheckedItems.OfType<LojaOption>().Select(l => l.LojaId);
 
     private string BuildConnectionString() => ConnectionStringFactory.Build(CaptureConfig(), _senha.Text);
 
@@ -157,21 +163,81 @@ internal sealed class MainForm : Form
         });
     }
 
-    private async Task CarregarLojasAsync()
+    private async Task CarregarSugestoesAsync()
     {
-        await RunGuardedAsync("Carregando lojas...", async () =>
+        await RunGuardedAsync("Carregando sugestões...", async () =>
         {
             var connectionString = BuildConnectionString();
-            var lojas = await Task.Run(() => ExtractionService.LoadLojas(connectionString, CancellationToken.None));
+            var dataInicio = DateOnly.FromDateTime(DateTime.Today).AddMonths(-MesesRetroativosCatalogo);
+            var catalogo = await Task.Run(() => ExtractionService.LoadCatalogoSugestoes(connectionString, dataInicio, CancellationToken.None));
 
-            _lojas.Items.Clear();
-            foreach (var loja in lojas)
-            {
-                var index = _lojas.Items.Add(loja);
-                if (_config.Lojas.Contains(loja.LojaId)) _lojas.SetItemChecked(index, true);
-            }
-            Log($"{lojas.Count} lojas carregadas.");
+            _catalogo = catalogo;
+            PopularGrid(catalogo);
+            Log($"{catalogo.Count} sugestões carregadas.");
         });
+    }
+
+    private void PopularGrid(IReadOnlyList<SugestaoCatalogo> catalogo)
+    {
+        _sugestoes.DataSource = catalogo
+            .Select(c => new SugestaoLinha(c.SugestaoId, c.Descricao ?? "(sem descrição)", c.DataHora, MetodoTexto(c.TipoCalculo), c.QtdLinhas, c.QtdLojas))
+            .ToList();
+        ConfigurarColunas();
+
+        if (catalogo.Count == 0)
+        {
+            _janela = null;
+            _janelaInfo.Text = "Nenhuma sugestão encontrada no período.";
+            _extrair.Enabled = false;
+        }
+    }
+
+    private void ConfigurarColunas()
+    {
+        void Renomear(string coluna, string titulo)
+        {
+            if (_sugestoes.Columns[coluna] is { } c) c.HeaderText = titulo;
+        }
+
+        Renomear(nameof(SugestaoLinha.SugestaoId), "Sugestão");
+        Renomear(nameof(SugestaoLinha.Descricao), "Descrição");
+        Renomear(nameof(SugestaoLinha.DataHora), "Data");
+        Renomear(nameof(SugestaoLinha.Metodo), "Método");
+        Renomear(nameof(SugestaoLinha.QtdLinhas), "Linhas");
+        Renomear(nameof(SugestaoLinha.QtdLojas), "Lojas");
+    }
+
+    private static string MetodoTexto(byte tipoCalculo) => tipoCalculo switch
+    {
+        1 => "Emax e Eseg",
+        2 => "Dias de Reposição",
+        _ => $"Tipo {tipoCalculo}",
+    };
+
+    private void AtualizarJanela()
+    {
+        if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada)
+        {
+            _janela = null;
+            _janelaInfo.Text = string.Empty;
+            _extrair.Enabled = false;
+            return;
+        }
+
+        var catalogo = _catalogo.First(c => c.SugestaoId == selecionada.SugestaoId);
+        _janela = ExtractionWindow.Derive(
+            DateOnly.FromDateTime(catalogo.DataHora), catalogo.DiasCoberturaMax, DateOnly.FromDateTime(DateTime.Today));
+
+        if (_janela.Viavel)
+        {
+            _janelaInfo.Text = $"Janela de dados a extrair: {_janela.Inicio:dd/MM/yyyy} a {_janela.Fim:dd/MM/yyyy}.";
+            _extrair.Enabled = true;
+        }
+        else
+        {
+            _janelaInfo.Text = _janela.MotivoInviabilidade;
+            _extrair.Enabled = false;
+        }
     }
 
     private void EscolherPasta()
@@ -182,24 +248,18 @@ internal sealed class MainForm : Form
 
     private async Task ExtrairAsync()
     {
-        var lojasSelecionadas = LojasSelecionadas().ToArray();
-        if (lojasSelecionadas.Length == 0)
+        if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada || _janela is not { Viavel: true } janela)
         {
-            MessageBox.Show(this, "Selecione ao menos uma loja.", "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-        if (_dataFinal.Value.Date < _dataInicial.Value.Date)
-        {
-            MessageBox.Show(this, "A data final é anterior à inicial.", "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, "Selecione uma sugestão com janela viável.", "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
         var request = new ExtractionRequest
         {
             ConnectionString = BuildConnectionString(),
-            LojaIds = lojasSelecionadas,
-            DataInicial = DateOnly.FromDateTime(_dataInicial.Value.Date),
-            DataFinal = DateOnly.FromDateTime(_dataFinal.Value.Date),
+            SugestaoId = selecionada.SugestaoId,
+            DataInicial = janela.Inicio,
+            DataFinal = janela.Fim,
             OutputDirectory = _pastaSaida.Text.Trim(),
         };
         _config.Save();
@@ -236,7 +296,7 @@ internal sealed class MainForm : Form
     {
         _extrair.Enabled = false;
         _testar.Enabled = false;
-        _carregarLojas.Enabled = false;
+        _carregarSugestoes.Enabled = false;
         _status.Text = statusInicial;
         Log(statusInicial);
 
@@ -259,9 +319,9 @@ internal sealed class MainForm : Form
         }
         finally
         {
-            _extrair.Enabled = true;
             _testar.Enabled = true;
-            _carregarLojas.Enabled = true;
+            _carregarSugestoes.Enabled = true;
+            AtualizarJanela(); // reabilita "Extrair" conforme a seleção atual, não incondicionalmente
         }
     }
 
@@ -279,4 +339,6 @@ internal sealed class MainForm : Form
 
     private void Log(string message) =>
         _log.AppendText($"{DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture)}  {message}{Environment.NewLine}");
+
+    private sealed record SugestaoLinha(long SugestaoId, string Descricao, DateTime DataHora, string Metodo, int QtdLinhas, int QtdLojas);
 }

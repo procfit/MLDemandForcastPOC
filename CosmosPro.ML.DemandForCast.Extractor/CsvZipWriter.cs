@@ -17,6 +17,14 @@ internal sealed class CsvZipWriter(Stream output) : IDisposable
     public CsvEntryWriter CreateEntry(string entryName, IReadOnlyList<string> header) =>
         new(_archive.CreateEntry(entryName, CompressionLevel.Optimal), header);
 
+    /// <summary>Grava um arquivo de texto solto no ZIP — usado pelo manifesto.json, que não é CSV.</summary>
+    public void WriteText(string entryName, string content)
+    {
+        var entry = _archive.CreateEntry(entryName, CompressionLevel.Optimal);
+        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        writer.Write(content);
+    }
+
     public void Dispose() => _archive.Dispose();
 }
 

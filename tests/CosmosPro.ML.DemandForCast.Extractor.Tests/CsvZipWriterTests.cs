@@ -96,4 +96,19 @@ public sealed class CsvZipWriterTests
 
         linhas[1].Should().Be("2026-12-31");
     }
+
+    [Fact]
+    public void WriteText_grava_conteudo_solto_sem_formatacao_de_csv()
+    {
+        var buffer = new MemoryStream();
+        using (var zip = new CsvZipWriter(buffer))
+        {
+            zip.WriteText("manifesto.json", """{"a":1}""");
+        }
+
+        using var archive = new ZipArchive(new MemoryStream(buffer.ToArray()), ZipArchiveMode.Read);
+        using var reader = new StreamReader(archive.GetEntry("manifesto.json")!.Open(), Encoding.UTF8);
+
+        reader.ReadToEnd().Should().Be("""{"a":1}""");
+    }
 }
