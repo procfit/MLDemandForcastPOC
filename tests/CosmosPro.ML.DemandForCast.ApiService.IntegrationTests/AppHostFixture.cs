@@ -31,7 +31,10 @@ public sealed class AppHostFixture : IAsyncLifetime
 
         // 'poweruser-password' é parâmetro secreto sem valor no AppHost (vem de
         // user-secrets em desenvolvimento). Sem injetar aqui, a Web não sobe.
-        builder.Configuration["Parameters:poweruser-email"] = "admin@local";
+        // E-mail próprio, diferente do admin de debug (`admin@local`): o banco engine é
+        // persistente e compartilhado, e reusar o e-mail fazia teste e inner loop
+        // disputarem a senha do mesmo usuário.
+        builder.Configuration["Parameters:poweruser-email"] = "integracao@teste.local";
         builder.Configuration["Parameters:poweruser-password"] = "TesteIntegracao!2026";
 
         // CommunityToolkit.Aspire.Hosting.SqlDatabaseProjects descobre o

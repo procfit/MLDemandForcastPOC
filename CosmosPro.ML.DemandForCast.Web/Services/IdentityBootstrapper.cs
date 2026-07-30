@@ -4,13 +4,24 @@ using Microsoft.AspNetCore.Identity;
 namespace CosmosPro.ML.DemandForCast.Web.Services;
 
 /// <summary>
-/// Cria os papéis e o PowerUser inicial no startup. Idempotente: se o usuário já
-/// existe, <b>não</b> mexe nele — senão uma senha trocada pelo administrador voltaria
-/// ao valor do parâmetro a cada F5.
+/// Cria os papéis e o PowerUser inicial no startup.
+/// <para>
+/// Fora de Development é idempotente: se o usuário existe, <b>não</b> mexe nele —
+/// senão uma senha trocada pelo administrador voltaria ao valor do parâmetro a cada
+/// reinício.
+/// </para>
+/// <para>
+/// <b>Em Development a senha é reconciliada.</b> Motivo concreto: o banco
+/// <c>engine</c> é persistente e compartilhado com os fixtures de teste, que também
+/// semeiam um PowerUser. Sem reconciliar, o admin fica com a senha de quem o criou
+/// primeiro e o login de debug falha com "E-mail ou senha inválidos" — sem nenhuma
+/// pista de que a causa é essa.
+/// </para>
 /// </summary>
 internal sealed class IdentityBootstrapper(
     IServiceScopeFactory scopeFactory,
     IConfiguration config,
+    IHostEnvironment ambiente,
     ILogger<IdentityBootstrapper> logger) : IHostedService
 {
     public async Task StartAsync(CancellationToken ct)
@@ -51,9 +62,15 @@ internal sealed class IdentityBootstrapper(
             }
         }
 
-        if (await userManager.FindByEmailAsync(email) is not null)
+        if (await userManager.FindByEmailAsync(email) is { } existente)
         {
-            logger.LogInformation("PowerUser {Email} já existe — bootstrap não alterou nada.", email);
+            if (!ambiente.IsDevelopment())
+            {
+                logger.LogInformation("PowerUser {Email} já existe — bootstrap não alterou nada.", email);
+                return;
+            }
+
+            await ReconciliarEmDesenvolvimentoAsync(existente, senha, userManager);
             return;
         }
 
@@ -86,6 +103,54 @@ internal sealed class IdentityBootstrapper(
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
+    /// Alinha senha, papel e situação do PowerUser ao que está configurado. Só roda em
+    /// Development — em produção sobrescrever a senha do administrador a cada reinício
+    /// seria um defeito, não uma conveniência.
+    /// </summary>
+    private async Task ReconciliarEmDesenvolvimentoAsync(
+        Usuario existente, string senha, UserManager<Usuario> userManager)
+    {
+        if (!await userManager.CheckPasswordAsync(existente, senha))
+        {
+            var token = await userManager.GeneratePasswordResetTokenAsync(existente);
+            var reset = await userManager.ResetPasswordAsync(existente, token, senha);
+            if (!reset.Succeeded)
+            {
+                throw new InvalidOperationException(
+                    $"Falha ao alinhar a senha do PowerUser em Development: {Descrever(reset)}");
+            }
+            logger.LogWarning(
+                "Senha do PowerUser {Email} realinhada ao valor configurado (Development). " +
+                "O usuário existia com outra senha — tipicamente criado por fixture de teste.",
+                existente.Email);
+        }
+
+        // Usuário vindo de outra origem pode estar sem papel, inativo ou preso a uma
+        // rede. Qualquer um dos três derruba o login ou a área administrativa.
+        if (!await userManager.IsInRoleAsync(existente, Papeis.PowerUser))
+        {
+            var papel = await userManager.AddToRoleAsync(existente, Papeis.PowerUser);
+            if (!papel.Succeeded)
+            {
+                throw new InvalidOperationException($"Falha ao atribuir papel: {Descrever(papel)}");
+            }
+            logger.LogWarning("PowerUser {Email} estava sem o papel — atribuído.", existente.Email);
+        }
+
+        if (!existente.Ativo || existente.RedeId is not null)
+        {
+            existente.Ativo = true;
+            existente.RedeId = null;
+            var upd = await userManager.UpdateAsync(existente);
+            if (!upd.Succeeded)
+            {
+                throw new InvalidOperationException($"Falha ao reativar PowerUser: {Descrever(upd)}");
+            }
+            logger.LogWarning("PowerUser {Email} reativado / desvinculado de rede.", existente.Email);
+        }
+    }
 
     private static string Descrever(IdentityResult r) =>
         string.Join("; ", r.Errors.Select(e => $"{e.Code}: {e.Description}"));

@@ -20,8 +20,16 @@ public sealed class AppHostFixture : IAsyncLifetime
     public IBrowser Browser { get; private set; } = null!;
     public string WebfrontendUrl { get; private set; } = null!;
 
-    /// <summary>Credenciais do PowerUser semeado — usadas pelo helper de login.</summary>
-    public const string PowerUserEmail = "admin@local";
+    /// <summary>
+    /// Credenciais do PowerUser semeado — usadas pelo helper de login.
+    /// <para>
+    /// E-mail próprio, deliberadamente diferente do admin de debug (`admin@local`):
+    /// o banco <c>engine</c> é persistente e compartilhado, e usar o mesmo e-mail fazia
+    /// o teste e o inner loop disputarem a senha do mesmo usuário — quem criasse
+    /// primeiro ganhava, e o outro falhava no login sem pista da causa.
+    /// </para>
+    /// </summary>
+    public const string PowerUserEmail = "e2e@teste.local";
     public const string PowerUserSenha = "TesteE2E!2026";
 
     public async ValueTask InitializeAsync()
