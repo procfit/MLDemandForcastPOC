@@ -21,3 +21,12 @@ internal sealed record LojaOption(int LojaId, string Nome)
 {
     public override string ToString() => $"{LojaId} - {Nome}";
 }
+
+internal sealed record SugestaoCatalogo(
+    long SugestaoId,
+    string? Descricao,
+    DateTime DataHora,
+    byte TipoCalculo,
+    int DiasCoberturaMax,
+    int QtdLinhas,
+    int QtdLojas);
