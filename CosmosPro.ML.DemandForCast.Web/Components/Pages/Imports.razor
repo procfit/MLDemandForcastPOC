@@ -5,7 +5,7 @@
 @inject NotificationService Notifications
 @inject DialogService Dialogs
 @inject TooltipService TooltipService
-@implements IDisposable
+@implements IAsyncDisposable
 
 <PageTitle>Importação de dados</PageTitle>
 
@@ -138,7 +138,19 @@
     protected override async Task OnInitializedAsync()
     {
         await RefreshAsync();
-        _timer = new Timer(async _ => await InvokeAsync(RefreshAsync), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+        _timer = new Timer(async _ =>
+        {
+            try
+            {
+                await InvokeAsync(RefreshAsync);
+            }
+            catch
+            {
+                // Tick pode disparar durante/depois do teardown do circuito (navegação
+                // no meio de um refresh); nunca deixe escapar pro thread pool como
+                // async void não tratado.
+            }
+        }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
     }
 
     private async Task RefreshAsync()
@@ -264,9 +276,15 @@
         _ => BadgeStyle.Light,
     };
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        _timer?.Dispose();
+        if (_timer is not null)
+        {
+            // DisposeAsync espera um callback em andamento terminar antes de retornar
+            // (Dispose síncrono não espera) — só então é seguro cancelar o _cts que o
+            // callback usa.
+            await _timer.DisposeAsync();
+        }
         _cts.Cancel();
         _cts.Dispose();
     }

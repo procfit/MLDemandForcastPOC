@@ -235,7 +235,8 @@ internal static class ImportsEndpoints
             c.MensagemErro,
             c.LinhasImportadas);
 
-    private static async Task EnsureBucketExistsAsync(IMinioClient minio, string bucket, CancellationToken ct)
+    /// <summary>Reusado por <c>ComparacoesEndpoints</c> — mesmo padrão de bucket idempotente.</summary>
+    internal static async Task EnsureBucketExistsAsync(IMinioClient minio, string bucket, CancellationToken ct)
     {
         var exists = await minio.BucketExistsAsync(new BucketExistsArgs().WithBucket(bucket), ct);
         if (!exists)

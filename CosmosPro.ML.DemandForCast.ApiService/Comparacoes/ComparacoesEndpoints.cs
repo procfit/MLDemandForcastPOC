@@ -108,7 +108,8 @@ internal static class ComparacoesEndpoints
         IMinioClient minio,
         ILogger<Program> logger,
         CancellationToken ct,
-        [FromQuery] int redeId = 1)
+        [FromQuery] int redeId = 1,
+        [FromQuery] string? usuarioId = null)
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
 
@@ -134,11 +135,9 @@ internal static class ComparacoesEndpoints
             sessao.MensagemErro = null;
         }
 
-        if (!ComparacaoSessao.PodeTransicionar(sessao.Status, SessaoStatus.ProcessandoDados))
-        {
-            return Results.BadRequest(new ValidationErrorResponse(
-                [$"Sessão em '{origem}' não aceita novo envio de dados."]));
-        }
+        // A esta altura sessao.Status é sempre AguardandoDados (era de origem, ou
+        // acabou de ser normalizado acima), e AguardandoDados -> ProcessandoDados é
+        // sempre permitida (ComparacaoSessao.Permitidas) — sem segunda checagem a fazer.
 
         if (file is null || file.Length == 0)
         {
@@ -170,11 +169,11 @@ internal static class ComparacoesEndpoints
             DataAgendamento = DateTimeOffset.UtcNow,
             NomeArquivoOriginal = file.FileName,
             BlobKey = string.Empty,
-            UsuarioId = "web-comparacao",
+            UsuarioId = usuarioId,
         };
         carga.BlobKey = $"{carga.Id}.zip";
 
-        await EnsureBucketExistsAsync(minio, ImportsEndpoints.BucketName, ct);
+        await ImportsEndpoints.EnsureBucketExistsAsync(minio, ImportsEndpoints.BucketName, ct);
 
         await using (var uploadStream = file.OpenReadStream())
         {
@@ -215,15 +214,6 @@ internal static class ComparacoesEndpoints
         s.Id, s.Nome, s.Status.ToString(), s.CriadoEm,
         s.SugestaoId, s.SugestaoDescricao, s.SugestaoDataHora, s.SugestaoTipoCalculo,
         s.MotivoInviabilidade, s.MensagemErro);
-
-    private static async Task EnsureBucketExistsAsync(IMinioClient minio, string bucket, CancellationToken ct)
-    {
-        var exists = await minio.BucketExistsAsync(new BucketExistsArgs().WithBucket(bucket), ct);
-        if (!exists)
-        {
-            await minio.MakeBucketAsync(new MakeBucketArgs().WithBucket(bucket), ct);
-        }
-    }
 }
 
 internal sealed record CreateSessaoRequest(string? Nome);

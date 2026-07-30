@@ -20,7 +20,7 @@ internal sealed class RedeContext(
     IServiceScopeFactory scopeFactory) : IRedeContext
 {
     private int? _redeSelecionadaPowerUser;
-    private (bool Resolvido, bool EhPower, int? RedeDoUsuario) _cache;
+    private (bool Resolvido, bool EhPower, int? RedeDoUsuario, Guid? UsuarioId) _cache;
 
     public async Task<int> GetRedeIdAtualAsync()
     {
@@ -54,6 +54,13 @@ internal sealed class RedeContext(
                 "Não existe nenhuma rede ativa cadastrada. Cadastre uma em /admin/redes.");
 
         return _redeSelecionadaPowerUser.Value;
+    }
+
+    public async Task<Guid> GetUsuarioIdAtualAsync()
+    {
+        await ResolverAsync();
+        return _cache.UsuarioId
+            ?? throw new InvalidOperationException("Nenhum usuário autenticado no contexto.");
     }
 
     public async Task<bool> EhPowerUserAsync() => (await ResolverAsync()).EhPower;
@@ -101,22 +108,25 @@ internal sealed class RedeContext(
 
         var ehPower = principal.IsInRole(Papeis.PowerUser);
 
-        int? rede = null;
-        if (!ehPower)
+        Guid? usuarioId = null;
+        var idTexto = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (Guid.TryParse(idTexto, out var userIdParseado))
         {
-            var idTexto = principal.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (Guid.TryParse(idTexto, out var userId))
-            {
-                await using var scope = scopeFactory.CreateAsyncScope();
-                var db = scope.ServiceProvider.GetRequiredService<EngineDbContext>();
-                rede = await db.Users.AsNoTracking()
-                    .Where(u => u.Id == userId)
-                    .Select(u => u.RedeId)
-                    .FirstOrDefaultAsync();
-            }
+            usuarioId = userIdParseado;
         }
 
-        _cache = (true, ehPower, rede);
+        int? rede = null;
+        if (!ehPower && usuarioId is { } userId)
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<EngineDbContext>();
+            rede = await db.Users.AsNoTracking()
+                .Where(u => u.Id == userId)
+                .Select(u => u.RedeId)
+                .FirstOrDefaultAsync();
+        }
+
+        _cache = (true, ehPower, rede, usuarioId);
         return (ehPower, rede);
     }
 }

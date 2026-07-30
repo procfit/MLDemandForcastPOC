@@ -5,7 +5,7 @@
 @inject NotificationService Notifications
 @inject NavigationManager Nav
 @inject IJSRuntime JS
-@implements IDisposable
+@implements IAsyncDisposable
 
 <PageTitle>@(_sessao?.Nome ?? "Comparação")</PageTitle>
 
@@ -15,16 +15,22 @@
         <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">@(_sessao?.Nome ?? "Comparação")</RadzenText>
         @if (_sessao is not null)
         {
-            <RadzenBadge Text="@EstadoLabel(_sessao.Status)" BadgeStyle="@BadgeFor(_sessao.Status)" Shade="Shade.Lighter" />
+            <RadzenBadge Text="@SessaoView.EstadoLabel(_sessao.Status)" BadgeStyle="@SessaoView.BadgeFor(_sessao.Status)" Shade="Shade.Lighter" />
         }
     </RadzenStack>
 
-    @if (_loading && _sessao is null)
+    @if (_loading && _sessao is null && _erroCarregamento is null)
     {
         <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
             <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
             <RadzenText TextStyle="TextStyle.Body2">Carregando…</RadzenText>
         </RadzenStack>
+    }
+    else if (_sessao is null && _erroCarregamento is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+            Falha ao carregar a comparação: @_erroCarregamento
+        </RadzenAlert>
     }
     else if (_sessao is null)
     {
@@ -118,13 +124,28 @@
     private SessaoView? _sessao;
     private bool _loading;
     private bool _uploading;
+    private string? _erroCarregamento;
     private Timer? _timer;
     private readonly CancellationTokenSource _cts = new();
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(3);
 
     protected override async Task OnInitializedAsync()
     {
         await RefreshAsync();
-        _timer = new Timer(async _ => await InvokeAsync(RefreshAsync), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+        _timer = new Timer(async _ =>
+        {
+            try
+            {
+                await InvokeAsync(RefreshAsync);
+            }
+            catch
+            {
+                // Tick pode disparar durante/depois do teardown do circuito (navegação
+                // no meio de um refresh); nunca deixe escapar pro thread pool como
+                // async void não tratado.
+            }
+        }, null, PollInterval, PollInterval);
+        AtualizarPolling();
     }
 
     private async Task RefreshAsync()
@@ -134,17 +155,36 @@
         try
         {
             _sessao = await ComparacoesApi.GetAsync(Id, _cts.Token);
+            // GetAsync devolve null tanto num 404 real quanto após capturar uma
+            // exceção — só limpamos o erro quando a chamada de fato respondeu, para
+            // "não encontrada" (404) e "falha ao carregar" (exceção) renderizarem
+            // mensagens distintas.
+            _erroCarregamento = null;
         }
         catch (OperationCanceledException) { }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // POC: silencia para não quebrar o polling.
+            _erroCarregamento = ex.Message;
         }
         finally
         {
             _loading = false;
+            AtualizarPolling();
             StateHasChanged();
         }
+    }
+
+    /// <summary>
+    /// Para de fazer poll quando a sessão chega num estado terminal — senão o timer
+    /// roda pra sempre mesmo com nada mais a atualizar. Reativa automaticamente se um
+    /// novo upload (a partir de Inviavel/Falha) tirar a sessão do terminal de novo.
+    /// </summary>
+    private void AtualizarPolling()
+    {
+        if (_timer is null) return;
+        var terminal = _sessao?.EstadoTerminal ?? false;
+        var due = terminal ? Timeout.InfiniteTimeSpan : PollInterval;
+        _timer.Change(due, PollInterval);
     }
 
     private async Task TriggerFilePicker() =>
@@ -223,31 +263,15 @@
         _ => ("hourglass_empty", "Processando", ""),
     };
 
-    private static string EstadoLabel(string status) => status switch
+    public async ValueTask DisposeAsync()
     {
-        "AguardandoDados" => "Aguardando dados",
-        "ProcessandoDados" => "Processando dados",
-        "Treinando" => "Treinando",
-        "Comparando" => "Comparando",
-        "Concluida" => "Concluída",
-        "Inviavel" => "Inviável",
-        "Falha" => "Falha",
-        _ => status,
-    };
-
-    private static BadgeStyle BadgeFor(string status) => status switch
-    {
-        "AguardandoDados" => BadgeStyle.Secondary,
-        "ProcessandoDados" or "Treinando" or "Comparando" => BadgeStyle.Info,
-        "Concluida" => BadgeStyle.Success,
-        "Inviavel" => BadgeStyle.Warning,
-        "Falha" => BadgeStyle.Danger,
-        _ => BadgeStyle.Light,
-    };
-
-    public void Dispose()
-    {
-        _timer?.Dispose();
+        if (_timer is not null)
+        {
+            // DisposeAsync espera um callback em andamento terminar antes de retornar
+            // (Dispose síncrono não espera) — só então é seguro cancelar o _cts que o
+            // callback usa.
+            await _timer.DisposeAsync();
+        }
         _cts.Cancel();
         _cts.Dispose();
     }

@@ -4,7 +4,7 @@
 @inject ComparacoesApiClient ComparacoesApi
 @inject NotificationService Notifications
 @inject NavigationManager Nav
-@implements IDisposable
+@implements IAsyncDisposable
 
 <PageTitle>Comparações</PageTitle>
 
@@ -21,7 +21,13 @@
         <RadzenButton Click="@RefreshAsync" Icon="refresh" Variant="Variant.Text" Disabled="@_loading" />
     </RadzenStack>
 
-    @if (!_loading && _sessoes.Count == 0)
+    @if (_erroCarregamento is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+            @_erroCarregamento
+        </RadzenAlert>
+    }
+    else if (!_loading && _sessoes.Count == 0)
     {
         <RadzenCard Variant="Variant.Outlined">
             <RadzenStack Gap="0.75rem" AlignItems="AlignItems.Center" Style="padding: 2rem 1rem">
@@ -66,7 +72,7 @@
                     </RadzenDataGridColumn>
                     <RadzenDataGridColumn TItem="SessaoView" Property="Status" Title="Estado" Width="160px">
                         <Template Context="s">
-                            <RadzenBadge Text="@EstadoLabel(s.Status)" BadgeStyle="@BadgeFor(s.Status)" Shade="Shade.Lighter" />
+                            <RadzenBadge Text="@SessaoView.EstadoLabel(s.Status)" BadgeStyle="@SessaoView.BadgeFor(s.Status)" Shade="Shade.Lighter" />
                         </Template>
                     </RadzenDataGridColumn>
                     <RadzenDataGridColumn TItem="SessaoView" Title="Resumo" Sortable="false">
@@ -91,13 +97,26 @@
     private List<SessaoView> _sessoes = [];
     private bool _loading;
     private bool _criando;
+    private string? _erroCarregamento;
     private Timer? _timer;
     private readonly CancellationTokenSource _cts = new();
 
     protected override async Task OnInitializedAsync()
     {
         await RefreshAsync();
-        _timer = new Timer(async _ => await InvokeAsync(RefreshAsync), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+        _timer = new Timer(async _ =>
+        {
+            try
+            {
+                await InvokeAsync(RefreshAsync);
+            }
+            catch
+            {
+                // Tick pode disparar durante/depois do teardown do circuito (navegação
+                // no meio de um refresh); nunca deixe escapar pro thread pool como
+                // async void não tratado.
+            }
+        }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
     }
 
     private async Task RefreshAsync()
@@ -110,11 +129,16 @@
         try
         {
             _sessoes = [.. await ComparacoesApi.ListAsync(50, _cts.Token)];
+            _erroCarregamento = null;
         }
         catch (OperationCanceledException) { }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // POC: silencia para não quebrar o polling.
+            // Ao contrário do padrão "silencia" de Imports/Sessao: aqui uma falha comum
+            // é o IRedeContext lançando com texto acionável (ex.: "nenhuma rede ativa
+            // cadastrada"). Se isso for engolido, a tela mostra o empty state genérico
+            // e o usuário só descobre o problema real ao clicar em "Nova comparação".
+            _erroCarregamento = ex.Message;
         }
         finally
         {
@@ -155,28 +179,6 @@
         _ => "—",
     };
 
-    private static string EstadoLabel(string status) => status switch
-    {
-        "AguardandoDados" => "Aguardando dados",
-        "ProcessandoDados" => "Processando dados",
-        "Treinando" => "Treinando",
-        "Comparando" => "Comparando",
-        "Concluida" => "Concluída",
-        "Inviavel" => "Inviável",
-        "Falha" => "Falha",
-        _ => status,
-    };
-
-    private static BadgeStyle BadgeFor(string status) => status switch
-    {
-        "AguardandoDados" => BadgeStyle.Secondary,
-        "ProcessandoDados" or "Treinando" or "Comparando" => BadgeStyle.Info,
-        "Concluida" => BadgeStyle.Success,
-        "Inviavel" => BadgeStyle.Warning,
-        "Falha" => BadgeStyle.Danger,
-        _ => BadgeStyle.Light,
-    };
-
     private static string ResumoLabel(SessaoView s) => s.Status switch
     {
         "Inviavel" => s.MotivoInviabilidade ?? "Inviável.",
@@ -185,9 +187,15 @@
         _ => "—",
     };
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        _timer?.Dispose();
+        if (_timer is not null)
+        {
+            // DisposeAsync espera um callback em andamento terminar antes de retornar
+            // (Dispose síncrono não espera) — só então é seguro cancelar o _cts que o
+            // callback usa.
+            await _timer.DisposeAsync();
+        }
         _cts.Cancel();
         _cts.Dispose();
     }

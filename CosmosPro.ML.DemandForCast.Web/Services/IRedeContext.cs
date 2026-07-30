@@ -22,6 +22,13 @@ public interface IRedeContext
     /// </summary>
     Task<int> GetRedeIdAtualAsync();
 
+    /// <summary>
+    /// Id do usuário autenticado no circuito atual. Usado para preencher campos de
+    /// auditoria (ex.: <c>CargaStage.UsuarioId</c>) — nunca para decidir escopo, que
+    /// é sempre <see cref="GetRedeIdAtualAsync"/>.
+    /// </summary>
+    Task<Guid> GetUsuarioIdAtualAsync();
+
     Task<bool> EhPowerUserAsync();
 
     /// <summary>Se o usuário corrente pode operar sobre a rede informada.</summary>
