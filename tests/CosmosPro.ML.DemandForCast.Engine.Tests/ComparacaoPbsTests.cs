@@ -13,10 +13,18 @@ public sealed class ComparacaoPbsTests
             .Options);
 
     [Fact]
-    public void Novo_job_comeca_Pendente_por_default()
+    public void Pendente_eh_o_unico_status_pelo_qual_o_Worker_faz_polling()
     {
-        var job = new ComparacaoPbs();
-        job.Status.Should().Be(ComparacaoPbsStatus.Pendente);
+        // O Worker consulta "Status = Pendente" (competing-consumers, mesmo padrão
+        // de CargaStage/TreinoJob/SimulacaoCompra) — se um novo membro for
+        // adicionado ao enum, ele não pode acidentalmente virar sinônimo de
+        // Pendente nem repetir seu valor numérico, senão o polling pega jobs errados.
+        var valores = Enum.GetValues<ComparacaoPbsStatus>();
+
+        valores.Should().OnlyHaveUniqueItems();
+        valores.Select(v => (int)v).Should().OnlyHaveUniqueItems();
+        ComparacaoPbsStatus.Pendente.Should().Be((ComparacaoPbsStatus)0,
+            "o valor persistido é o nome (HasConversion<string>()), mas o default do CLR ao instanciar a entity é 0 — Pendente precisa continuar sendo o primeiro membro");
     }
 
     [Fact]

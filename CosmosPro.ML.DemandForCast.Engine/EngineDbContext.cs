@@ -202,7 +202,8 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
 
         modelBuilder.Entity<ComparacaoPbs>(b =>
         {
-            b.ToTable("ComparacoesPbs");
+            b.ToTable("ComparacoesPbs", t =>
+                t.HasCheckConstraint("CK_ComparacoesPbs_TipoCalculo", "[TipoCalculo] IN (1, 2)"));
             b.HasKey(x => x.Id);
 
             b.Property(x => x.Status)
@@ -221,6 +222,8 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
              .OnDelete(DeleteBehavior.Restrict);
 
+            // FK lógica (sem cascata) para preservar histórico mesmo se o treino for removido.
+            b.HasIndex(x => x.TreinoJobId).HasDatabaseName("IX_ComparacoesPbs_TreinoJobId");
             // Mesmo padrão de polling das demais filas — cross-rede, sem RedeId no
             // índice de polling (um Worker serve todos os inquilinos e pega a
             // próxima Pendente de qualquer rede).

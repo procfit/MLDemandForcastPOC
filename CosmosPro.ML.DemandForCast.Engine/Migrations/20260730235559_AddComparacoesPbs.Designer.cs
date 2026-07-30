@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CosmosPro.ML.DemandForCast.Engine.Migrations
 {
     [DbContext(typeof(EngineDbContext))]
-    [Migration("20260730235004_AddComparacoesPbs")]
+    [Migration("20260730235559_AddComparacoesPbs")]
     partial class AddComparacoesPbs
     {
         /// <inheritdoc />
@@ -124,13 +124,19 @@ namespace CosmosPro.ML.DemandForCast.Engine.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("TreinoJobId")
+                        .HasDatabaseName("IX_ComparacoesPbs_TreinoJobId");
+
                     b.HasIndex("RedeId", "DataAgendamento")
                         .HasDatabaseName("IX_ComparacoesPbs_Rede_DataAgendamento");
 
                     b.HasIndex("Status", "DataAgendamento")
                         .HasDatabaseName("IX_ComparacoesPbs_Status_DataAgendamento");
 
-                    b.ToTable("ComparacoesPbs", (string)null);
+                    b.ToTable("ComparacoesPbs", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_ComparacoesPbs_TipoCalculo", "[TipoCalculo] IN (1, 2)");
+                        });
                 });
 
             modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.ComparacaoSessao", b =>

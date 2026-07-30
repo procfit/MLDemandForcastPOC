@@ -31,6 +31,7 @@ namespace CosmosPro.ML.DemandForCast.Engine.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_ComparacoesPbs", x => x.Id);
+                    table.CheckConstraint("CK_ComparacoesPbs_TipoCalculo", "[TipoCalculo] IN (1, 2)");
                     table.ForeignKey(
                         name: "FK_ComparacoesPbs_Redes_RedeId",
                         column: x => x.RedeId,
@@ -48,6 +49,11 @@ namespace CosmosPro.ML.DemandForCast.Engine.Migrations
                 name: "IX_ComparacoesPbs_Status_DataAgendamento",
                 table: "ComparacoesPbs",
                 columns: new[] { "Status", "DataAgendamento" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ComparacoesPbs_TreinoJobId",
+                table: "ComparacoesPbs",
+                column: "TreinoJobId");
         }
 
         /// <inheritdoc />
