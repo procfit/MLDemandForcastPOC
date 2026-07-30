@@ -14,6 +14,7 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
     public DbSet<SimulacaoCompra> SimulacoesCompra => Set<SimulacaoCompra>();
     public DbSet<ComparacaoSessao> ComparacaoSessoes => Set<ComparacaoSessao>();
     public DbSet<ComparacaoSessaoItem> ComparacaoSessaoItens => Set<ComparacaoSessaoItem>();
+    public DbSet<ComparacaoPbs> ComparacoesPbs => Set<ComparacaoPbs>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -197,6 +198,36 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             // dos jobs, que preservam histórico mesmo com o pai removido.
             b.HasOne<ComparacaoSessao>().WithMany().HasForeignKey(x => x.SessaoId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ComparacaoPbs>(b =>
+        {
+            b.ToTable("ComparacoesPbs");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Status)
+             .HasConversion<string>()
+             .HasMaxLength(20)
+             .IsRequired();
+
+            b.Property(x => x.DataAgendamento).IsRequired();
+            b.Property(x => x.RedeId).IsRequired();
+            b.Property(x => x.TreinoJobId).IsRequired();
+            b.Property(x => x.TipoCalculo).IsRequired();
+            b.Property(x => x.MensagemErro).HasMaxLength(2000);
+            // ResultadoJson é potencialmente grande (métricas por hierarquia) → nvarchar(max).
+            b.Property(x => x.ResultadoJson);
+
+            b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            // Mesmo padrão de polling das demais filas — cross-rede, sem RedeId no
+            // índice de polling (um Worker serve todos os inquilinos e pega a
+            // próxima Pendente de qualquer rede).
+            b.HasIndex(x => new { x.Status, x.DataAgendamento })
+             .HasDatabaseName("IX_ComparacoesPbs_Status_DataAgendamento");
+            b.HasIndex(x => new { x.RedeId, x.DataAgendamento })
+             .HasDatabaseName("IX_ComparacoesPbs_Rede_DataAgendamento");
         });
     }
 }
