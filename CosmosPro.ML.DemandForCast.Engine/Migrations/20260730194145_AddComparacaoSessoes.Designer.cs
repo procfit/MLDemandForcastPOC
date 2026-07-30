@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CosmosPro.ML.DemandForCast.Engine.Migrations
 {
     [DbContext(typeof(EngineDbContext))]
-    [Migration("20260730193546_AddComparacaoSessoes")]
+    [Migration("20260730194145_AddComparacaoSessoes")]
     partial class AddComparacaoSessoes
     {
         /// <inheritdoc />
@@ -166,7 +166,8 @@ namespace CosmosPro.ML.DemandForCast.Engine.Migrations
                         .HasColumnType("decimal(15,3)");
 
                     b.Property<string>("Curva")
-                        .HasColumnType("nvarchar(max)");
+                        .HasMaxLength(1)
+                        .HasColumnType("nvarchar(1)");
 
                     b.Property<decimal>("DemandaDiaMl")
                         .HasPrecision(12, 4)
@@ -181,7 +182,8 @@ namespace CosmosPro.ML.DemandForCast.Engine.Migrations
                         .HasColumnType("decimal(12,4)");
 
                     b.Property<string>("NomeProduto")
-                        .HasColumnType("nvarchar(max)");
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<decimal>("SobraMlUnidades")
                         .HasPrecision(15, 3)
