@@ -135,6 +135,25 @@ public sealed record ComparisonItem
     /// </summary>
     public required DateOnly ModeloTreinadoAte { get; init; }
 
+    /// <summary>
+    /// Declaração do chamador de que as features de todo dia-alvo deste par foram
+    /// geradas com <c>FeatureConfig.PrecoCongeladoAPartirDe</c> igual a esta data.
+    /// Precisa ser igual à data de <see cref="DataHora"/>: assim como
+    /// <see cref="ModeloTreinadoAte"/> fecha o buraco do treino, este campo fecha o
+    /// buraco do preço — sem ele, uma população montada com <c>FeatureConfig</c>
+    /// default (sem congelamento) passaria calada por todas as demais checagens, e o
+    /// preço realizado do próprio dia-alvo voltaria a vazar para a previsão do ML.
+    ///
+    /// <para>
+    /// O comparador valida a igualdade, não a gera nem a infere: é uma DECLARAÇÃO de
+    /// quem montou a população, não uma prova de que o <c>FeatureBuilder</c> de fato
+    /// aplicou o congelamento ao produzir as features que alimentaram
+    /// <c>DiaAvaliado.PrevisaoMl</c>. Ver <see cref="ForecastVsErpComparer"/>, "O que
+    /// este comparador NÃO consegue verificar".
+    /// </para>
+    /// </summary>
+    public required DateOnly PrecoCongeladoAPartirDe { get; init; }
+
     /// <summary>1 = "Emax e Eseg", 2 = "Dias de Reposição". São baselines distintos.</summary>
     public required byte TipoCalculo { get; init; }
 

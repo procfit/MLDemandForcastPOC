@@ -209,6 +209,16 @@ public sealed class FeatureBuilder(FeatureConfig? config = null)
     /// Preço zero quando a série não tem nenhum dia com venda antes do corte — mesma
     /// leitura que um dia densificado sem venda.
     /// </para>
+    ///
+    /// <para>
+    /// Muda o invariante da razão para o dia-alvo igual ao corte: no caminho sem
+    /// congelamento a janela rolling de <c>PrecoRelativoMedia</c> termina em
+    /// <c>D - LeadTimeDias</c>; aqui ela termina em <c>corte - 1</c>, que para
+    /// <c>D == corte</c> é uma janela mais recente. É defensável — o ERP também
+    /// calculou no instante do corte, não <c>LeadTimeDias</c> antes dele —, mas é uma
+    /// mudança deliberada de qual janela alimenta a razão, não uma continuação do
+    /// invariante do caminho de treino.
+    /// </para>
     /// </summary>
     private static (decimal Preco, decimal Relativo) AncoraDePreco(
         List<DailyObservation> densa, DateOnly corte, int window)

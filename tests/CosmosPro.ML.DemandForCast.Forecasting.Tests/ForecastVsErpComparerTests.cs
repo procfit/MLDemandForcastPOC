@@ -47,6 +47,7 @@ public sealed class ForecastVsErpComparerTests
             SugestaoId = sugestaoId,
             DataHora = dataHora ?? DataHora,
             ModeloTreinadoAte = TreinadoAte,
+            PrecoCongeladoAPartirDe = DateOnly.FromDateTime(dataHora ?? DataHora),
             TipoCalculo = 1,
             LojaId = loja,
             Sku = sku,
@@ -170,6 +171,26 @@ public sealed class ForecastVsErpComparerTests
     public void Modelo_treinado_ate_a_vespera_da_sugestao_eh_aceito()
     {
         var pop = new[] { Item(2.0, UmDia(3m, 3.0)) with { ModeloTreinadoAte = new DateOnly(2025, 2, 28) } };
+
+        new ForecastVsErpComparer().Compare(pop).ParesAvaliados.Should().Be(1);
+    }
+
+    [Fact]
+    public void Preco_congelado_divergente_da_data_da_sugestao_falha_ruidosamente()
+    {
+        // Sem esta checagem, uma populacao montada com FeatureConfig default (sem
+        // congelamento) passaria calada por todas as demais validacoes.
+        var pop = new[] { Item(2.0, UmDia(3m, 3.0)) with { PrecoCongeladoAPartirDe = new DateOnly(2025, 3, 2) } };
+
+        var act = () => new ForecastVsErpComparer().Compare(pop);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*congelamento*");
+    }
+
+    [Fact]
+    public void Preco_congelado_igual_a_data_da_sugestao_eh_aceito()
+    {
+        var pop = new[] { Item(2.0, UmDia(3m, 3.0)) with { PrecoCongeladoAPartirDe = new DateOnly(2025, 3, 1) } };
 
         new ForecastVsErpComparer().Compare(pop).ParesAvaliados.Should().Be(1);
     }

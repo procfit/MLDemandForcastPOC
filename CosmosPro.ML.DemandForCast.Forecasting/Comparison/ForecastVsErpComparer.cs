@@ -23,9 +23,10 @@ namespace CosmosPro.ML.DemandForCast.Forecasting.Comparison;
 /// par duplicado ou dia repetido dentro de um par.</item>
 /// <item><b>Informação</b> — a observação mais recente que alimenta as features de
 /// histórico de um dia-alvo (<c>D - LeadTimeDias</c>) precisa ser estritamente anterior
-/// a <c>DataHora</c> da sugestão, e o modelo precisa ter sido treinado até uma data
-/// também estritamente anterior. Caso contrário o ML preveria sabendo o que o ERP não
-/// sabia.</item>
+/// a <c>DataHora</c> da sugestão, o modelo precisa ter sido treinado até uma data
+/// também estritamente anterior, e o congelamento de preço declarado
+/// (<c>PrecoCongeladoAPartirDe</c>) precisa ser igual a essa mesma data. Caso
+/// contrário o ML preveria sabendo o que o ERP não sabia.</item>
 /// <item><b>Números utilizáveis</b> — previsão não finita (NaN/infinito) em qualquer
 /// braço interrompe a execução em vez de virar derrota silenciosa daquele braço.</item>
 /// <item><b>Hierarquia constante</b> — categoria, classe ABC e UF precisam ser as
@@ -43,10 +44,21 @@ namespace CosmosPro.ML.DemandForCast.Forecasting.Comparison;
 /// D são planejados e legitimamente conhecidos. <b>Preço não é</b>: o
 /// <c>PrecoUnitario</c> que o <c>FeatureBuilder</c> coloca na linha do dia-alvo é o
 /// preço médio realizado da venda daquele dia, então uma remarcação não planejada
-/// entraria como informação do futuro na previsão do próprio dia pontuado. Quem monta a
-/// população é responsável por gerar as features com
-/// <c>FeatureConfig.PrecoCongeladoAPartirDe = DateOnly.FromDateTime(DataHora)</c>; o
-/// comparador não tem como conferir isso a partir de um escalar de previsão.
+/// entraria como informação do futuro na previsão do próprio dia pontuado. Por isso
+/// <see cref="ComparisonItem.PrecoCongeladoAPartirDe"/> é <c>required</c> e é validado
+/// contra <see cref="ComparisonItem.DataHora"/>, do mesmo jeito que
+/// <see cref="ComparisonItem.ModeloTreinadoAte"/>: quem monta a população declara ter
+/// gerado as features com <c>FeatureConfig.PrecoCongeladoAPartirDe</c> igual ao corte, e
+/// um valor divergente estoura em vez de passar calado.
+/// </para>
+///
+/// <para>
+/// Isso fecha o buraco de "ninguém confere" — mas continua sendo uma DECLARAÇÃO do
+/// chamador, não uma prova: o comparador recebe um escalar de previsão pronto e não tem
+/// como inspecionar se o <c>FeatureBuilder</c> de fato aplicou o congelamento ao gerar
+/// as features que produziram aquele escalar. Um chamador que declare o corte certo mas
+/// tenha esquecido de passar <c>FeatureConfig.PrecoCongeladoAPartirDe</c> ao
+/// <c>FeatureBuilder</c> continua indetectável a partir daqui.
 /// </para>
 /// </summary>
 public sealed class ForecastVsErpComparer(ComparisonOptions? options = null)
@@ -140,6 +152,15 @@ public sealed class ForecastVsErpComparer(ComparisonOptions? options = null)
                 $"{item.ModeloTreinadoAte:yyyy-MM-dd}, que não é anterior à DataHora da sugestão " +
                 $"({corte:yyyy-MM-dd}). Um modelo ajustado sobre o período avaliado não é um " +
                 "concorrente do ERP, é um oráculo.",
+                ParamPopulacao);
+
+        if (item.PrecoCongeladoAPartirDe != corte)
+            throw new ArgumentException(
+                $"Declaração de congelamento de preço inválida: o par (sugestão {item.SugestaoId}, " +
+                $"loja {item.LojaId}, sku {item.Sku}) declara PrecoCongeladoAPartirDe = " +
+                $"{item.PrecoCongeladoAPartirDe:yyyy-MM-dd}, mas a DataHora da sugestão é " +
+                $"{corte:yyyy-MM-dd}. Sem essa igualdade o preço realizado do próprio dia-alvo " +
+                "pode ter vazado para a previsão do ML.",
                 ParamPopulacao);
 
         if (!double.IsFinite(item.DemandaDiaErp))

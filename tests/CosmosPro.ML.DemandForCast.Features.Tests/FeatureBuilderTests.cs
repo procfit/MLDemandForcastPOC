@@ -193,9 +193,13 @@ public sealed class FeatureBuilderTests
     [Fact]
     public void Preco_congelado_nao_deixa_remarcacao_do_dia_alvo_entrar_na_linha()
     {
-        // Serie a 10,00 ate 04/02 (indice 34) e remarcada para 4,00 dali em diante.
-        // O corte cai em 04/02: nenhum dia-alvo a partir do corte pode carregar o preco
-        // remarcado, porque o desconto so foi conhecido no proprio dia da venda.
+        // Serie em rampa (10, 11, 12...) ate 04/02 (indice 34) e remarcada para 4,00
+        // dali em diante. O corte cai em 04/02: nenhum dia-alvo a partir do corte pode
+        // carregar o preco remarcado, porque o desconto so foi conhecido no proprio dia
+        // da venda. A rampa (em vez de um preco pre-corte fixo) faz a media rolling da
+        // ancora discriminar tambem o COMPRIMENTO da janela: com preco fixo, qualquer
+        // janela pre-corte — certa ou errada — daria a mesma media, e um bug de janela
+        // passaria batido.
         const int diaDoCorte = 34;
         var corte = Origem.AddDays(diaDoCorte);
 
@@ -203,19 +207,24 @@ public sealed class FeatureBuilderTests
         {
             Data = Origem, LojaId = 1, Sku = "SKU1",
             Quantidade = 1m,
-            PrecoUnitario = i >= diaDoCorte ? 4m : 10m,
+            PrecoUnitario = i >= diaDoCorte ? 4m : 10m + i,
         });
 
         var cfg = new FeatureConfig { PrecoCongeladoAPartirDe = corte };
         var fvs = new FeatureBuilder(cfg).BuildSeries(serie).ToList();
 
+        // Ancora esperada, calculada independente do FeatureBuilder: ultimo preco antes
+        // do corte (indice 33) e a media rolling de 28 dias terminando nele (6..33).
+        var precoAncora = 10m + (diaDoCorte - 1);
+        var mediaJanela = Enumerable.Range(diaDoCorte - 28, 28).Select(i => 10m + i).Average();
+        var relativoAncora = precoAncora / mediaJanela;
+
         fvs.Should().NotBeEmpty();
         fvs.Should().OnlyContain(f => f.Data >= corte);
-        fvs.Should().OnlyContain(f => f.PrecoUnitario == 10m,
+        fvs.Should().OnlyContain(f => f.PrecoUnitario == precoAncora,
             "o preco do dia-alvo tem de ser o ultimo conhecido ANTES do corte");
         fvs.Should().NotContain(f => f.PrecoUnitario == 4m);
-        // PrecoRelativoMedia deriva do mesmo preco: 10 / 10 = 1.
-        fvs.Should().OnlyContain(f => f.PrecoRelativoMedia == 1m);
+        fvs.Should().OnlyContain(f => f.PrecoRelativoMedia == relativoAncora);
     }
 
     [Fact]
