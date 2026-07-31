@@ -30,7 +30,6 @@ public sealed class ComparacoesApiClientTests
         public Task<Guid> GetUsuarioIdAtualAsync() => Task.FromResult(Guid.Empty);
         public Task<bool> EhPowerUserAsync() => Task.FromResult(false);
         public Task<bool> PodeAcessarAsync(int id) => Task.FromResult(id == redeId);
-        public Task SelecionarRedeAsync(int id) => Task.CompletedTask;
     }
 
     private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)

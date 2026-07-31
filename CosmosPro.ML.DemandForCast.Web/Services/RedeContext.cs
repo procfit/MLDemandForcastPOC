@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
@@ -8,94 +9,112 @@ namespace CosmosPro.ML.DemandForCast.Web.Services;
 
 /// <summary>
 /// Implementação do escopo de rede. Registrada como <b>scoped</b> — em Blazor Server
-/// isso é por circuito, então a seleção do PowerUser sobrevive à navegação.
+/// isso é <b>por circuito</b>.
 /// <para>
-/// A rede do usuário é lida do banco a cada resolução (com cache no circuito) em vez
-/// de um claim fixo: se o PowerUser mudar a rede de alguém, não queremos que o valor
-/// antigo continue valendo até o próximo login.
+/// A escolha do PowerUser <b>não</b> mora neste objeto: ela é um claim do cookie de
+/// autenticação, gravado por <c>POST /api/auth/rede</c>. Um campo aqui morria junto com
+/// o circuito, e trocar de rede exige justamente recarregar a página para as consultas
+/// serem refeitas no novo escopo — a escolha era gravada e destruída na linha seguinte.
+/// </para>
+/// <para>
+/// A rede do usuário operacional é lida do banco a cada resolução (com cache no
+/// circuito) em vez de um claim fixo: se o PowerUser mudar a rede de alguém, não
+/// queremos que o valor antigo continue valendo até o próximo login. Pela mesma razão o
+/// claim de escolha é reconferido contra o banco antes de virar escopo.
 /// </para>
 /// </summary>
 internal sealed class RedeContext(
     AuthenticationStateProvider authProvider,
     IServiceScopeFactory scopeFactory) : IRedeContext
 {
-    private int? _redeSelecionadaPowerUser;
-    private (bool Resolvido, bool EhPower, int? RedeDoUsuario, Guid? UsuarioId) _cache;
+    /// <summary>
+    /// Claim que carrega a rede escolhida pelo PowerUser dentro do cookie de
+    /// autenticação. Nome curto porque todo claim engorda o cookie de cada requisição.
+    /// </summary>
+    internal const string ClaimRedeSelecionada = "rede_sel";
+
+    private int? _redeDoPowerUser;
+    private Resolucao? _resolucao;
 
     public async Task<int> GetRedeIdAtualAsync()
     {
-        var (ehPower, redeDoUsuario) = await ResolverAsync();
+        var resolucao = await ResolverAsync();
 
-        if (!ehPower)
+        if (!resolucao.EhPower)
         {
-            return redeDoUsuario
+            return resolucao.RedeDoUsuario
                 ?? throw new InvalidOperationException(
                     "Usuário sem rede associada. Um usuário operacional precisa estar " +
                     "vinculado a uma rede — peça ao administrador para corrigir o cadastro.");
         }
 
-        if (_redeSelecionadaPowerUser is { } escolhida)
+        if (_redeDoPowerUser is { } jaResolvida)
         {
+            return jaResolvida;
+        }
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<EngineDbContext>();
+
+        // O claim vive enquanto o cookie viver (8h); reconferir é o que impede uma rede
+        // desativada nesse intervalo de continuar sendo o escopo ativo.
+        if (resolucao.RedeNoClaim is { } escolhida
+            && await PodeAtivarAsync(db, resolucao.Principal, escolhida))
+        {
+            _redeDoPowerUser = escolhida;
             return escolhida;
         }
 
-        // PowerUser sem seleção: cai na primeira rede ativa, para a UI ter algo a
+        // PowerUser sem escolha válida: cai na primeira rede ativa, para a UI ter algo a
         // mostrar no primeiro acesso.
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<EngineDbContext>();
         var primeira = await db.Redes.AsNoTracking()
             .Where(r => r.Ativo)
             .OrderBy(r => r.Id)
             .Select(r => (int?)r.Id)
             .FirstOrDefaultAsync();
 
-        _redeSelecionadaPowerUser = primeira
+        _redeDoPowerUser = primeira
             ?? throw new InvalidOperationException(
                 "Não existe nenhuma rede ativa cadastrada. Cadastre uma em /admin/redes.");
 
-        return _redeSelecionadaPowerUser.Value;
+        return _redeDoPowerUser.Value;
     }
 
-    public async Task<Guid> GetUsuarioIdAtualAsync()
-    {
-        await ResolverAsync();
-        return _cache.UsuarioId
-            ?? throw new InvalidOperationException("Nenhum usuário autenticado no contexto.");
-    }
+    public async Task<Guid> GetUsuarioIdAtualAsync() =>
+        (await ResolverAsync()).UsuarioId
+        ?? throw new InvalidOperationException("Nenhum usuário autenticado no contexto.");
 
     public async Task<bool> EhPowerUserAsync() => (await ResolverAsync()).EhPower;
 
     public async Task<bool> PodeAcessarAsync(int redeId)
     {
-        var (ehPower, redeDoUsuario) = await ResolverAsync();
-        return ehPower || redeDoUsuario == redeId;
+        var resolucao = await ResolverAsync();
+        return resolucao.EhPower || resolucao.RedeDoUsuario == redeId;
     }
 
-    public async Task SelecionarRedeAsync(int redeId)
+    /// <summary>
+    /// Se <paramref name="redeId"/> pode se tornar o escopo ativo de
+    /// <paramref name="usuario"/>.
+    /// <para>
+    /// Autoridade <b>única</b> da regra: quem grava o claim (o endpoint de troca) e quem
+    /// o lê de volta passam por aqui, para nenhum dos dois aceitar o que o outro recusa.
+    /// Usuário sem o papel <c>PowerUser</c> nunca passa — o escopo dele vem do cadastro,
+    /// e honrar uma escolha aqui seria a escalada entre inquilinos que F11 fecha.
+    /// </para>
+    /// </summary>
+    internal static async Task<bool> PodeAtivarAsync(
+        EngineDbContext db,
+        ClaimsPrincipal usuario,
+        int redeId,
+        CancellationToken ct = default) =>
+        usuario.IsInRole(Papeis.PowerUser)
+        && await db.Redes.AsNoTracking().AnyAsync(r => r.Id == redeId && r.Ativo, ct);
+
+    private async Task<Resolucao> ResolverAsync()
     {
-        if (!await EhPowerUserAsync())
+        if (_resolucao is { } cache)
         {
-            // Não lança: a UI não oferece o seletor para usuário de rede, e se algo
-            // chamar por engano o escopo dele não deve mudar em silêncio nem quebrar.
-            return;
-        }
-
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<EngineDbContext>();
-        var existe = await db.Redes.AsNoTracking().AnyAsync(r => r.Id == redeId && r.Ativo);
-        if (!existe)
-        {
-            throw new InvalidOperationException($"Rede {redeId} não existe ou está inativa.");
-        }
-
-        _redeSelecionadaPowerUser = redeId;
-    }
-
-    private async Task<(bool EhPower, int? RedeDoUsuario)> ResolverAsync()
-    {
-        if (_cache.Resolvido)
-        {
-            return (_cache.EhPower, _cache.RedeDoUsuario);
+            return cache;
         }
 
         var state = await authProvider.GetAuthenticationStateAsync();
@@ -126,7 +145,22 @@ internal sealed class RedeContext(
                 .FirstOrDefaultAsync();
         }
 
-        _cache = (true, ehPower, rede, usuarioId);
-        return (ehPower, rede);
+        int? redeNoClaim = null;
+        if (ehPower
+            && int.TryParse(principal.FindFirstValue(ClaimRedeSelecionada),
+                            CultureInfo.InvariantCulture, out var doClaim))
+        {
+            redeNoClaim = doClaim;
+        }
+
+        _resolucao = new Resolucao(ehPower, rede, usuarioId, redeNoClaim, principal);
+        return _resolucao;
     }
+
+    private sealed record Resolucao(
+        bool EhPower,
+        int? RedeDoUsuario,
+        Guid? UsuarioId,
+        int? RedeNoClaim,
+        ClaimsPrincipal Principal);
 }

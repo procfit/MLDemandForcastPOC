@@ -3,9 +3,15 @@ namespace CosmosPro.ML.DemandForCast.Web.Services;
 /// <summary>
 /// Resolve em qual rede a operação atua.
 /// <para>
-/// Para <c>UsuarioRede</c> vem do claim e é imutável na sessão. Para
-/// <c>PowerUser</c> vem de seleção explícita, o que é legítimo porque ele é
+/// Para <c>UsuarioRede</c> vem do cadastro e é imutável na sessão. Para
+/// <c>PowerUser</c> vem de escolha explícita, o que é legítimo porque ele é
 /// autorizado em todas as redes.
+/// </para>
+/// <para>
+/// A escolha do PowerUser é gravada em <b>claim do cookie de autenticação</b> por
+/// <c>POST /api/auth/rede</c>, não por método desta abstração: em Blazor Server ela é
+/// <c>scoped</c> (por circuito), e trocar de rede exige recarregar a página — um campo
+/// no serviço seria destruído junto com o circuito que o guardava.
 /// </para>
 /// <para>
 /// <b>Nenhum caminho lê rede de rota, query string ou campo de formulário.</b> Era
@@ -33,10 +39,4 @@ public interface IRedeContext
 
     /// <summary>Se o usuário corrente pode operar sobre a rede informada.</summary>
     Task<bool> PodeAcessarAsync(int redeId);
-
-    /// <summary>
-    /// Troca a rede ativa. Só tem efeito para PowerUser; para usuário de rede é
-    /// no-op, porque o escopo dele vem do claim.
-    /// </summary>
-    Task SelecionarRedeAsync(int redeId);
 }

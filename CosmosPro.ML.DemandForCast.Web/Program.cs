@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Claims;
 
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
@@ -47,6 +48,24 @@ builder.Services.ConfigureApplicationCookie(o =>
     o.AccessDeniedPath = "/acesso-negado";
     o.ExpireTimeSpan = TimeSpan.FromHours(8);
     o.SlidingExpiration = true;
+});
+
+// O SecurityStampValidator revalida o cookie a cada 30 min e, ao revalidar, recria o
+// principal a partir do banco — o que descartaria a rede escolhida pelo PowerUser no meio
+// da sessão, sem erro nenhum e sem que a barra parecesse errada até a próxima consulta.
+// Este gancho carrega o claim de escolha para o principal novo.
+builder.Services.Configure<SecurityStampValidatorOptions>(o =>
+{
+    o.OnRefreshingPrincipal = contexto =>
+    {
+        var escolha = contexto.CurrentPrincipal?.FindFirst(RedeContext.ClaimRedeSelecionada);
+        if (escolha is not null && contexto.NewPrincipal?.Identity is ClaimsIdentity identidade)
+        {
+            identidade.AddClaim(new Claim(escolha.Type, escolha.Value));
+        }
+
+        return Task.CompletedTask;
+    };
 });
 
 // Faz o AuthenticationState fluir para os componentes (AuthorizeView/AuthorizeRouteView).

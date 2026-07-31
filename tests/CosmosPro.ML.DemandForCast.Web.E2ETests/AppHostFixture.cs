@@ -113,6 +113,94 @@ public sealed class AppHostFixture : IAsyncLifetime
     }
 
     /// <summary>
+    /// Garante uma rede ativa com o <paramref name="slug"/> informado e devolve o id dela.
+    ///
+    /// <para>
+    /// Existe para o cenário de <b>troca de rede</b>, que precisa de dois inquilinos com dado
+    /// distinguível. Os ids são atribuídos pela identidade da tabela, então nenhum deles
+    /// concorre com a rede demo (id 1) pelo papel de "primeira rede ativa por id" — é ela que
+    /// os outros semeadores daqui usam, e é para ela que o PowerUser cai sem escolha.
+    /// </para>
+    ///
+    /// <para>
+    /// Reativa em vez de recriar: o banco <c>engine</c> é persistente e o slug é único, então
+    /// reexecutar o teste tem de reencontrar a mesma rede em lugar de estourar na constraint.
+    /// </para>
+    /// </summary>
+    public async Task<int> GarantirRedeAtivaAsync(
+        string slug, string nome, CancellationToken ct = default)
+    {
+        var connectionString = await App.GetConnectionStringAsync("engine", ct)
+            ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            IF NOT EXISTS (SELECT 1 FROM dbo.Redes WHERE Slug = @slug)
+                INSERT INTO dbo.Redes (Nome, Slug, Ativo, CriadoEm)
+                VALUES (@nome, @slug, 1, @agora);
+            ELSE
+                UPDATE dbo.Redes SET Nome = @nome, Ativo = 1 WHERE Slug = @slug;
+
+            SELECT Id FROM dbo.Redes WHERE Slug = @slug;
+            """;
+        cmd.Parameters.AddWithValue("@slug", slug);
+        cmd.Parameters.AddWithValue("@nome", nome);
+        cmd.Parameters.AddWithValue("@agora", DateTimeOffset.UtcNow);
+
+        return (int?)await cmd.ExecuteScalarAsync(ct)
+            ?? throw new InvalidOperationException($"Rede '{slug}' não foi criada.");
+    }
+
+    /// <summary>
+    /// Semeia uma sessão de comparação <c>Concluida</c> numa rede <b>escolhida</b>, sem
+    /// resultado nem detalhe por item.
+    ///
+    /// <para>
+    /// Serve à listagem de <c>/</c>, que projeta apenas o cabeçalho de cada sessão (a
+    /// projeção com <c>ResultadoJson</c> é a do detalhe). Para o cenário de troca de rede o que
+    /// precisa existir é uma linha com nome reconhecível em cada inquilino — encher o
+    /// resultado só somaria ruído. <c>Concluida</c> é terminal, então a linha não é reclamada
+    /// por worker nenhum nem conta como sessão viva no bloqueio por rede.
+    /// </para>
+    /// </summary>
+    public async Task<Guid> SemearSessaoNaRedeAsync(
+        string nome, int redeId, CancellationToken ct = default)
+    {
+        var connectionString = await App.GetConnectionStringAsync("engine", ct)
+            ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+
+        await using (var limpeza = conn.CreateCommand())
+        {
+            limpeza.CommandText = "DELETE FROM dbo.ComparacaoSessoes WHERE Nome = @nome;";
+            limpeza.Parameters.AddWithValue("@nome", nome);
+            await limpeza.ExecuteNonQueryAsync(ct);
+        }
+
+        var id = Guid.CreateVersion7();
+        await using (var insert = conn.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO dbo.ComparacaoSessoes (Id, RedeId, Nome, Status, CriadoEm, AtualizadoEm)
+                VALUES (@id, @redeId, @nome, 'Concluida', @agora, @agora);
+                """;
+            var agora = DateTimeOffset.UtcNow;
+            insert.Parameters.AddWithValue("@id", id);
+            insert.Parameters.AddWithValue("@redeId", redeId);
+            insert.Parameters.AddWithValue("@nome", nome);
+            insert.Parameters.AddWithValue("@agora", agora);
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+
+        return id;
+    }
+
+    /// <summary>
     /// Semeia uma execução de comparação já concluída, com <paramref name="resultadoJson"/>
     /// pronto, na rede que a página vai enxergar.
     ///

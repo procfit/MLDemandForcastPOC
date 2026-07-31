@@ -54,8 +54,13 @@ public sealed class RedeContextTests
         (await ctx.PodeAcessarAsync(OutraRede)).Should().BeFalse();
     }
 
+    /// <summary>
+    /// O claim de escolha é a única coisa que separa o PowerUser da primeira rede ativa.
+    /// Se um usuário operacional puder forjá-lo (cookie roubado, POST montado à mão), ele
+    /// sai do próprio inquilino — é o vazamento que F11 existe para fechar.
+    /// </summary>
     [Fact]
-    public async Task Selecionar_rede_e_ignorado_para_usuario_de_rede()
+    public async Task Claim_de_escolha_e_ignorado_para_usuario_de_rede()
     {
         var userId = Guid.CreateVersion7();
         await using var sp = Construir(seed: async db =>
@@ -66,8 +71,7 @@ public sealed class RedeContextTests
             await db.SaveChangesAsync();
         });
 
-        var ctx = Criar(sp, userId, ehPowerUser: false);
-        await ctx.SelecionarRedeAsync(OutraRede);
+        var ctx = Criar(sp, userId, ehPowerUser: false, redeNoClaim: OutraRede);
 
         (await ctx.GetRedeIdAtualAsync()).Should().Be(RedeDoUsuario,
             "o escopo de um usuário operacional vem do cadastro, não de escolha na tela");
@@ -92,7 +96,7 @@ public sealed class RedeContextTests
     }
 
     [Fact]
-    public async Task PowerUser_acessa_qualquer_rede_e_pode_trocar()
+    public async Task PowerUser_sem_escolha_cai_na_primeira_rede_ativa()
     {
         var userId = Guid.CreateVersion7();
         await using var sp = Construir(seed: async db =>
@@ -107,16 +111,38 @@ public sealed class RedeContextTests
 
         (await ctx.EhPowerUserAsync()).Should().BeTrue();
         (await ctx.PodeAcessarAsync(OutraRede)).Should().BeTrue();
-
-        // Sem seleção explícita cai na primeira rede ativa.
         (await ctx.GetRedeIdAtualAsync()).Should().Be(RedeDoUsuario);
-
-        await ctx.SelecionarRedeAsync(OutraRede);
-        (await ctx.GetRedeIdAtualAsync()).Should().Be(OutraRede);
     }
 
+    /// <summary>
+    /// A regressão que motivou o claim: a escolha do PowerUser tinha de sobreviver ao
+    /// recarregamento que a própria troca dispara, e um campo neste objeto (scoped = por
+    /// circuito) morria junto com o circuito.
+    /// </summary>
     [Fact]
-    public async Task PowerUser_nao_pode_selecionar_rede_inativa()
+    public async Task PowerUser_recebe_a_rede_gravada_no_claim_de_escolha()
+    {
+        var userId = Guid.CreateVersion7();
+        await using var sp = Construir(seed: async db =>
+        {
+            db.Redes.Add(new Rede { Id = RedeDoUsuario, Nome = "A", Slug = "a", Ativo = true });
+            db.Redes.Add(new Rede { Id = OutraRede, Nome = "B", Slug = "b", Ativo = true });
+            db.Users.Add(NovoUsuario(userId, redeId: null));
+            await db.SaveChangesAsync();
+        });
+
+        var ctx = Criar(sp, userId, ehPowerUser: true, redeNoClaim: OutraRede);
+
+        (await ctx.GetRedeIdAtualAsync()).Should().Be(OutraRede,
+            "a escolha vive no cookie e vale para todo circuito criado depois dela");
+    }
+
+    /// <summary>
+    /// O claim vive até 8h; a rede pode ser desativada nesse intervalo. Confiar nele sem
+    /// reconferir deixaria o escopo ativo apontando para uma rede que a UI recusa.
+    /// </summary>
+    [Fact]
+    public async Task Claim_apontando_para_rede_inativa_cai_na_primeira_ativa()
     {
         var userId = Guid.CreateVersion7();
         await using var sp = Construir(seed: async db =>
@@ -127,10 +153,50 @@ public sealed class RedeContextTests
             await db.SaveChangesAsync();
         });
 
-        var ctx = Criar(sp, userId, ehPowerUser: true);
+        var ctx = Criar(sp, userId, ehPowerUser: true, redeNoClaim: OutraRede);
 
-        var act = async () => await ctx.SelecionarRedeAsync(OutraRede);
-        await act.Should().ThrowAsync<InvalidOperationException>();
+        (await ctx.GetRedeIdAtualAsync()).Should().Be(RedeDoUsuario);
+    }
+
+    [Fact]
+    public async Task PodeAtivarAsync_recusa_quem_nao_e_PowerUser()
+    {
+        var userId = Guid.CreateVersion7();
+        await using var sp = Construir(seed: async db =>
+        {
+            db.Redes.Add(new Rede { Id = OutraRede, Nome = "B", Slug = "b", Ativo = true });
+            db.Users.Add(NovoUsuario(userId, RedeDoUsuario));
+            await db.SaveChangesAsync();
+        });
+
+        using var escopo = sp.CreateScope();
+        var db = escopo.ServiceProvider.GetRequiredService<EngineDbContext>();
+
+        (await RedeContext.PodeAtivarAsync(db, Principal(userId, ehPowerUser: false), OutraRede,
+            TestContext.Current.CancellationToken))
+            .Should().BeFalse("o endpoint de troca não pode ativar rede para usuário operacional");
+    }
+
+    [Fact]
+    public async Task PodeAtivarAsync_recusa_rede_inativa_ou_inexistente()
+    {
+        var userId = Guid.CreateVersion7();
+        await using var sp = Construir(seed: async db =>
+        {
+            db.Redes.Add(new Rede { Id = RedeDoUsuario, Nome = "A", Slug = "a", Ativo = true });
+            db.Redes.Add(new Rede { Id = OutraRede, Nome = "B", Slug = "b", Ativo = false });
+            db.Users.Add(NovoUsuario(userId, redeId: null));
+            await db.SaveChangesAsync();
+        });
+
+        using var escopo = sp.CreateScope();
+        var db = escopo.ServiceProvider.GetRequiredService<EngineDbContext>();
+        var power = Principal(userId, ehPowerUser: true);
+        var ct = TestContext.Current.CancellationToken;
+
+        (await RedeContext.PodeAtivarAsync(db, power, RedeDoUsuario, ct)).Should().BeTrue();
+        (await RedeContext.PodeAtivarAsync(db, power, OutraRede, ct)).Should().BeFalse("rede inativa");
+        (await RedeContext.PodeAtivarAsync(db, power, 12345, ct)).Should().BeFalse("rede inexistente");
     }
 
     [Fact]
@@ -172,7 +238,12 @@ public sealed class RedeContextTests
         return sp;
     }
 
-    private static RedeContext Criar(IServiceProvider sp, Guid userId, bool ehPowerUser)
+    private static RedeContext Criar(
+        IServiceProvider sp, Guid userId, bool ehPowerUser, int? redeNoClaim = null) =>
+        new(new AuthProviderFalso(Principal(userId, ehPowerUser, redeNoClaim)),
+            sp.GetRequiredService<IServiceScopeFactory>());
+
+    private static ClaimsPrincipal Principal(Guid userId, bool ehPowerUser, int? redeNoClaim = null)
     {
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId.ToString()) };
         if (ehPowerUser)
@@ -180,9 +251,12 @@ public sealed class RedeContextTests
             claims.Add(new Claim(ClaimTypes.Role, Papeis.PowerUser));
         }
 
-        var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, "test", ClaimTypes.Name, ClaimTypes.Role));
-        return new RedeContext(new AuthProviderFalso(principal),
-                               sp.GetRequiredService<IServiceScopeFactory>());
+        if (redeNoClaim is { } rede)
+        {
+            claims.Add(new Claim(RedeContext.ClaimRedeSelecionada, rede.ToString()));
+        }
+
+        return new ClaimsPrincipal(new ClaimsIdentity(claims, "test", ClaimTypes.Name, ClaimTypes.Role));
     }
 
     private sealed class AuthProviderFalso(ClaimsPrincipal principal) : AuthenticationStateProvider

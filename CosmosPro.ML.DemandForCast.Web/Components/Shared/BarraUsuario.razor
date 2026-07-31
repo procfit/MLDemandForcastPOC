@@ -1,4 +1,3 @@
-@rendermode InteractiveServer
 @inject IRedeContext RedeCtx
 @inject IServiceScopeFactory Escopos
 @inject NavigationManager Nav
@@ -8,15 +7,26 @@
         <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
 
             @* Seletor só para PowerUser: ele é autorizado em todas as redes, então
-               escolher é legítimo. Para usuário de rede o escopo vem do claim e a
-               rede aparece apenas como rótulo. *@
+               escolher é legítimo. Para usuário de rede o escopo vem do cadastro e a
+               rede aparece apenas como rótulo.
+
+               Form post, e não handler interativo: a escolha é gravada como claim no
+               cookie, o que exige escrever na resposta HTTP. Gravar num campo do
+               RedeContext (scoped = por circuito) e recarregar em seguida destruía a
+               escolha junto com o circuito. *@
             @if (_ehPowerUser && _redes.Count > 0)
             {
                 <RadzenIcon Icon="store" />
-                <RadzenDropDown TValue="int" Value="@_redeAtual" Data="@_redes"
-                                TextProperty="Nome" ValueProperty="Id"
-                                Change="@(async v => await TrocarRedeAsync((int)v))"
-                                Style="min-width: 14rem" />
+                <form method="post" action="/api/auth/rede" style="margin: 0">
+                    <input type="hidden" name="retorno" value="@_retorno" />
+                    <select name="redeId" class="barra-rede" aria-label="Rede ativa"
+                            onchange="this.form.submit()">
+                        @foreach (var rede in _redes)
+                        {
+                            <option value="@rede.Id" selected="@(rede.Id == _redeAtual)">@rede.Nome</option>
+                        }
+                    </select>
+                </form>
             }
             else if (_nomeRede is not null)
             {
@@ -41,14 +51,30 @@
     </Authorized>
 </AuthorizeView>
 
+<style>
+    .barra-rede {
+        min-width: 14rem;
+        font: inherit;
+        color: var(--rz-text-color);
+        background-color: var(--rz-input-background-color, transparent);
+        border: var(--rz-input-border, 1px solid var(--rz-border-color, currentColor));
+        border-radius: var(--rz-input-border-radius, 4px);
+        padding: 0.375rem 0.5rem;
+    }
+</style>
+
 @code {
     private bool _ehPowerUser;
     private List<Rede> _redes = [];
     private int _redeAtual;
     private string? _nomeRede;
+    private string _retorno = "/";
 
     protected override async Task OnInitializedAsync()
     {
+        // A troca volta para a página corrente, como o reload que ela substituiu fazia.
+        _retorno = "/" + Nav.ToBaseRelativePath(Nav.Uri);
+
         try
         {
             _ehPowerUser = await RedeCtx.EhPowerUserAsync();
@@ -73,13 +99,5 @@
             // ativa cadastrada). A barra apenas não mostra o escopo; as páginas de
             // dados exibem o erro real quando tentarem carregar.
         }
-    }
-
-    private async Task TrocarRedeAsync(int redeId)
-    {
-        await RedeCtx.SelecionarRedeAsync(redeId);
-        _redeAtual = redeId;
-        // Recarrega para as páginas refazerem as consultas no novo escopo.
-        Nav.NavigateTo(Nav.Uri, forceLoad: true);
     }
 }
