@@ -25,6 +25,21 @@ internal sealed class SessaoWorker(
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Quantas vezes a materialização do resultado pode falhar antes de a sessão ir para
+    /// <c>Falha</c>. Ver <see cref="ConcluirAsync"/>.
+    /// </summary>
+    private const int TentativasDeMaterializacao = 3;
+
+    /// <summary>
+    /// Falhas de materialização já contadas por sessão. Estado em memória de propósito: o que
+    /// ele protege é a janela de segundos de um timeout de bulk ou de uma queda de conexão, e
+    /// um processo que reinicia no meio disso deixa a sessão em <c>Comparando</c> — de onde a
+    /// volta seguinte a retoma normalmente, com o contador zerado. Persistir isso pediria
+    /// coluna nova para tornar a retentativa <b>mais</b> curta, não mais segura.
+    /// </summary>
+    private readonly Dictionary<Guid, int> _falhasDeMaterializacao = [];
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("SessaoWorker iniciado. Poll interval: {Interval}s.", PollInterval.TotalSeconds);
@@ -193,10 +208,31 @@ internal sealed class SessaoWorker(
     /// </para>
     ///
     /// <para>
-    /// Falha na materialização encerra a sessão em <c>Falha</c>, e não em <c>Concluida</c>
-    /// sem resultado: uma sessão concluída com tela vazia manda o comprador procurar um
-    /// número que nunca foi gravado. Mesma política do <see cref="Comparison.ComparacaoWorker"/>
-    /// para o job dele.
+    /// <b>Falha aqui é retentada antes de matar a sessão</b>, ao contrário das demais fases.
+    /// A comparação em si <b>deu certo</b> — o job está <c>Concluido</c> e o resultado dele
+    /// está gravado —, e o que falhou foi a escrita de dezenas de milhares de linhas: timeout
+    /// de bulk e queda de conexão são muito mais prováveis nesta chamada do que nas gravações
+    /// de uma linha das outras fases. Encerrar em <c>Falha</c> na primeira delas obrigaria o
+    /// comprador a subir o ZIP de novo e a esperar treino e comparação outra vez por um
+    /// tropeço de segundos.
+    /// </para>
+    ///
+    /// <para>
+    /// A retentativa é segura sem nenhuma limpeza porque a sessão continua em
+    /// <c>Comparando</c>: a gravação de <c>Concluida</c> mora dentro da mesma transação das
+    /// linhas (ver <see cref="SessaoResultadoMaterializador"/>), então uma materialização que
+    /// falhou não deixou linha nem status atrás de si, e o <c>DELETE</c> que abre a transação
+    /// cobre o caso de ela ter falhado depois do <c>SqlBulkCopy</c>. Devolver <c>false</c>
+    /// deixa a volta seguinte do loop reclamar a mesma sessão de novo.
+    /// </para>
+    ///
+    /// <para>
+    /// O limite de <see cref="TentativasDeMaterializacao"/> existe porque nada mais pararia
+    /// uma falha permanente: um resultado de comparação ilegível ou uma rede trocada falham
+    /// igual em toda tentativa, e a fase não tem o relógio de <see cref="SessaoJobs.FaseAbandonada"/>
+    /// para intervir (o job desta fase já está concluído). Esgotado o limite, a sessão vai
+    /// para <c>Falha</c> com mensagem de comprador — e não para <c>Concluida</c> sem
+    /// resultado, que mandaria o comprador procurar um número que nunca foi gravado.
     /// </para>
     /// </summary>
     private async Task<bool> ConcluirAsync(
@@ -206,7 +242,9 @@ internal sealed class SessaoWorker(
 
         try
         {
-            return await materializador.MaterializarAsync(sessao, ct);
+            var materializou = await materializador.MaterializarAsync(sessao, ct);
+            _falhasDeMaterializacao.Remove(sessao.Id);
+            return materializou;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -214,7 +252,26 @@ internal sealed class SessaoWorker(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Sessão {SessaoId}: falha ao materializar o resultado.", sessao.Id);
+            var tentativa = _falhasDeMaterializacao[sessao.Id] =
+                _falhasDeMaterializacao.GetValueOrDefault(sessao.Id) + 1;
+
+            if (tentativa < TentativasDeMaterializacao)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Sessão {SessaoId}: falha ao materializar o resultado (tentativa {Tentativa} de {Limite}). " +
+                    "A comparação continua válida e a sessão segue em {Status}; será retomada na próxima volta.",
+                    sessao.Id, tentativa, TentativasDeMaterializacao, sessao.Status);
+
+                return false;
+            }
+
+            logger.LogError(
+                ex,
+                "Sessão {SessaoId}: falha ao materializar o resultado em {Limite} tentativas; encerrando em Falha.",
+                sessao.Id, TentativasDeMaterializacao);
+
+            _falhasDeMaterializacao.Remove(sessao.Id);
 
             return await GravarStatusAsync(
                 db, sessao, SessaoStatus.Falha,

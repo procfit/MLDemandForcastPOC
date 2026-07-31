@@ -408,10 +408,10 @@ internal sealed class SessaoResultadoMaterializador(
     }
 
     /// <summary>
-    /// <c>DataTable</c> do <c>SqlBulkCopy</c>. As colunas do braço de ML são anuláveis e
-    /// recebem <c>DBNull</c> quando ausentes: o default do <c>DataTable</c> para decimal é
-    /// zero, e deixá-lo passar gravaria "o ML mandaria comprar nada" onde ninguém calculou
-    /// nada.
+    /// <c>DataTable</c> do <c>SqlBulkCopy</c>. As colunas anuláveis recebem <c>DBNull</c>
+    /// quando ausentes: o default do <c>DataTable</c> para decimal é zero, e deixá-lo passar
+    /// gravaria "o ML mandaria comprar nada" onde ninguém calculou nada — ou "esta compra não
+    /// deixou capital parado" onde o item não tem preço cadastrado.
     /// </summary>
     private static DataTable MontarTabela(IReadOnlyList<ComparacaoSessaoItem> itens)
     {
@@ -431,6 +431,7 @@ internal sealed class SessaoResultadoMaterializador(
         tabela.Columns.Add("SobraMlUnidades", typeof(decimal));
         tabela.Columns.Add("SobraPbsValor", typeof(decimal));
         tabela.Columns.Add("SobraMlValor", typeof(decimal));
+        tabela.Columns.Add("JanelaAlemDoHistorico", typeof(bool));
 
         foreach (var item in itens)
         {
@@ -448,8 +449,9 @@ internal sealed class SessaoResultadoMaterializador(
                 item.DemandaDiaReal ?? (object)DBNull.Value,
                 item.SobraPbsUnidades,
                 item.SobraMlUnidades ?? (object)DBNull.Value,
-                item.SobraPbsValor,
-                item.SobraMlValor ?? (object)DBNull.Value);
+                item.SobraPbsValor ?? (object)DBNull.Value,
+                item.SobraMlValor ?? (object)DBNull.Value,
+                item.JanelaAlemDoHistorico);
         }
 
         return tabela;

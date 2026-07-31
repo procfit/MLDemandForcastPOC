@@ -263,6 +263,75 @@ public sealed class SessaoResultadoMontadorTests
     }
 
     /// <summary>
+    /// Cobertura além do histórico marca a <b>linha</b>, e não só o agregado: é o comprador
+    /// que ordena e pagina esta tabela conferindo item a item, e uma linha com a janela
+    /// truncada não é comparável com uma linha inteira. A marcação também não pode ser
+    /// acrescentada depois — <c>DiasEstoque</c> e a última venda importada morrem no próximo
+    /// import.
+    /// </summary>
+    [Fact]
+    public void Janela_alem_do_historico_marca_a_linha_e_nao_so_a_manchete()
+    {
+        var materializacao = Montar(populacao:
+        [
+            Linha(vendido: 40m),
+            Linha(sku: SkuB, vendido: 3m, alemDoHistorico: true),
+        ]);
+
+        materializacao.Itens.Single(i => i.Sku == Sku).JanelaAlemDoHistorico.Should().BeFalse(
+            "a cobertura deste item termina dentro do histórico importado");
+        materializacao.Itens.Single(i => i.Sku == SkuB).JanelaAlemDoHistorico.Should().BeTrue(
+            "sem a marca na linha, quem lê a tabela não distingue a venda subcontada da completa");
+    }
+
+    /// <summary>
+    /// Item sem <c>PrecoCompra</c> entra nos agregados em R$ com zero, e é isso que puxa a
+    /// manchete para baixo. Sem esta contagem a queda é invisível: a tela lidera com um valor
+    /// em reais que parece completo — o mesmo defeito das colunas de ML, uma camada acima.
+    /// </summary>
+    [Fact]
+    public void Itens_sem_preco_de_compra_saem_contados_na_manchete()
+    {
+        var comFalta = Montar(populacao:
+        [
+            Linha(vendido: 40m),
+            Linha(sku: SkuB, vendido: 3m, precoCompra: null),
+        ]);
+
+        comFalta.Resultado.ItensSemPrecoCompra.Should().Be(1,
+            "a manchete em R$ está subestimada e precisa poder dizer por quê");
+        comFalta.Resultado.Pbs.SobraValor.Should().Be(17.5m,
+            "o agregado continua somando o item sem preço como zero — é o contador que o qualifica");
+
+        var completa = Montar(populacao: [Linha(vendido: 40m), Linha(sku: SkuB, vendido: 3m)]);
+
+        completa.Resultado.ItensSemPrecoCompra.Should().Be(0,
+            "com todos os itens precificados a figura em reais está inteira");
+    }
+
+    /// <summary>
+    /// Na <b>linha</b> a escolha é a oposta à do agregado: sobra em reais de item sem preço
+    /// sai nula. Zero afirmaria "esta compra não deixou capital parado" sobre o item com 5
+    /// unidades encalhadas — e é por esta coluna que o comprador ordena a tabela para achar o
+    /// pior item, onde os sem preço iriam para o fim da fila como se fossem os melhores.
+    /// </summary>
+    [Fact]
+    public void Sobra_em_reais_do_item_sem_preco_sai_nula_na_linha()
+    {
+        var materializacao = Montar(
+            populacao: [Linha(vendido: 40m, precoCompra: null)],
+            decisao: Decisao(UtilidadeComparacao.Utilizavel, [Par(compraMl: 20m)]));
+
+        var linha = materializacao.Itens.Single();
+
+        linha.SobraPbsUnidades.Should().Be(5m, "as unidades sobraram e são conhecidas");
+        linha.SobraPbsValor.Should().BeNull("o valor delas é desconhecido, não zero");
+        linha.SobraMlValor.Should().BeNull("mesma ausência no braço de ML, que também depende do preço");
+        linha.SobraMlUnidades.Should().Be(0m,
+            "o braço de ML existe nesta linha: a ausência é só do preço, e ela não pode apagar a decisão");
+    }
+
+    /// <summary>
     /// Curva vazia no Stage é ausência de rótulo, não uma curva chamada "". A coluna sai nula
     /// na linha e o agregado a nomeia em português, senão o eixo por curva ganha um grupo sem
     /// nome na tela.
@@ -304,7 +373,8 @@ public sealed class SessaoResultadoMontadorTests
         string curva = "A",
         int diasSemEstoque = 0,
         int diasComSnapshot = 5,
-        bool alemDoHistorico = false)
+        bool alemDoHistorico = false,
+        decimal? precoCompra = 3.5m)
         => new(
             Item: new SugestaoItemStage(
                 SugestaoId: SugestaoId,
@@ -319,7 +389,7 @@ public sealed class SessaoResultadoMontadorTests
                 PedidosPendentes: 5m,
                 CompraSugerida: 30m,
                 CompraAutorizada: 30m,
-                PrecoCompra: 3.5m,
+                PrecoCompra: precoCompra,
                 FatorEmbalagem: null,
                 Falteiro: false),
             NomeProduto: $"Produto {sku}",

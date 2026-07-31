@@ -47,6 +47,9 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
     private const string Slug = "sessao-resultado";
     private const string SlugOutraRede = "sessao-resultado-outra";
 
+    /// <summary>Rede da sessão cuja materialização falha sempre. Não recebe import.</summary>
+    private const string SlugIlegivel = "sessao-resultado-ilegivel";
+
     private const int LojaId = 9821;
     private const string SkuComPrevisao = "RES-A";
     private const string SkuSemPrevisao = "RES-B";
@@ -190,18 +193,34 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
     /// <summary>
     /// Item sem nenhuma venda na cobertura precisa aparecer com zero em vez de desaparecer da
     /// tabela: compra que não vendeu nada é o caso mais interessante da tela. E sem
-    /// <c>PrecoCompra</c> a sobra sai em unidades com zero em reais, a mesma regra dos
-    /// agregados monetários da camada B.
+    /// <c>PrecoCompra</c> a sobra em reais sai <b>nula</b> no banco, não zero: as 20 unidades
+    /// encalharam, e só o valor delas é que é desconhecido.
     /// </summary>
     [Fact]
-    public async Task Item_sem_venda_e_sem_preco_aparece_com_zero_em_vez_de_desaparecer()
+    public async Task Item_sem_venda_e_sem_preco_aparece_sem_valor_em_vez_de_desaparecer()
     {
         var cenario = await CenarioAsync();
         var item = (await ItensAsync(cenario.SessaoId)).Single(i => i.Sku == SkuSemPrevisao);
 
         item.VendidoNaJanela.Should().Be(0m);
         item.SobraPbsUnidades.Should().Be(20m, "20 comprados, nada em estoque, nada vendido");
-        item.SobraPbsValor.Should().Be(0m, "sem preço de compra cadastrado não há valor a afirmar");
+        item.SobraPbsValor.Should().BeNull("sem preço de compra cadastrado não há valor a afirmar");
+    }
+
+    /// <summary>
+    /// A cobertura das duas linhas termina dentro do histórico importado, então a marca por
+    /// linha sai limpa — e é ela, não só o contador da manchete, que permite ao comprador
+    /// saber qual linha da tabela ele pode conferir contra a memória dele.
+    /// </summary>
+    [Fact]
+    public async Task Nenhuma_linha_e_marcada_quando_a_cobertura_cabe_no_historico_importado()
+    {
+        var cenario = await CenarioAsync();
+        var itens = await ItensAsync(cenario.SessaoId);
+
+        itens.Should().OnlyContain(i => !i.JanelaAlemDoHistorico,
+            "a cobertura de 30 dias a partir de 01/07 termina antes do fim das vendas importadas");
+        (await ResultadoAsync(cenario.SessaoId)).ItensComJanelaAlemDoHistorico.Should().Be(0);
     }
 
     /// <summary>
@@ -244,6 +263,8 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
 
         resultado.Pbs.SobraUnidades.Should().Be(75m, "55 do primeiro item mais 20 do segundo");
         resultado.Pbs.SobraValor.Should().Be(192.5m, "só o primeiro item tem preço de compra");
+        resultado.ItensSemPrecoCompra.Should().Be(1,
+            "a figura em R$ acima está subestimada, e sem este número a tela a mostraria como completa");
         resultado.VendidoNaJanelaUnidades.Should().Be(VendidoEsperado);
         resultado.ComparacaoPbsId.Should().Be(cenario.ComparacaoPbsId);
         resultado.RessalvaTreinoServe.Should().NotBeNullOrWhiteSpace(
@@ -318,6 +339,72 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
 
         var depois = await ItensAsync(cenario.SessaoId);
         depois.Should().HaveCount(antes.Count, "a transação recusada não pode deixar linha atrás de si");
+    }
+
+    /// <summary>
+    /// O outro lado da retentativa: a materialização falha <b>sempre</b> (o resultado da
+    /// comparação está ilegível), e o limite de tentativas do <c>SessaoWorker</c> tem de levar
+    /// a sessão a <c>Falha</c> com uma mensagem que diz ao comprador o que fazer — em vez de
+    /// deixá-la sendo repescada para sempre com o comprador olhando um spinner.
+    ///
+    /// <para>
+    /// Este caso não passa pelo Stage: a leitura do resultado da comparação acontece antes, e
+    /// é justamente ela que quebra. Por isso a rede aqui não precisa de import.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Materializacao_que_falha_sempre_termina_em_falha_com_motivo_para_o_comprador()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var redeId = await EnsureRedeAsync("Rede Sessao Resultado Ilegivel", SlugIlegivel);
+        await using var db = await AbrirEngineAsync(ct);
+        var agora = DateTimeOffset.UtcNow;
+
+        var comparacao = new ComparacaoPbs
+        {
+            Id = Guid.CreateVersion7(),
+            RedeId = redeId,
+            Status = ComparacaoPbsStatus.Concluido,
+            DataAgendamento = agora,
+            DataInicioProcessamento = agora,
+            DataConclusao = agora,
+            TreinoJobId = Guid.CreateVersion7(),
+            JanelaInicio = DiaDaSugestao,
+            JanelaFim = DiaDaSugestao,
+            TipoCalculo = TipoCalculo,
+            // JSON truncado: quebra na desserialização a cada tentativa, sem depender de
+            // indisponibilidade de banco — é a falha permanente que o limite existe para parar.
+            ResultadoJson = "{\"geradoEm\":\"2026-07-01T00:00:00+00:00\"",
+        };
+        db.ComparacoesPbs.Add(comparacao);
+
+        var sessaoId = Guid.CreateVersion7();
+        db.ComparacaoSessoes.Add(new ComparacaoSessao
+        {
+            Id = sessaoId,
+            RedeId = redeId,
+            Nome = "Materializacao ilegivel",
+            Status = SessaoStatus.Comparando,
+            CriadoEm = agora,
+            AtualizadoEm = agora,
+            SugestaoId = SugestaoId,
+            SugestaoDataHora = SugestaoDataHora,
+            SugestaoTipoCalculo = TipoCalculo,
+            ComparacaoPbsId = comparacao.Id,
+        });
+
+        await db.SaveChangesAsync(ct);
+
+        var sessao = await AguardarTerminoAsync(sessaoId, redeId);
+
+        sessao.Status.Should().Be("Falha", "a falha é permanente e o limite de tentativas foi esgotado");
+        sessao.MensagemErro.Should().NotBeNullOrWhiteSpace();
+        sessao.MensagemErro.Should().Contain("Envie os dados novamente",
+            "quem lê é comprador de farmácia: a mensagem tem de dizer a próxima ação");
+
+        var itens = await ItensAsync(sessaoId);
+        itens.Should().BeEmpty("nenhuma tentativa pode ter deixado linha atrás de si");
     }
 
     // --- Infra do teste ------------------------------------------------------

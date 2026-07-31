@@ -73,12 +73,37 @@ public sealed class ComparacaoSessaoItem
     /// </summary>
     public decimal? SobraMlUnidades { get; set; }
 
-    public decimal SobraPbsValor { get; set; }
+    /// <summary>
+    /// Sobra do braço do ERP em R$. <b>Nula quando o item não tem <c>PrecoCompra</c>
+    /// cadastrado no Stage</b>, e não zero: as unidades sobraram, só não se sabe quanto
+    /// capital elas representam. Zero afirmaria "esta compra não deixou capital parado" —
+    /// exatamente o oposto — e é a coluna pela qual o comprador ordena a tabela para achar o
+    /// pior item, onde os sem preço migrariam para o fim da lista como se fossem os melhores.
+    /// A manchete continua somando esses itens como zero, e por isso declara quantos são em
+    /// <c>SessaoResultado.ItensSemPrecoCompra</c>.
+    /// </summary>
+    public decimal? SobraPbsValor { get; set; }
 
     /// <summary>
-    /// Sobra do braço de ML em R$. Nula junto com <see cref="SobraMlUnidades"/> — e note
-    /// que zero aqui é valor legítimo e diferente de nulo: item sem <c>PrecoCompra</c>
-    /// cadastrado tem sobra em unidades e zero em reais (<c>SobraCalculator</c>).
+    /// Sobra do braço de ML em R$. Nula quando <see cref="SobraMlUnidades"/> é nula
+    /// (não houve decisão do ML) <b>ou</b> quando o item não tem <c>PrecoCompra</c>, pela
+    /// mesma razão de <see cref="SobraPbsValor"/>. Quem precisa saber se o braço de ML existe
+    /// para a linha olha <see cref="CompraSugeridaMl"/>, que não depende de preço.
     /// </summary>
     public decimal? SobraMlValor { get; set; }
+
+    /// <summary>
+    /// A cobertura desta linha (<c>DiasEstoque</c> dias a partir do dia da sugestão) avança
+    /// além do último dia de venda importado, então <see cref="VendidoNaJanela"/> está
+    /// subcontada e as sobras, infladas — a linha <b>não</b> é comparável com as demais.
+    ///
+    /// <para>
+    /// Gravada por linha, e não só contada no agregado, porque é o único momento em que se
+    /// sabe: o <c>DiasEstoque</c> e a última data de venda vivem no Stage, que o próximo
+    /// import apaga (<c>DELETE ... WHERE RedeId</c>). Sem esta coluna, marcar a linha depois
+    /// exigiria migration <b>e</b> reimportação do mesmo ZIP. Quem renderiza a tabela precisa
+    /// sinalizar a linha, porque o comprador confere item a item contra a memória dele.
+    /// </para>
+    /// </summary>
+    public bool JanelaAlemDoHistorico { get; set; }
 }

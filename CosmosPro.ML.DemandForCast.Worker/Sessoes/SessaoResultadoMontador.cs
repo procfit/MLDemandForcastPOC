@@ -122,7 +122,17 @@ internal sealed record CurvaDaSessao(
 /// <param name="ItensComJanelaAlemDoHistorico">
 /// Itens cuja cobertura avança além do último dia de venda importado. Neles a venda da
 /// janela está subcontada e a sobra, inflada. Zero é o caso normal de um envio gerado pelo
-/// extrator, que monta o período em torno da sugestão.
+/// extrator, que monta o período em torno da sugestão. Cada linha afetada também vem
+/// marcada em <see cref="ComparacaoSessaoItem.JanelaAlemDoHistorico"/>.
+/// </param>
+/// <param name="ItensSemPrecoCompra">
+/// Itens sem <c>PrecoCompra</c> cadastrado no Stage. <b>Eles entram em
+/// <see cref="Pbs"/> e em <see cref="Confronto"/> com unidades e zero em R$</b>, então toda
+/// figura em reais desta manchete está subestimada nessa proporção. Sem este número a
+/// subestimação seria invisível: a tela mostraria "R$ 12.400 sobraram" onde o total real é
+/// bem maior, com a cara de figura completa. Quem renderiza <b>tem</b> de qualificar os
+/// valores em R$ quando isto não é zero — dizendo quantos itens estão de fora e que o
+/// remédio é cadastrar o preço de compra deles no ERP.
 /// </param>
 /// <param name="SkusSemCadastro">
 /// SKUs da sugestão que o extrator não achou no cadastro de produtos do PBS, vindos do
@@ -148,6 +158,7 @@ internal sealed record SessaoResultado(
     UtilidadeComparacao UtilidadeDecisaoMl,
     RupturaObservada Ruptura,
     int ItensComJanelaAlemDoHistorico,
+    int ItensSemPrecoCompra,
     int? SkusSemCadastro,
     IReadOnlyList<CurvaDaSessao> PorCurva,
     string RessalvaTreinoServe);
@@ -190,7 +201,7 @@ internal static class SessaoResultadoMontador
         var pbsComparavel = new Acumulador();
         var mlComparavel = new Acumulador();
         decimal vendidoTotal = 0m;
-        int comDecisaoMl = 0, comPrevisaoMl = 0, alemDoHistorico = 0;
+        int comDecisaoMl = 0, comPrevisaoMl = 0, alemDoHistorico = 0, semPrecoCompra = 0;
         int itensComDiaSemEstoque = 0, diasSemEstoque = 0, diasComSnapshot = 0, diasNaJanela = 0;
 
         foreach (var linha in populacao)
@@ -206,14 +217,17 @@ internal static class SessaoResultadoMontador
                 vendido: linha.VendidoNaJanela,
                 precoCompra: item.PrecoCompra);
 
-            var sobraMl = camadaB is null
-                ? null
-                : SobraCalculator.Calcular(
+            // Os dois valores do braço de ML andam num par nulável só porque eles nascem e
+            // morrem juntos: separá-los em duas variáveis obrigaria a repetir a mesma
+            // condição em cada uso, e foi exatamente essa repetição que divergiu antes.
+            var ml = camadaB is null
+                ? default((decimal Compra, Sobra Sobra)?)
+                : (camadaB.CompraMl, SobraCalculator.Calcular(
                     comprado: camadaB.CompraMl,
                     estoqueInicial: item.EstoqueSaldo,
                     pedidosPendentes: item.PedidosPendentes,
                     vendido: linha.VendidoNaJanela,
-                    precoCompra: item.PrecoCompra);
+                    precoCompra: item.PrecoCompra));
 
             itens.Add(new ComparacaoSessaoItem
             {
@@ -223,15 +237,16 @@ internal static class SessaoResultadoMontador
                 NomeProduto = linha.NomeProduto,
                 Curva = string.IsNullOrWhiteSpace(item.Curva) ? null : item.Curva,
                 CompraSugeridaPbs = item.CompraSugerida,
-                CompraSugeridaMl = camadaB?.CompraMl,
+                CompraSugeridaMl = ml?.Compra,
                 VendidoNaJanela = linha.VendidoNaJanela,
                 DemandaDiaPbs = item.DemandaDia,
                 DemandaDiaMl = camadaA is null ? null : Taxa(camadaA.DemandaDiaMl),
                 DemandaDiaReal = camadaA is null ? null : Taxa(camadaA.DemandaDiaReal),
                 SobraPbsUnidades = sobraPbs.Unidades,
-                SobraMlUnidades = sobraMl?.Unidades,
-                SobraPbsValor = sobraPbs.Valor,
-                SobraMlValor = sobraMl?.Valor,
+                SobraMlUnidades = ml?.Sobra.Unidades,
+                SobraPbsValor = item.PrecoCompra is null ? null : sobraPbs.Valor,
+                SobraMlValor = item.PrecoCompra is null ? null : ml?.Sobra.Valor,
+                JanelaAlemDoHistorico = linha.JanelaAlemDoHistorico,
             });
 
             vendidoTotal += linha.VendidoNaJanela;
@@ -239,12 +254,13 @@ internal static class SessaoResultadoMontador
 
             if (camadaA is not null) comPrevisaoMl++;
             if (linha.JanelaAlemDoHistorico) alemDoHistorico++;
+            if (item.PrecoCompra is null) semPrecoCompra++;
 
-            if (camadaB is not null && sobraMl is not null)
+            if (ml is { } bracoMl)
             {
                 comDecisaoMl++;
                 pbsComparavel.Somar(item.CompraSugerida, item.PrecoCompra, sobraPbs);
-                mlComparavel.Somar(camadaB.CompraMl, item.PrecoCompra, sobraMl);
+                mlComparavel.Somar(bracoMl.Compra, item.PrecoCompra, bracoMl.Sobra);
             }
 
             diasNaJanela += Math.Max(0, (int)item.DiasEstoque);
@@ -258,7 +274,7 @@ internal static class SessaoResultadoMontador
                 acumulador = new AcumuladorDeCurva();
                 porCurva[curva] = acumulador;
             }
-            acumulador.Somar(sobraPbs, temDecisaoMl: camadaB is not null);
+            acumulador.Somar(sobraPbs, temDecisaoMl: ml is not null);
         }
 
         var confronto = comDecisaoMl == 0
@@ -285,6 +301,7 @@ internal static class SessaoResultadoMontador
                 Ruptura: new RupturaObservada(
                     itensComDiaSemEstoque, diasSemEstoque, diasComSnapshot, diasNaJanela),
                 ItensComJanelaAlemDoHistorico: alemDoHistorico,
+                ItensSemPrecoCompra: semPrecoCompra,
                 SkusSemCadastro: skusSemCadastro,
                 PorCurva: porCurva
                     .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
@@ -348,6 +365,14 @@ internal static class SessaoResultadoMontador
     /// <summary>
     /// Valor de compra em R$: <c>PrecoCompra</c> nulo contribui zero, a mesma regra do
     /// <see cref="SobraCalculator"/> e dos agregados monetários da camada B.
+    ///
+    /// <para>
+    /// Nos <b>agregados</b> o zero é mantido de propósito — uma soma nula por causa de um item
+    /// sem preço apagaria a manchete inteira —, e o preço que se paga por isso é a
+    /// subestimação declarada em <see cref="SessaoResultado.ItensSemPrecoCompra"/>. Na
+    /// <b>linha</b> a escolha é a oposta, nulo, porque lá não há nada a preservar: ver
+    /// <see cref="ComparacaoSessaoItem.SobraPbsValor"/>.
+    /// </para>
     /// </summary>
     private static decimal Valor(decimal unidades, decimal? precoCompra) =>
         precoCompra is null ? 0m : Math.Round(unidades * precoCompra.Value, 2, MidpointRounding.AwayFromZero);
