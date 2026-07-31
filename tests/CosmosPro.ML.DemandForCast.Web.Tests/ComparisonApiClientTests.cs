@@ -314,6 +314,17 @@ public sealed class ComparisonApiClientTests
     }
 
     /// <summary>
+    /// Reconciliação ausente barra igual: a página avisa logo acima que sem o portão de
+    /// validade nada abaixo é interpretável, e exibir a tabela desmentiria o próprio aviso.
+    /// </summary>
+    [Fact]
+    public void Camada_B_sem_reconciliacao_nao_tem_numeros_apresentaveis()
+    {
+        CamadaB("Utilizavel").NumerosApresentaveis.Should().BeFalse(
+            "sem portão de validade não dá para afirmar que modelamos a aritmética do ERP");
+    }
+
+    /// <summary>
     /// Sem a lista de itens recusados não há de onde ler o horizonte — a explicação diz que
     /// não sabe, em vez de afirmar um número que ninguém apurou.
     /// </summary>

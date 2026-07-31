@@ -298,8 +298,13 @@ public sealed record CamadaBResultado(
     /// resultado existe e é bem formado, mas mede o nosso desconhecimento da regra do ERP —
     /// e a página afirma isso em texto. Exibir a tabela mesmo assim contradiria o próprio
     /// aviso que ela imprime logo acima.
+    /// <para>
+    /// Reconciliação ausente também barra: sem o portão de validade não há como afirmar que
+    /// modelamos a aritmética do ERP, e "não sei" não pode render mais que "sei que está
+    /// ruim". O Worker sempre a preenche, então isto cobre payload truncado ou de outra versão.
+    /// </para>
     /// </summary>
-    public bool NumerosApresentaveis => EhUtilizavel && Reconciliacao?.AbaixoDoPatamar != true;
+    public bool NumerosApresentaveis => EhUtilizavel && Reconciliacao is { AbaixoDoPatamar: false };
 
     /// <summary>Horizonte declarado do braço ML, lido dos próprios itens recusados.</summary>
     public int? HorizonteMl => ForaDoHorizonteMl is { Count: > 0 } lista ? lista[0].HorizonteMaximoMl : null;

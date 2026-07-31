@@ -640,10 +640,12 @@ internal sealed record ComparacaoOutput(
         "congelado na data da sugestão — obrigatório para não vazar a remarcação do próprio dia pontuado. " +
         "É uma diferença de distribuição entre treino e serviço, e ela só pode prejudicar o braço de ML, " +
         "nunca favorecê-lo: se o ML vencer, o resultado vale apesar dela; se perder por pouco, considere-a " +
-        "antes de concluir que o ERP prevê melhor. A mesma ressalva vale para a classe ABC e para o " +
-        "conjunto de SKUs servidos ao modelo: ambos são recalculados com o corte da sugestão, não com o " +
-        "corte que o treino de fato usou, então quando o treino termina antes da sugestão (o caso normal) " +
-        "o modelo é servido com um rótulo e um orçamento de SKUs de uma janela mais longa do que a que ele " +
-        "aprendeu. Mesma direção do efeito: não infla o ML, só lhe empresta informação um pouco mais " +
-        "recente do que a que ele de fato viu.";
+        "antes de concluir que o ERP prevê melhor. Vale uma segunda ressalva, de outra natureza, para a " +
+        "classe ABC e para o conjunto de SKUs servidos ao modelo: ambos são recalculados com o corte da " +
+        "sugestão, não com o corte que o treino de fato usou, então quando o treino termina antes da " +
+        "sugestão (o caso normal) o modelo recebe rótulo e orçamento de SKUs de uma janela mais longa do " +
+        "que a que aprendeu. Não é vazamento: tudo aí precede a sugestão, ou seja, cabe dentro do mesmo " +
+        "conjunto de informação que o ERP tinha ao calcular. O efeito provável é de ruído — rótulo servido " +
+        "diferente do rótulo treinado tende a piorar a previsão, não a melhorá-la —, mas, ao contrário do " +
+        "congelamento de preço, aqui a direção não é garantida. Reporte-a junto do resultado.";
 }
