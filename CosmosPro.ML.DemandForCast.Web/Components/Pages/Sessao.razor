@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @rendermode InteractiveServer
 @inject ComparacoesApiClient ComparacoesApi
+@inject ExtratorApiClient ExtratorApi
 @inject NotificationService Notifications
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -82,6 +83,27 @@
                         <li>No extrator, escolha a sugestão de compra do PBS que você quer comparar.</li>
                         <li>Volte aqui e envie o arquivo .zip gerado pelo extrator.</li>
                     </ol>
+
+                    @if (_sessao.Status == "AguardandoDados")
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem" Wrap="FlexWrap.Wrap">
+                            <RadzenButton Click="@BaixarExtrator" Icon="download" Text="Baixar extrator"
+                                          ButtonStyle="ButtonStyle.Secondary" Disabled="@_extratorNaoPublicado" />
+                            @if (_extratorVersao is { } versao)
+                            {
+                                <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                    Versão @versao.Versao — checksum SHA-256: @versao.Sha256
+                                </RadzenText>
+                            }
+                            else if (_extratorNaoPublicado)
+                            {
+                                <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                    O extrator ainda não foi publicado. Fale com o suporte técnico.
+                                </RadzenText>
+                            }
+                        </RadzenStack>
+                    }
+
                     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
                         <InputFile id="sessao-zip-input" OnChange="OnFileSelected" accept=".zip"
                                    style="display: none" disabled="@_uploading" />
@@ -197,6 +219,16 @@
 
     private SessaoAnalise? _analise;
 
+    private ExtratorVersaoView? _extratorVersao;
+
+    /// <summary>
+    /// Só verdadeiro quando a apiservice respondeu 404 (bucket/manifesto ausente) — nunca
+    /// numa falha de leitura, que é problema transitório e diferente de "ninguém publicou
+    /// ainda". Nesse outro caso o botão continua ativo: o download pode funcionar mesmo
+    /// que esta consulta de versão/checksum tenha falhado.
+    /// </summary>
+    private bool _extratorNaoPublicado;
+
     protected override async Task OnInitializedAsync()
     {
         // Prerender roda OnInitializedAsync antes do circuito interativo; sem este guard a
@@ -205,6 +237,7 @@
         if (!RendererInfo.IsInteractive) return;
 
         await RefreshAsync();
+        await CarregarExtratorVersaoAsync();
         _timer = new Timer(async _ =>
         {
             try
@@ -268,6 +301,27 @@
         var due = terminal ? Timeout.InfiniteTimeSpan : PollInterval;
         _timer.Change(due, PollInterval);
     }
+
+    /// <summary>
+    /// Buscada uma vez, não a cada tick do poll de 3s: a versão publicada não muda durante
+    /// a vida da sessão, e reconsultar a cada tick só gastaria uma chamada à toa.
+    /// </summary>
+    private async Task CarregarExtratorVersaoAsync()
+    {
+        try
+        {
+            _extratorVersao = await ExtratorApi.GetVersaoAsync(_cts.Token);
+            _extratorNaoPublicado = _extratorVersao is null;
+        }
+        catch (OperationCanceledException) { }
+        catch
+        {
+            // Falha na consulta de versão não é "não publicado" — só deixamos de mostrar
+            // versão/checksum ao lado do botão; o botão em si continua ativo.
+        }
+    }
+
+    private void BaixarExtrator() => Nav.NavigateTo("/extrator/download", forceLoad: true);
 
     private async Task TriggerFilePicker() =>
         await JS.InvokeVoidAsync("clickElementById", "sessao-zip-input");

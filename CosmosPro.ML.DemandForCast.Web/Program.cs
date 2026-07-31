@@ -91,6 +91,14 @@ builder.Services.AddHttpClient<ComparacoesApiClient>(client =>
     client.Timeout = TimeSpan.FromMinutes(10);
 });
 
+builder.Services.AddHttpClient<ExtratorApiClient>(client =>
+{
+    client.BaseAddress = new("https+http://apiservice");
+    // O .exe tem dezenas de MB; o download precisa do mesmo teto generoso do upload,
+    // não do default de 100s do HttpClient.
+    client.Timeout = TimeSpan.FromMinutes(10);
+});
+
 const long MaxUploadBytes = 500L * 1024 * 1024;
 builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(o =>
     o.Limits.MaxRequestBodySize = MaxUploadBytes);
@@ -116,6 +124,7 @@ app.UseOutputCache();
 app.MapStaticAssets();
 
 app.MapLoginEndpoints();
+app.MapExtratorEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

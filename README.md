@@ -155,6 +155,83 @@ DbGate aparece como recurso `dbgate` no dashboard. Abra o endpoint — **as duas
 
 O DbGate roda com `WithDataVolume() + WithLifetime(Persistent)`, então qualquer favorito/aba salvo na UI sobrevive entre F5s.
 
+### Publicar o extrator no MinIO
+
+O comprador baixa o extrator pela página da sessão (`/comparacoes/{id}`, estado
+"Aguardando dados"), que faz stream do bucket MinIO `extrator` — o `.exe` **não** é
+embutido no repositório nem no build da Web (self-contained dá ~118 MB, e isso no git a
+cada versão é inviável). Isso significa que, **num ambiente novo, nada é baixável até
+alguém publicar manualmente** — é a checklist abaixo, e é passo obrigatório a cada
+release do extrator, não só na primeira vez.
+
+**1. Gerar o `.exe`** (comando completo e o porquê de cada flag em
+[Docs/extracao-pbs-stage.md § Como publicar o extrator](Docs/extracao-pbs-stage.md#como-publicar-o-extrator)):
+
+```powershell
+dotnet publish CosmosPro.ML.DemandForCast.Extractor -c Release -r win-x64 `
+  --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+Saída em `CosmosPro.ML.DemandForCast.Extractor\bin\Release\net10.0-windows\win-x64\publish\CosmosPro.ML.DemandForCast.Extractor.exe`.
+
+**2. Calcular o checksum SHA-256** do `.exe` gerado — é o valor que a página da sessão
+mostra ao comprador ao lado do botão, a promessa de que o arquivo não foi alterado entre a
+publicação e o download dele. Calculado **uma vez aqui**, na publicação, não a cada
+download: recalcular por request um arquivo de ~118 MB sob várias sessões simultâneas
+seria custo de CPU pago pelo comprador, para um arquivo que não muda entre releases.
+
+```powershell
+Get-FileHash .\CosmosPro.ML.DemandForCast.Extractor.exe -Algorithm SHA256
+```
+
+(equivalente em Linux/macOS: `sha256sum` ou `shasum -a 256`).
+
+**3. Escrever o `manifesto.json`** com a versão (mesma do `<Version>` no
+`CosmosPro.ML.DemandForCast.Extractor.csproj`) e o hash do passo anterior:
+
+```json
+{
+  "versao": "0.14.0",
+  "sha256": "<hash em minúsculas do passo 2>",
+  "publicadoEm": "2026-07-30T12:00:00Z"
+}
+```
+
+A leitura é case-insensitive nas chaves (`versao`/`Versao` tanto faz) — de propósito,
+para um manifesto escrito à mão às pressas não falhar silenciosamente por causa de
+maiúscula/minúscula.
+
+**4. Subir os dois arquivos para o bucket `extrator`**, como `extrator.exe` e
+`manifesto.json` (nomes fixos — a apiservice só procura por esses dois). O jeito mais
+simples é pelo **MinIO Console**: no Aspire Dashboard, abra o recurso `minio`, o endpoint
+do console (login `minioadmin`/`minioadmin` em ambiente local — outras credenciais vêm
+dos parâmetros `minio-access-key`/`minio-secret-key` do AppHost), crie o bucket
+`extrator` se ainda não existir, e arraste os dois arquivos para dentro dele — **sempre
+os dois juntos**: publicar só o `.exe` deixa `/api/extrator/versao` respondendo 404
+("não publicado") mesmo com o download já funcionando, e publicar só o manifesto deixa a
+versão/checksum aparecerem na tela para um download que ainda falha.
+
+Alternativa via [`mc`](https://min.io/docs/minio/linux/reference/minio-mc.html) (útil para
+automatizar em pipeline de release):
+
+```sh
+mc alias set cosmospro-local http://localhost:<porta-do-endpoint-minio> minioadmin minioadmin
+mc mb --ignore-existing cosmospro-local/extrator
+mc cp CosmosPro.ML.DemandForCast.Extractor.exe cosmospro-local/extrator/extrator.exe
+mc cp manifesto.json cosmospro-local/extrator/manifesto.json
+```
+
+A porta do endpoint MinIO muda a cada `F5` (Aspire aloca portas dinamicamente em dev) —
+confirme no Aspire Dashboard antes de rodar o `mc alias set`.
+
+**Sem versão publicada é o estado normal de um ambiente recém-criado, não um bug:** a
+página da sessão mostra "o extrator ainda não foi publicado" no lugar do botão desabilitado,
+e `GET /api/extrator/versao`/`GET /api/extrator/download` respondem 404 com uma mensagem
+igualmente clara — nunca um 404 cru ou um stack trace. Se em vez de 404 a resposta for 500,
+o problema é outro: MinIO fora do ar ou inacessível, não falta de publicação — as duas
+situações têm respostas diferentes de propósito, para quem estiver de plantão saber por
+onde começar.
+
 ---
 
 ## 6. Roadmap do POC
@@ -226,6 +303,7 @@ O POC deixa de ser banco de provas single-user e passa a ser instrumento de cole
   - **Ressalvas que viajam no `ResultadoJson`:** `ComparacaoOutput.RessalvaPadraoTreinoServe` documenta os dois desvios treino/serviço (preço congelado; classe ABC e orçamento de SKUs recalculados com o corte da sugestão). Ambos só podem prejudicar o braço de ML, nunca inflá-lo.
   - **Pergunta aberta antes de qualquer conclusão:** se o `DemandaDia` do PBS já é corrigido por ruptura. Verificar contra o campo `Falteiro` — se o ERP usa venda bruta e a nossa verdade exclui dias de ruptura, a comparação pende na direção que agrada à hipótese.
 - [ ] **F14 — Sessões de comparação**: fluxo guiado para o usuário leigo da rede (entities `ComparacaoSessao`/`ComparacaoSessaoItem`, painel `/` e página `/comparacoes/{id}`, extrator com escolha de sugestão) — em andamento, iniciado antes da F13.
+  - [x] **Download do extrator via MinIO**: `GET /api/extrator/download` (stream do bucket `extrator`, nunca materializa o `.exe` inteiro em memória) e `GET /api/extrator/versao` (versão + checksum SHA-256, lidos do `manifesto.json` publicado ao lado do executável — calculado uma vez na publicação, não a cada download). 404 claro e distinto de falha de infraestrutura quando nada foi publicado ainda. Botão "Baixar extrator" na página da sessão, só em `AguardandoDados`. Sem `redeId` em nenhum dos dois — o executável não é dado de inquilino. Passo a passo de publicação em [§ Publicar o extrator no MinIO](#publicar-o-extrator-no-minio) acima.
 
 ---
 

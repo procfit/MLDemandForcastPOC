@@ -4,6 +4,7 @@ using Aspire.Hosting.Testing;
 using CosmosPro.ML.DemandForCast.Tests.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Minio;
 using Refit;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
@@ -31,6 +32,7 @@ public sealed class AppHostFixture : IAsyncLifetime
     public IComparisonApi ComparisonApi { get; private set; } = null!;
     public ITrainingApi TrainingApi { get; private set; } = null!;
     public IPurchasingApi PurchasingApi { get; private set; } = null!;
+    public IExtratorApi ExtratorApi { get; private set; } = null!;
 
     /// <summary>Rede semeada pela migration AddRedes — usada pelos testes que não criam rede própria.</summary>
     public const int RedeDemoId = 1;
@@ -73,6 +75,7 @@ public sealed class AppHostFixture : IAsyncLifetime
         ComparisonApi = RestService.For<IComparisonApi>(httpClient);
         TrainingApi = RestService.For<ITrainingApi>(httpClient);
         PurchasingApi = RestService.For<IPurchasingApi>(httpClient);
+        ExtratorApi = RestService.For<IExtratorApi>(httpClient);
 
         using var healthyCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         try
@@ -214,6 +217,30 @@ public sealed class AppHostFixture : IAsyncLifetime
     public async Task<string> GetEngineConnectionStringAsync(CancellationToken ct = default)
         => await App.GetConnectionStringAsync("engine", ct)
            ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+    /// <summary>
+    /// Cliente MinIO direto do teste, para semear/limpar o bucket <c>extrator</c> — a
+    /// apiservice só lê (publicação é manual, fora do processo). A connection string do
+    /// recurso vem no formato <c>Endpoint=http://host:port;AccessKey=..;SecretKey=..</c>
+    /// (CommunityToolkit.Aspire.Hosting.Minio); parseado aqui em vez de reusar
+    /// <c>AddMinioClient</c> porque este é o processo de teste, não a apiservice.
+    /// </summary>
+    public async Task<IMinioClient> GetMinioClientAsync(CancellationToken ct = default)
+    {
+        var cs = await App.GetConnectionStringAsync("minio", ct)
+                  ?? throw new InvalidOperationException("Recurso 'minio' sem connection string.");
+
+        var partes = cs.Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Split('=', 2))
+            .Where(p => p.Length == 2)
+            .ToDictionary(p => p[0], p => p[1]);
+
+        var endpoint = new Uri(partes["Endpoint"]);
+        return new MinioClient()
+            .WithEndpoint(endpoint.Host, endpoint.Port)
+            .WithCredentials(partes["AccessKey"], partes["SecretKey"])
+            .Build();
+    }
 
     public async ValueTask DisposeAsync()
     {

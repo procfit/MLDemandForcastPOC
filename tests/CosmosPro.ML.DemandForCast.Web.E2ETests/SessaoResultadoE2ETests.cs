@@ -119,6 +119,21 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
     }
 
     /// <summary>
+    /// O botão de baixar o extrator só existe em <c>AguardandoDados</c> (ver
+    /// <c>ComparacoesE2ETests.Sessao_nova_em_AguardandoDados_mostra_o_botao_de_baixar_extrator</c>).
+    /// Numa sessão <c>Concluida</c> o comprador já enviou o ZIP há muito tempo — o botão
+    /// reaparecer aqui seria ruído sem propósito, não uma ação disponível.
+    /// </summary>
+    [Fact]
+    public async Task Sessao_concluida_nao_mostra_o_botao_de_baixar_extrator()
+    {
+        var corpo = await ResultadoRenderizadoAsync();
+
+        corpo.Should().NotContain("Baixar extrator",
+            "o download do extrator só faz sentido em AguardandoDados, não numa sessão já concluída");
+    }
+
+    /// <summary>
     /// Bloco fixo, nunca aba: média global esconde regressão local (CLAUDE.md §6). Sem braço
     /// de ML, ele diz que não há o que apontar — e diz também que isso não é empate.
     /// </summary>
