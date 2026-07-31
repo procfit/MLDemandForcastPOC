@@ -26,10 +26,29 @@ public sealed class ComparacaoPbs
     /// </summary>
     public Guid TreinoJobId { get; set; }
 
-    /// <summary>Início da janela de vendas reais usada para medir os dois braços.</summary>
+    /// <summary>
+    /// Início da janela: primeiro dia (inclusive) em que a sugestão do ERP pode ter sido
+    /// calculada (<c>SugestoesCompra.DataHora</c>). <b>Não</b> é o primeiro dia de venda
+    /// pontuado — ver <see cref="JanelaFim"/>.
+    /// </summary>
     public DateOnly JanelaInicio { get; set; }
 
-    /// <summary>Fim da janela de vendas reais usada para medir os dois braços.</summary>
+    /// <summary>
+    /// Fim da janela: último dia (inclusive) em que a sugestão do ERP pode ter sido
+    /// calculada (<c>SugestoesCompra.DataHora</c>).
+    ///
+    /// <para>
+    /// <b>Não limita os dias de venda pontuados.</b> Cada sugestão é medida sobre a
+    /// cobertura que começa na própria data dela — <c>DiasEstoque</c> dias à frente,
+    /// tipicamente 15 ou 30 —, então uma janela até 31/07 pontua venda real até meados de
+    /// agosto. Quem escolhe "julho" esperando que a pontuação pare em 31/07 vai se
+    /// surpreender. Uma sugestão cuja cobertura ultrapassa o fim dos dados importados não
+    /// é descartada por estar fora da janela — ela sai contada em
+    /// <c>ComparacaoOutput.ItensForaCamadaAAlemDoHistorico</c> /
+    /// <c>ItensForaCamadaBAlemDoHistorico</c>, com o motivo explícito em vez de misturada
+    /// com série curta.
+    /// </para>
+    /// </summary>
     public DateOnly JanelaFim { get; set; }
 
     /// <summary>

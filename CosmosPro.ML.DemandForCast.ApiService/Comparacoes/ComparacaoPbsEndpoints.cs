@@ -135,7 +135,12 @@ internal static class ComparacaoPbsEndpoints
 }
 
 /// <param name="JanelaInicio">Primeiro dia (inclusive) em que a sugestão do ERP pode ter sido calculada.</param>
-/// <param name="JanelaFim">Último dia (inclusive) em que a sugestão do ERP pode ter sido calculada.</param>
+/// <param name="JanelaFim">
+/// Último dia (inclusive) em que a sugestão do ERP pode ter sido calculada — não o
+/// último dia de venda pontuado. Cada sugestão é medida sobre a cobertura que começa na
+/// própria data dela (tipicamente 15 ou 30 dias), então uma janela até 31/07 pode pontuar
+/// venda real até meados de agosto. Ver <see cref="ComparacaoPbs.JanelaFim"/>.
+/// </param>
 /// <param name="TipoCalculo">
 /// 1 = "Emax e Eseg", 2 = "Dias de Reposição". Uma execução mira em UM método: são
 /// baselines distintos do ERP e média entre eles não significa nada.

@@ -95,7 +95,7 @@ internal sealed class TreinoProcessor(
             TreinoAte: job.TreinoAte,
             UltimaDataTreinada: ultimaDataTreinada);
 
-        var json = JsonSerializer.Serialize(result);
+        var json = JsonSerializer.Serialize(result, TrainingResultJson.Options);
         return new Outcome(blobKey, json, features.Count);
     }
 

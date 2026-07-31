@@ -85,6 +85,16 @@ public sealed record ComparisonOptions
     /// Lead time (dias) do feature engineering de F5 — ver <c>FeatureConfig.LeadTimeDias</c>.
     /// Define a observação mais recente que alimenta um dia-alvo D: <c>D - LeadTimeDias</c>.
     /// É o que permite ao comparador checar a regra de informação sem enxergar as features.
+    ///
+    /// <para>
+    /// <b>O default (7) não deriva de <c>FeatureConfig.LeadTimeDias</c> nem de
+    /// <c>DecisionOptions.LeadTimeDias</c> — os três só coincidem porque nenhum foi
+    /// mudado.</b> Quem alterar um sem os outros não falha em silêncio: o comparador
+    /// aplicaria a regra de informação com um lead time diferente do que o
+    /// <c>FeatureBuilder</c> de fato usou ao gerar as features da população, e a
+    /// população inteira sairia recusada aqui — ruidoso, mas o acoplamento em si não é
+    /// imposto em nenhum ponto único do código.
+    /// </para>
     /// </summary>
     public int LeadTimeDias { get; init; } = 7;
 

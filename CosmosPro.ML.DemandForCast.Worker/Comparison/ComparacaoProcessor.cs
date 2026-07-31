@@ -43,10 +43,15 @@ namespace CosmosPro.ML.DemandForCast.Worker.Comparison;
 ///
 /// <para>
 /// <b>A população nunca é alargada.</b> Ela sai de <c>SugestoesCompraItens</c> e só
-/// encolhe: item sem série no Stage, ou de <c>TipoCalculo</c> 1 sem <c>EstoqueMaximo</c>,
-/// sai contado em <see cref="ComparacaoOutput.ItensForaCamadaA"/> /
-/// <see cref="ComparacaoOutput.ItensForaCamadaB"/>. Nenhum par que o ERP não olhou
-/// entra.
+/// encolhe, mas por motivos que não podem se misturar num balde só: item sem série
+/// no Stage, ou de <c>TipoCalculo</c> 1 sem <c>EstoqueMaximo</c>, sai contado em
+/// <see cref="ComparacaoOutput.ItensForaCamadaA"/> / <see cref="ComparacaoOutput.ItensForaCamadaB"/>;
+/// item cujo SKU não coube no orçamento top-<c>MaxSkus</c> recalculado com o corte
+/// da sugestão sai em <see cref="ComparacaoOutput.ItensForaOrcamentoSkus"/>; item cuja
+/// janela avança para além do fim do histórico importado sai em
+/// <see cref="ComparacaoOutput.ItensForaCamadaAAlemDoHistorico"/> /
+/// <see cref="ComparacaoOutput.ItensForaCamadaBAlemDoHistorico"/>. Nenhum par que o
+/// ERP não olhou entra.
 /// </para>
 /// </summary>
 internal sealed class ComparacaoProcessor(
@@ -132,8 +137,11 @@ internal sealed class ComparacaoProcessor(
             ItensDaSugestao: populacao.ItensDaSugestao,
             ItensCamadaA: populacao.Previsao.Count,
             ItensForaCamadaA: populacao.ForaCamadaA,
+            ItensForaCamadaAAlemDoHistorico: populacao.ForaCamadaAAlemDoHistorico,
             ItensCamadaB: populacao.Decisao.Count,
             ItensForaCamadaB: populacao.ForaCamadaB,
+            ItensForaCamadaBAlemDoHistorico: populacao.ForaCamadaBAlemDoHistorico,
+            ItensForaOrcamentoSkus: populacao.ForaOrcamentoSkus,
             RessalvaTreinoServe: ComparacaoOutput.RessalvaPadraoTreinoServe,
             Previsao: previsao,
             Decisao: decisao,
@@ -193,7 +201,7 @@ internal sealed class ComparacaoProcessor(
 
         var resultado = string.IsNullOrEmpty(treino.ResultadoJson)
             ? null
-            : JsonSerializer.Deserialize<TrainingResult>(treino.ResultadoJson, Json);
+            : JsonSerializer.Deserialize<TrainingResult>(treino.ResultadoJson, TrainingResultJson.Options);
 
         if (resultado?.UltimaDataTreinada is not { } ultimaDataTreinada)
         {
@@ -223,7 +231,10 @@ internal sealed class ComparacaoProcessor(
     private sealed record Populacao(
         int ItensDaSugestao,
         int ForaCamadaA,
+        int ForaCamadaAAlemDoHistorico,
         int ForaCamadaB,
+        int ForaCamadaBAlemDoHistorico,
+        int ForaOrcamentoSkus,
         List<ComparisonItem> Previsao,
         List<DecisionItem> Decisao,
         List<HumanOverrideItem> Intervencao);
@@ -247,7 +258,15 @@ internal sealed class ComparacaoProcessor(
         var previsao = new List<ComparisonItem>();
         var decisao = new List<DecisionItem>();
         var intervencao = new List<HumanOverrideItem>();
-        int itensDaSugestao = 0, foraA = 0, foraB = 0;
+        int itensDaSugestao = 0, foraA = 0, foraAAlemDoHistorico = 0, foraB = 0, foraBAlemDoHistorico = 0, foraOrcamentoSkus = 0;
+
+        // Teto do histórico importado: nenhuma camada pode pontuar dia além dele,
+        // seja qual for a largura da janela pedida. `JanelaFim` só limita QUAIS
+        // sugestões entram (contrato 3) — não até quando elas são pontuadas, ver
+        // ComparacaoPbs.JanelaFim. Sem este teto, um item cuja cobertura avança
+        // além do que foi importado cairia em ItensForaCamadaA/B indistinguível de
+        // série curta ou de TipoCalculo 1 sem eMax.
+        var fimDoHistoricoImportado = observacoes.Max(o => o.Data);
 
         foreach (var grupo in sugestoes.GroupBy(s => DateOnly.FromDateTime(s.DataHora)))
         {
@@ -262,7 +281,8 @@ internal sealed class ComparacaoProcessor(
                 .Select(i => (i.Sku, i.LojaId))
                 .ToHashSet();
 
-            var dias = await PreverJanelaAsync(connStr, job.RedeId, treino.MaxSkus, corte, chaves, observacoes, modelo, ct);
+            var (dias, skusNoOrcamento) = await PreverJanelaAsync(
+                connStr, job.RedeId, treino.MaxSkus, corte, chaves, observacoes, modelo, ct);
 
             foreach (var sugestao in grupo)
             {
@@ -282,16 +302,29 @@ internal sealed class ComparacaoProcessor(
                         PrecoCompra = item.PrecoCompra,
                     });
 
+                    // Motivo próprio, checado antes de A/B: um SKU fora do orçamento
+                    // top-MaxSkus recalculado com o corte (ver PreverJanelaAsync) não
+                    // tem classe ABC nem feature nenhuma, então cairia nos dois
+                    // balde de A/B ao mesmo tempo por um motivo que não é falta de
+                    // dado nem de horizonte — sai contado à parte e não disputa
+                    // nenhuma camada.
+                    if (!skusNoOrcamento.Contains(item.Sku))
+                    {
+                        foraOrcamentoSkus++;
+                        continue;
+                    }
+
                     // Camada A pontua uma TAXA (unidades/dia), então basta a parte da
                     // cobertura que o lead time das features alcança: além de
                     // corte + LeadTimeDias - 1 o dia-alvo seria alimentado por
                     // observação posterior ao corte, e a regra de informação — com
                     // razão — o recusaria.
                     var diasCamadaA = Math.Min((int)item.DiasEstoque, PrevisaoOpcoes.LeadTimeDias);
-                    var janelaA = Janela(dias, item, corte, diasCamadaA);
+                    var alemDoHistoricoA = ExigeDadosAlemDoHistorico(corte, diasCamadaA, fimDoHistoricoImportado);
+                    var janelaA = alemDoHistoricoA ? null : Janela(dias, item, corte, diasCamadaA);
                     if (janelaA is null)
                     {
-                        foraA++;
+                        if (alemDoHistoricoA) foraAAlemDoHistorico++; else foraA++;
                     }
                     else
                     {
@@ -315,13 +348,14 @@ internal sealed class ComparacaoProcessor(
                     // inteira, então exige a janela inteira — inclusive além do
                     // horizonte do ML, onde o próprio comparador reporta o item em
                     // ForaDoHorizonteMl em vez de compará-lo.
-                    var janelaB = Janela(dias, item, corte, item.DiasEstoque);
+                    var alemDoHistoricoB = ExigeDadosAlemDoHistorico(corte, item.DiasEstoque, fimDoHistoricoImportado);
+                    var janelaB = alemDoHistoricoB ? null : Janela(dias, item, corte, item.DiasEstoque);
                     var elegivelB = janelaB is not null
                         && (sugestao.TipoCalculo != 1 || item.EstoqueMaximo is not null);
 
                     if (!elegivelB)
                     {
-                        foraB++;
+                        if (alemDoHistoricoB) foraBAlemDoHistorico++; else foraB++;
                     }
                     else
                     {
@@ -354,13 +388,28 @@ internal sealed class ComparacaoProcessor(
             }
         }
 
-        return new Populacao(itensDaSugestao, foraA, foraB, previsao, decisao, intervencao);
+        return new Populacao(
+            itensDaSugestao, foraA, foraAAlemDoHistorico, foraB, foraBAlemDoHistorico, foraOrcamentoSkus,
+            previsao, decisao, intervencao);
     }
 
     /// <summary>
-    /// Devolve os <paramref name="quantidade"/> dias a partir do corte, ou <c>null</c>
-    /// se algum deles não tem linha de feature — série curta demais, loja/SKU sem venda
-    /// no período, ou cobertura que ultrapassa o fim do histórico importado. Entregar a
+    /// Se os <paramref name="quantidade"/> dias a partir do <paramref name="corte"/>
+    /// avançam para além do último dia de venda importado no Stage
+    /// (<paramref name="fimDoHistoricoImportado"/>). Checado ANTES de tentar montar a
+    /// janela: sem isso, o item cairia em <c>ItensForaCamadaA</c>/<c>ItensForaCamadaB</c>
+    /// indistinguível de série curta ou de ruptura — aqui o motivo é estrutural, não do
+    /// item.
+    /// </summary>
+    private static bool ExigeDadosAlemDoHistorico(DateOnly corte, int quantidade, DateOnly fimDoHistoricoImportado)
+        => quantidade >= 1 && corte.AddDays(quantidade - 1) > fimDoHistoricoImportado;
+
+    /// <summary>
+    /// Devolve os <paramref name="quantidade"/> dias a partir do corte, ou <c>null</c> se
+    /// algum deles não tem linha de feature — série curta demais ou loja/SKU sem venda no
+    /// período. Cobertura que ultrapassa o fim do histórico importado é interceptada ANTES
+    /// desta chamada por <see cref="ExigeDadosAlemDoHistorico"/>, então quem chega aqui já
+    /// devia ter dado — se ainda assim faltar linha, é falta de série mesmo. Entregar a
     /// janela incompleta faria os comparadores pontuarem uma compra dimensionada para N
     /// dias contra a venda de menos que N.
     /// </summary>
@@ -392,8 +441,18 @@ internal sealed class ComparacaoProcessor(
     /// não é reescrita aqui — o <see cref="StageObservationLoader"/> é chamado de novo com
     /// o corte, e só o rótulo resultante é transposto para a série completa.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Skew de treino/serviço, não vazamento:</b> este corte é o da SUGESTÃO, não o
+    /// <c>TreinoJob.TreinoAte</c> que o modelo de fato usou. Quando o treino termina antes
+    /// da sugestão — o caso normal, contrato 1 exige isso —, tanto a ClasseAbc quanto o
+    /// orçamento top-<c>maxSkus</c> abaixo vêm de uma janela mais longa do que a que o
+    /// modelo observou no ajuste. Documentado ao lado do skew de preço em
+    /// <see cref="ComparacaoOutput.RessalvaPadraoTreinoServe"/>.
+    /// </para>
     /// </summary>
-    private async Task<Dictionary<(string Sku, int LojaId, DateOnly Data), DiaAvaliado>> PreverJanelaAsync(
+    private async Task<(Dictionary<(string Sku, int LojaId, DateOnly Data), DiaAvaliado> Dias, HashSet<string> SkusNoOrcamento)>
+        PreverJanelaAsync(
         string connStr,
         int redeId,
         int maxSkus,
@@ -410,11 +469,23 @@ internal sealed class ComparacaoProcessor(
             .GroupBy(o => o.Sku, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First().ClasseAbc, StringComparer.OrdinalIgnoreCase);
 
+        // As chaves de `abc` SÃO o orçamento top-maxSkus recalculado com o corte da
+        // sugestão: quem não está aqui não ganhou ClasseAbc nem feature nenhuma, e
+        // precisa sair contado à parte em ItensForaOrcamentoSkus — o motivo é
+        // orçamento, não falta de série nem de horizonte.
+        var skusNoOrcamento = new HashSet<string>(abc.Keys, StringComparer.OrdinalIgnoreCase);
+
         var serie = observacoes
             .Where(o => chaves.Contains((o.Sku, o.LojaId)) && abc.ContainsKey(o.Sku))
             .Select(o => o with { ClasseAbc = abc[o.Sku] })
             .ToList();
 
+        // LeadTimeDias fica no default do FeatureConfig (7) — o MESMO valor que
+        // PrevisaoOpcoes.LeadTimeDias e DecisaoOpcoes.LeadTimeDias assumem por
+        // default hoje, mas nenhum dos três deriva dos outros dois. Ver
+        // ComparisonOptions.LeadTimeDias: mudar um sem os outros não quebra
+        // silenciosamente aqui — quebra ruidosamente no comparador, o que é
+        // aceitável, mas o acoplamento em si só está documentado, não imposto.
         var config = new FeatureConfig { PrecoCongeladoAPartirDe = corte };
         var features = new FeatureBuilder(config).Build(serie);
 
@@ -431,7 +502,7 @@ internal sealed class ComparacaoProcessor(
             "Corte {Corte}: {N} dia(s) previsto(s) sobre {Series} série(s) com preço congelado.",
             corte, dias.Count, chaves.Count);
 
-        return dias;
+        return (dias, skusNoOrcamento);
     }
 
     private async Task<LightGbmForecastModel> BaixarModeloAsync(string blobKey, CancellationToken ct)
@@ -464,11 +535,40 @@ internal sealed class ComparacaoProcessor(
 /// Total de linhas que o ERP avaliou na janela — o teto da população. As camadas A e B
 /// só encolhem a partir daqui.
 /// </param>
-/// <param name="ItensForaCamadaA">Itens sem série completa nos dias pontuados da camada A.</param>
+/// <param name="ItensForaCamadaA">
+/// Itens sem série completa nos dias pontuados da camada A. <b>Não</b> inclui os itens
+/// fora por orçamento de SKUs (<see cref="ItensForaOrcamentoSkus"/>) nem os que caem por
+/// o fim do histórico importado (<see cref="ItensForaCamadaAAlemDoHistorico"/>) — cada
+/// motivo tem contador próprio para que "não tínhamos dado" não se confunda com "o SKU
+/// não coube no orçamento" nem com "faltou venda depois do fim do que foi importado".
+/// </param>
+/// <param name="ItensForaCamadaAAlemDoHistorico">
+/// Itens cuja janela da camada A (<c>min(DiasEstoque, LeadTimeDias)</c> dias a partir do
+/// corte) avança para além do último dia de venda importado no Stage. Não é série curta
+/// nem falta de horizonte do ML — é o fim dos dados disponíveis, e numa janela de
+/// sugestões que se aproxima do fim do que foi importado este número cresce sozinho. Ver
+/// a nota em <see cref="ComparacaoPbs.JanelaFim"/>.
+/// </param>
 /// <param name="ItensForaCamadaB">
 /// Itens sem a janela de cobertura completa no histórico, ou de <c>TipoCalculo</c> 1 sem
 /// <c>EstoqueMaximo</c> gravado. <b>Não</b> inclui os itens que a camada B recusa por
-/// horizonte — esses estão em <c>Decisao.ForaDoHorizonteMl</c>, com o motivo.
+/// horizonte — esses estão em <c>Decisao.ForaDoHorizonteMl</c>, com o motivo — nem os que
+/// caem por orçamento de SKUs (<see cref="ItensForaOrcamentoSkus"/>) ou por fim do
+/// histórico importado (<see cref="ItensForaCamadaBAlemDoHistorico"/>).
+/// </param>
+/// <param name="ItensForaCamadaBAlemDoHistorico">
+/// Itens cuja janela da camada B (<c>DiasEstoque</c> dias completos a partir do corte)
+/// avança para além do último dia de venda importado no Stage. Comum quando
+/// <c>JanelaFim</c> se aproxima do fim do período importado: a sugestão ainda está dentro
+/// da janela pedida, mas a cobertura que ela exige para ser pontuada não está — ver a
+/// nota em <see cref="ComparacaoPbs.JanelaFim"/>.
+/// </param>
+/// <param name="ItensForaOrcamentoSkus">
+/// Itens cujo SKU ficou fora do orçamento top-<c>MaxSkus</c> recalculado com o corte da
+/// sugestão (ver <see cref="ComparacaoProcessor.PreverJanelaAsync"/>). Distinto de falta
+/// de dado: o SKU pode ter série completa e mesmo assim não caber no orçamento —
+/// sobretudo com <c>MaxSkus</c> pequeno perto de um catálogo grande, ou quando o volume
+/// do SKU só cresce depois do corte de treino.
 /// </param>
 /// <param name="RessalvaTreinoServe">
 /// Ressalva metodológica que precisa acompanhar os números — ver
@@ -493,8 +593,11 @@ internal sealed record ComparacaoOutput(
     int ItensDaSugestao,
     int ItensCamadaA,
     int ItensForaCamadaA,
+    int ItensForaCamadaAAlemDoHistorico,
     int ItensCamadaB,
     int ItensForaCamadaB,
+    int ItensForaCamadaBAlemDoHistorico,
+    int ItensForaOrcamentoSkus,
     string RessalvaTreinoServe,
     ComparisonResult Previsao,
     DecisionComparisonResult Decisao,
@@ -519,11 +622,28 @@ internal sealed record ComparacaoOutput(
     /// o Stage não tem) ou com o mesmo congelamento do serviço, e está fora do escopo
     /// desta tarefa.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Segundo skew, mesma direção do efeito:</b> <see cref="ComparacaoProcessor.PreverJanelaAsync"/>
+    /// recalcula a ClasseAbc e o próprio orçamento top-<c>MaxSkus</c> com o corte da
+    /// SUGESTÃO, não com <c>TreinoJob.TreinoAte</c> — o corte que o modelo de fato usou no
+    /// ajuste. Quando o treino termina antes da sugestão (o caso normal; o contrato 1
+    /// exige isso), o rótulo de ClasseAbc servido ao modelo e a própria composição do
+    /// conjunto de SKUs vêm de uma janela mais longa do que a que ele observou treinando.
+    /// Não é vazamento — tudo precede a sugestão —, mas é o mesmo tipo de divergência de
+    /// distribuição entre treino e serviço do parágrafo acima, e por isso mora na mesma
+    /// ressalva em vez de espalhada.
+    /// </para>
     /// </summary>
     public const string RessalvaPadraoTreinoServe =
         "O modelo foi TREINADO com o preço realizado de cada dia e SERVIDO, nesta comparação, com o preço " +
         "congelado na data da sugestão — obrigatório para não vazar a remarcação do próprio dia pontuado. " +
         "É uma diferença de distribuição entre treino e serviço, e ela só pode prejudicar o braço de ML, " +
         "nunca favorecê-lo: se o ML vencer, o resultado vale apesar dela; se perder por pouco, considere-a " +
-        "antes de concluir que o ERP prevê melhor.";
+        "antes de concluir que o ERP prevê melhor. A mesma ressalva vale para a classe ABC e para o " +
+        "conjunto de SKUs servidos ao modelo: ambos são recalculados com o corte da sugestão, não com o " +
+        "corte que o treino de fato usou, então quando o treino termina antes da sugestão (o caso normal) " +
+        "o modelo é servido com um rótulo e um orçamento de SKUs de uma janela mais longa do que a que ele " +
+        "aprendeu. Mesma direção do efeito: não infla o ML, só lhe empresta informação um pouco mais " +
+        "recente do que a que ele de fato viu.";
 }

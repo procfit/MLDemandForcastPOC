@@ -49,6 +49,13 @@ public sealed class ComparacaoPbsIntegrationTests(AppHostFixture fixture)
 
     private const long SugestaoId = 7001;
 
+    /// <summary>Rede, SKUs e sugestão dedicados ao teste do orçamento de SKUs (ver abaixo).</summary>
+    private const string SlugOrcamento = "comparacao-pbs-orcamento";
+    private const int LojaIdOrcamento = 9902;
+    private const string SkuOrcamentoAlta = "ORC-ALTA";
+    private const string SkuOrcamentoBaixa = "ORC-BAIXA";
+    private const long SugestaoIdOrcamento = 7002;
+
     /// <summary>
     /// "Dias de Reposição". Escolhido porque a demanda entra direto na fórmula
     /// (<c>demanda × DiasEstoque</c>), então a reconciliação da camada B é verificável
@@ -234,6 +241,76 @@ public sealed class ComparacaoPbsIntegrationTests(AppHostFixture fixture)
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest,
             "treino de outra rede é indistinguível de inexistente — confirmar que existe já vazaria");
+    }
+
+    /// <summary>
+    /// Prova que o orçamento de SKUs (<c>ItensForaOrcamentoSkus</c>) é um motivo à parte
+    /// de falta de série/horizonte, e não se mistura em <c>ItensForaCamadaA</c>.
+    ///
+    /// <para>
+    /// Rede, dados e treino próprios desta rede (isolados dos demais testes desta
+    /// classe): <c>MaxSkus = 1</c> força o SKU de menor volume (<see cref="SkuOrcamentoBaixa"/>)
+    /// a ficar fora do orçamento top-1 recalculado com o corte da sugestão — mesmo tendo
+    /// série completa e sem ruptura o ano inteiro. Os volumes diários dos dois SKUs não
+    /// empatam em nenhum dia, então o ranking é o mesmo no histórico inteiro e em
+    /// qualquer corte pré-sugestão: o motivo da exclusão é só orçamento.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Item_fora_do_orcamento_de_skus_e_contado_separado_dos_outros_motivos()
+    {
+        var redeId = await EnsureRedeAsync("Rede Comparacao Orcamento", SlugOrcamento);
+
+        using (var zip = BuildZipOrcamento())
+        {
+            zip.Position = 0;
+            var upload = await fixture.ImportsApi.UploadAsync(
+                new StreamPart(zip, $"{SlugOrcamento}.zip", "application/zip"), redeId,
+                TestContext.Current.CancellationToken);
+            upload.StatusCode.Should().Be(HttpStatusCode.Accepted);
+            var carga = await fixture.WaitForCargaAsync(upload.Content!.Id, ct: TestContext.Current.CancellationToken);
+            carga.Status.Should().Be("Concluida", because: carga.MensagemErro ?? "sem mensagem de erro");
+        }
+
+        var treinoEnfileirado = await fixture.TrainingApi.EnqueueAsync(
+            new EnqueueTrainingRequest(MaxSkus: 1, TreinoAte: DataSugestao), redeId,
+            TestContext.Current.CancellationToken);
+        treinoEnfileirado.StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        var treinoId = await AguardarTreinoAsync(treinoEnfileirado.Content!.Id);
+
+        var comparacao = await ExecutarAsync(redeId, treinoId);
+        comparacao.Status.Should().Be("Concluido", because: comparacao.MensagemErro ?? "sem mensagem de erro");
+
+        var saida = JsonSerializer.Deserialize<ComparacaoOutput>(comparacao.ResultadoJson!, Json);
+        saida.Should().NotBeNull();
+
+        saida!.ItensDaSugestao.Should().Be(2, "a sugestão desta rede tem os dois SKUs, alta e baixa");
+        saida.ItensForaOrcamentoSkus.Should().Be(1,
+            "ORC-BAIXA tem série completa e sem ruptura o ano inteiro — o único motivo de exclusão é o orçamento top-1");
+        saida.ItensForaCamadaA.Should().Be(0,
+            "o único item excluído desta população é o de orçamento, não falta de série");
+        saida.ItensForaCamadaAAlemDoHistorico.Should().Be(0,
+            "a janela pontuada (início de julho) está longe do fim do histórico importado (dezembro)");
+        saida.ItensCamadaA.Should().Be(1, "só ORC-ALTA coube no orçamento e chegou à camada A");
+        saida.Previsao.Detalhe.Should().OnlyContain(p => p.Sku == SkuOrcamentoAlta,
+            "ORC-BAIXA nunca deveria disputar a camada A — ficou fora por orçamento antes disso");
+    }
+
+    private async Task<Guid> AguardarTreinoAsync(Guid treinoJobId)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var resp = await fixture.TrainingApi.GetAsync(treinoJobId, TestContext.Current.CancellationToken);
+            if (resp.Content is { Status: "Concluido" or "Falha" } job)
+            {
+                job.Status.Should().Be("Concluido", because: job.MensagemErro ?? "sem mensagem de erro");
+                return job.Id;
+            }
+            await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        }
+        throw new TimeoutException($"Treino {treinoJobId} não concluiu em 10 min.");
     }
 
     // --- Infra do teste ------------------------------------------------------
@@ -472,6 +549,81 @@ public sealed class ComparacaoPbsIntegrationTests(AppHostFixture fixture)
                 $"{SugestaoId},{LojaId},{sku},{curva},{demandaDia:0.0000},,{estoqueSaldo:0.000},,,,")
               .Append(CultureInfo.InvariantCulture,
                 $"{DiasEstoque},0.000,{compraSugerida:0.000},{compraAutorizada:0.000},{precoCompra:0.0000},,0\n");
+        }
+    }
+
+    /// <summary>
+    /// Dataset dedicado ao teste do orçamento de SKUs: dois SKUs com volumes diários que
+    /// nunca empatam (50/dia contra 5/dia, o ano inteiro), para que o ranking top-N seja
+    /// o mesmo no histórico cheio e em qualquer corte pré-sugestão — o único jeito de
+    /// isolar "fora por orçamento" de "fora por skew de corte" (ressalva documentada em
+    /// <see cref="ComparacaoOutput.RessalvaPadraoTreinoServe"/>).
+    /// </summary>
+    private static MemoryStream BuildZipOrcamento()
+    {
+        var lojas = new List<LojaRow>
+        {
+            new(LojaIdOrcamento, "Loja Orcamento", "SP", "São Paulo", "Sudeste", "rua", 7, new DateOnly(2020, 1, 1), true),
+        };
+
+        var produtos = new List<ProdutoRow>
+        {
+            new(SkuOrcamentoAlta, "Produto Orcamento Alta", "Similar", "Analgésico", "ACME", "Dipirona Sódica", "20cp 500mg", null, null, null, null, true),
+            new(SkuOrcamentoBaixa, "Produto Orcamento Baixa", "Generico", "Antitérmico", "ACME", "Paracetamol", "20cp 750mg", null, null, null, null, true),
+        };
+
+        var vendas = new List<VendaRow>();
+        for (var d = Inicio; d <= Fim; d = d.AddDays(1))
+        {
+            vendas.Add(new VendaRow(d, LojaIdOrcamento, SkuOrcamentoAlta, 50m, 10.50m, 50m * 10.50m));
+            vendas.Add(new VendaRow(d, LojaIdOrcamento, SkuOrcamentoBaixa, 5m, 8.00m, 5m * 8.00m));
+        }
+
+        var estoques = new List<EstoqueDiarioRow>
+        {
+            new(new DateOnly(2026, 2, 10), LojaIdOrcamento, SkuOrcamentoAlta, 500m),
+        };
+
+        return new CsvZipBuilder()
+            .WithLojas(lojas)
+            .WithProdutos(produtos)
+            .WithVendas(vendas)
+            .WithEstoquesDiarios(estoques)
+            .WithCompras(new CompraFaker([LojaIdOrcamento], [SkuOrcamentoAlta, SkuOrcamentoBaixa], Inicio, Fim, seed: 920).Generate(2))
+            .WithPromocoes(new PromocaoFaker([LojaIdOrcamento], [SkuOrcamentoAlta], Inicio, Fim, seed: 921).Generate(1))
+            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], Inicio, Fim, seed: 922).Generate(1))
+            .ReplaceRaw("sugestoes_compra.csv", SugestaoCsvOrcamento())
+            .ReplaceRaw("sugestoes_compra_itens.csv", SugestaoItensCsvOrcamento())
+            .Build();
+    }
+
+    private static string SugestaoCsvOrcamento() =>
+        "SugestaoId,Descricao,DataHora,TipoCalculo,LeadTimeDias,DiasCurvaA,DiasCurvaB,DiasCurvaC,DiasCurvaD,DiasCurvaE,Efetividade,ConsideraPedidosPendentes,IncluiEstoqueZerado\n" +
+        $"{SugestaoIdOrcamento},Sugestao orcamento,{DataSugestao:yyyy-MM-dd}T09:00:00,{TipoCalculo},7,15,15,15,15,15,100.00,1,0\n";
+
+    /// <summary>DiasEstoque = 5, dentro do horizonte (7): o único braço no orçamento (ORC-ALTA) chega à camada A sem ruído de horizonte.</summary>
+    private static string SugestaoItensCsvOrcamento()
+    {
+        const short diasEstoque = 5;
+        var sb = new StringBuilder();
+        sb.Append("SugestaoId,LojaId,Sku,Curva,DemandaDia,DemandaDiaPonderada,EstoqueSaldo,EstoqueSeguranca,")
+          .Append("EstoqueMaximo,EstoqueMinimo,DiasEstoque,PedidosPendentes,CompraSugerida,CompraAutorizada,")
+          .Append("PrecoCompra,FatorEmbalagem,Falteiro\n");
+
+        Linha(sb, SkuOrcamentoAlta, "A", demandaDia: 6m, estoqueSaldo: 10m, compraAutorizada: 20m, precoCompra: 3.5m);
+        Linha(sb, SkuOrcamentoBaixa, "C", demandaDia: 4m, estoqueSaldo: 5m, compraAutorizada: 15m, precoCompra: 2.0m);
+
+        return sb.ToString();
+
+        static void Linha(
+            StringBuilder sb, string sku, string curva, decimal demandaDia, decimal estoqueSaldo,
+            decimal compraAutorizada, decimal precoCompra)
+        {
+            var compraSugerida = demandaDia * diasEstoque - estoqueSaldo;
+            sb.Append(CultureInfo.InvariantCulture,
+                $"{SugestaoIdOrcamento},{LojaIdOrcamento},{sku},{curva},{demandaDia:0.0000},,{estoqueSaldo:0.000},,,,")
+              .Append(CultureInfo.InvariantCulture,
+                $"{diasEstoque},0.000,{compraSugerida:0.000},{compraAutorizada:0.000},{precoCompra:0.0000},,0\n");
         }
     }
 }

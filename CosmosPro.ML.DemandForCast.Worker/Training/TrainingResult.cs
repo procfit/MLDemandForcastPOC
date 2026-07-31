@@ -1,6 +1,22 @@
+using System.Text.Json;
 using CosmosPro.ML.DemandForCast.Forecasting.Evaluation;
 
 namespace CosmosPro.ML.DemandForCast.Worker.Training;
+
+/// <summary>
+/// Options únicas para (de)serializar <see cref="TrainingResult"/> — quem grava
+/// (<c>TreinoProcessor</c>) e quem lê (<c>ComparacaoProcessor.CarregarTreinoAsync</c>)
+/// compartilham a MESMA instância. Hoje as duas pontas convergiam só por acidente: o
+/// lado que lê usava <see cref="JsonSerializerDefaults.Web"/> (liga
+/// <c>PropertyNameCaseInsensitive</c>) enquanto quem grava não passava options nenhuma —
+/// funcionava porque a leitura é case-insensitive, não porque as duas pontas
+/// concordassem. Compartilhar a instância fecha essa coincidência: uma mudança futura em
+/// qualquer um dos dois lados não pode mais quebrar o outro sem avisar.
+/// </summary>
+internal static class TrainingResultJson
+{
+    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+}
 
 /// <summary>
 /// Resultado serializável de um treino: comparação walk-forward dos engines.

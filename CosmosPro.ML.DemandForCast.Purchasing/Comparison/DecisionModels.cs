@@ -136,6 +136,13 @@ public sealed record DecisionOptions
     /// <summary>
     /// Lead time (dias) do feature engineering de F5, igual ao da camada A. Define a
     /// observação mais recente que alimenta um dia-alvo D: <c>D - LeadTimeDias</c>.
+    ///
+    /// <para>
+    /// Mesmo acoplamento invisível de <c>ComparisonOptions.LeadTimeDias</c>: o default
+    /// (7) coincide com <c>FeatureConfig.LeadTimeDias</c> só porque nenhum dos dois foi
+    /// mudado, não porque um derive do outro. Ver a nota lá — o efeito de divergir é
+    /// recusa ruidosa da população, não corrupção silenciosa.
+    /// </para>
     /// </summary>
     public int LeadTimeDias { get; init; } = 7;
 
