@@ -21,6 +21,9 @@
     <!-- O extrator duplica o contrato de colunas do Stage; o teste de contrato
          compara os dois para que não divirjam. -->
     <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.Extractor.Tests" />
+    <!-- StageObservationLoader fala com SQL Server: só o projeto que sobe o AppHost
+         real consegue exercitar o corte de treino contra um Stage de verdade. -->
+    <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.ApiService.IntegrationTests" />
   </ItemGroup>
 
   <ItemGroup>

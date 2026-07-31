@@ -11,10 +11,16 @@ public class TrainingApiClient(HttpClient httpClient, IRedeContext redeContext)
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    public async Task<TreinoJobView?> EnqueueAsync(int maxSkus, CancellationToken ct = default)
+    /// <param name="treinoAte">
+    /// Corte de informação do treino (opcional) — ver <c>TreinoJob.TreinoAte</c>.
+    /// Nulo treina sobre todo o histórico, que é o comportamento histórico da tela.
+    /// </param>
+    public async Task<TreinoJobView?> EnqueueAsync(
+        int maxSkus, DateOnly? treinoAte = null, CancellationToken ct = default)
     {
         var redeId = await redeContext.GetRedeIdAtualAsync();
-        var resp = await httpClient.PostAsJsonAsync($"/api/training/run?redeId={redeId}", new { MaxSkus = maxSkus }, ct);
+        var resp = await httpClient.PostAsJsonAsync(
+            $"/api/training/run?redeId={redeId}", new { MaxSkus = maxSkus, TreinoAte = treinoAte }, ct);
         if (resp.StatusCode is HttpStatusCode.Accepted)
             return await resp.Content.ReadFromJsonAsync<TreinoJobView>(JsonOpts, ct);
         return null;
@@ -51,6 +57,7 @@ public sealed record TreinoJobView(
     DateTimeOffset? DataInicioProcessamento,
     DateTimeOffset? DataConclusao,
     int MaxSkus,
+    DateOnly? TreinoAte,
     long? FeaturesGeradas,
     string? ModeloBlobKey,
     string? MensagemErro,
@@ -64,7 +71,9 @@ public sealed record TrainingResult(
     int Folds,
     int TestWindowDias,
     IReadOnlyList<EngineResult> Engines,
-    string MelhorEngine);
+    string MelhorEngine,
+    DateOnly? TreinoAte = null,
+    DateOnly? UltimaDataTreinada = null);
 
 public sealed record EngineResult(
     string Engine,

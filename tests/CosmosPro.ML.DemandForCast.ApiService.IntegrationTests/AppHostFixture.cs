@@ -28,6 +28,7 @@ public sealed class AppHostFixture : IAsyncLifetime
     public IRedesApi RedesApi { get; private set; } = null!;
     public IStageApi StageApi { get; private set; } = null!;
     public IComparacoesApi ComparacoesApi { get; private set; } = null!;
+    public ITrainingApi TrainingApi { get; private set; } = null!;
 
     /// <summary>Rede semeada pela migration AddRedes — usada pelos testes que não criam rede própria.</summary>
     public const int RedeDemoId = 1;
@@ -67,6 +68,7 @@ public sealed class AppHostFixture : IAsyncLifetime
         RedesApi = RestService.For<IRedesApi>(httpClient);
         StageApi = RestService.For<IStageApi>(httpClient);
         ComparacoesApi = RestService.For<IComparacoesApi>(httpClient);
+        TrainingApi = RestService.For<ITrainingApi>(httpClient);
 
         using var healthyCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         try
@@ -191,6 +193,14 @@ public sealed class AppHostFixture : IAsyncLifetime
             $"Carga {id} não atingiu estado terminal em {limite.TotalSeconds:F0}s. " +
             "Verifique os logs do worker.");
     }
+
+    /// <summary>
+    /// Connection string do banco Stage tal como o Worker a recebe. Testes que
+    /// exercitam um loader diretamente (em vez de passar pela API) precisam dela.
+    /// </summary>
+    public async Task<string> GetStageConnectionStringAsync(CancellationToken ct = default)
+        => await App.GetConnectionStringAsync("Stage", ct)
+           ?? throw new InvalidOperationException("Recurso 'Stage' sem connection string.");
 
     public async ValueTask DisposeAsync()
     {

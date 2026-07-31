@@ -52,7 +52,10 @@ internal sealed class SimulacaoProcessor(
 
         // 2) Observações (mesmas regras do treino: top MaxSkus, ABC dinâmica, ruptura marcada).
         var loader = new StageObservationLoader(connStr, logger);
-        var observations = await loader.LoadAsync(job.RedeId, treino.MaxSkus, ct);
+        // Sem o corte do treino de propósito: a simulação precisa justamente dos dias
+        // que o modelo não viu — são a verdade contra a qual a política é medida.
+        // Aplicar `treino.TreinoAte` aqui apagaria a janela simulada.
+        var observations = await loader.LoadAsync(job.RedeId, treino.MaxSkus, treinoAte: null, ct);
         if (observations.Count == 0)
             throw new InvalidOperationException("Sem observações no Stage para simular.");
 

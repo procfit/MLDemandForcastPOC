@@ -6,6 +6,16 @@ namespace CosmosPro.ML.DemandForCast.Worker.Training;
 /// Resultado serializável de um treino: comparação walk-forward dos engines.
 /// Gravado como JSON em <c>TreinoJob.ResultadoJson</c> e renderizado pela UI.
 /// </summary>
+/// <param name="TreinoAte">
+/// Corte pedido no job (<c>null</c> = sem corte). Registrado junto ao resultado para
+/// que ler o treino baste para saber sob qual regime ele foi produzido.
+/// </param>
+/// <param name="UltimaDataTreinada">
+/// Data mais recente que de fato entrou no ajuste. É o valor honesto para
+/// <c>ComparisonItem.ModeloTreinadoAte</c>: com corte é no máximo o dia anterior a
+/// ele, e sem corte é o fim do histórico importado — em nenhum dos casos dá para
+/// deduzi-lo de <paramref name="TreinoAte"/>.
+/// </param>
 public sealed record TrainingResult(
     DateTimeOffset GeradoEm,
     int SkusUsados,
@@ -14,7 +24,9 @@ public sealed record TrainingResult(
     int Folds,
     int TestWindowDias,
     IReadOnlyList<EngineResult> Engines,
-    string MelhorEngine);
+    string MelhorEngine,
+    DateOnly? TreinoAte = null,
+    DateOnly? UltimaDataTreinada = null);
 
 public sealed record EngineResult(
     string Engine,

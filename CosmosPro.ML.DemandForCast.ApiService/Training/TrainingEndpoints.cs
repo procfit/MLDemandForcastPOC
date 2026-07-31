@@ -49,11 +49,14 @@ internal static class TrainingEndpoints
             Status = TreinoStatus.Pendente,
             DataAgendamento = DateTimeOffset.UtcNow,
             MaxSkus = maxSkus,
+            TreinoAte = req?.TreinoAte,
         };
         db.TreinoJobs.Add(job);
         await db.SaveChangesAsync(ct);
 
-        logger.LogInformation("Treino {Id} enfileirado (maxSkus={MaxSkus}).", job.Id, maxSkus);
+        logger.LogInformation(
+            "Treino {Id} enfileirado (maxSkus={MaxSkus}, treinoAte={TreinoAte}).",
+            job.Id, maxSkus, job.TreinoAte?.ToString("yyyy-MM-dd") ?? "sem corte");
         return Results.Accepted($"/api/training/{job.Id}", ToView(job));
     }
 
@@ -68,7 +71,7 @@ internal static class TrainingEndpoints
             // ResultadoJson pode ser grande — não traz na listagem.
             .Select(j => new TreinoJobView(
                 j.Id, j.Status.ToString(), j.DataAgendamento, j.DataInicioProcessamento,
-                j.DataConclusao, j.MaxSkus, j.FeaturesGeradas, j.ModeloBlobKey, j.MensagemErro, null))
+                j.DataConclusao, j.MaxSkus, j.TreinoAte, j.FeaturesGeradas, j.ModeloBlobKey, j.MensagemErro, null))
             .ToListAsync(ct);
         return Results.Ok(jobs);
     }
@@ -81,10 +84,16 @@ internal static class TrainingEndpoints
 
     private static TreinoJobView ToView(TreinoJob j) => new(
         j.Id, j.Status.ToString(), j.DataAgendamento, j.DataInicioProcessamento,
-        j.DataConclusao, j.MaxSkus, j.FeaturesGeradas, j.ModeloBlobKey, j.MensagemErro, j.ResultadoJson);
+        j.DataConclusao, j.MaxSkus, j.TreinoAte, j.FeaturesGeradas, j.ModeloBlobKey,
+        j.MensagemErro, j.ResultadoJson);
 }
 
-internal sealed record EnqueueTrainingRequest(int? MaxSkus);
+/// <param name="TreinoAte">
+/// Corte de informação do treino — ver <see cref="TreinoJob.TreinoAte"/>. Opcional:
+/// omitir mantém o comportamento de treinar sobre todo o histórico. Quem for comparar
+/// contra o ERP precisa informá-lo, sob pena de treinar sobre o próprio gabarito.
+/// </param>
+internal sealed record EnqueueTrainingRequest(int? MaxSkus, DateOnly? TreinoAte = null);
 
 internal sealed record TreinoJobView(
     Guid Id,
@@ -93,6 +102,7 @@ internal sealed record TreinoJobView(
     DateTimeOffset? DataInicioProcessamento,
     DateTimeOffset? DataConclusao,
     int MaxSkus,
+    DateOnly? TreinoAte,
     long? FeaturesGeradas,
     string? ModeloBlobKey,
     string? MensagemErro,

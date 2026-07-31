@@ -13,31 +13,42 @@ namespace CosmosPro.ML.DemandForCast.Worker.Training;
 /// Limita aos <c>maxSkus</c> SKUs de maior volume — o backtest retreina o LightGBM
 /// a cada fold, então o número de SKUs domina o tempo de treino. Decisão de POC.
 /// </para>
+///
+/// <para>
+/// <b>Corte de informação:</b> com <c>treinoAte</c> definido, nenhuma consulta com
+/// eixo temporal pode alcançar essa data ou depois dela — ver
+/// <see cref="Engine.Entities.TreinoJob.TreinoAte"/>. Ao acrescentar uma fonte
+/// nova aqui, decida explicitamente se ela é datada (filtra) ou atemporal (não
+/// filtra); esquecer o filtro reintroduz o vazamento sem nenhum sintoma visível.
+/// </para>
 /// </summary>
 internal sealed class StageObservationLoader(string connectionString, ILogger logger)
 {
-    public async Task<IReadOnlyList<DailyObservation>> LoadAsync(int redeId, int maxSkus, CancellationToken ct)
+    public async Task<IReadOnlyList<DailyObservation>> LoadAsync(
+        int redeId, int maxSkus, DateOnly? treinoAte, CancellationToken ct)
     {
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(ct);
 
-        var (selectedSkus, abcBySku) = await SelectTopSkusAndAbcAsync(conn, redeId, maxSkus, ct);
+        var (selectedSkus, abcBySku) = await SelectTopSkusAndAbcAsync(conn, redeId, maxSkus, treinoAte, ct);
         if (selectedSkus.Count == 0)
         {
             logger.LogWarning("Stage da rede {RedeId} não tem vendas — nada a treinar.", redeId);
             return [];
         }
-        logger.LogInformation("Treino da rede {RedeId} sobre {N} SKUs (top por volume).", redeId, selectedSkus.Count);
+        logger.LogInformation(
+            "Treino da rede {RedeId} sobre {N} SKUs (top por volume), corte {Corte}.",
+            redeId, selectedSkus.Count, treinoAte?.ToString("yyyy-MM-dd") ?? "nenhum");
 
         var produtos = await LoadProdutosAsync(conn, redeId, ct);
         var lojas = await LoadLojasAsync(conn, redeId, ct);
-        var promosBySku = await LoadPromocoesAsync(conn, redeId, ct);
+        var promosBySku = await LoadPromocoesAsync(conn, redeId, treinoAte, ct);
 
         // Acumulador mutável por (Sku, LojaId, Data).
         var acc = new Dictionary<(string Sku, int Loja, DateOnly Data), Mutable>();
 
-        await ReadVendasAsync(conn, redeId, selectedSkus, acc, ct);
-        await MarkRupturasAsync(conn, redeId, selectedSkus, acc, ct);
+        await ReadVendasAsync(conn, redeId, selectedSkus, treinoAte, acc, ct);
+        await MarkRupturasAsync(conn, redeId, selectedSkus, treinoAte, acc, ct);
 
         // Materializa as observações, aplicando promoção e atributos estáticos.
         var result = new List<DailyObservation>(acc.Count);
@@ -79,17 +90,24 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     /// <remarks>
     /// O ranking é <b>por rede</b>. Sem o filtro, a rede maior monopolizaria o corte
     /// de <c>maxSkus</c> e a menor treinaria com quase nada.
+    ///
+    /// <para>
+    /// Respeita <paramref name="treinoAte"/>: tanto a seleção dos SKUs quanto a classe
+    /// ABC saem de uma soma sobre a variável-alvo. Somar o período inteiro vazaria o
+    /// futuro duas vezes — escolheria os SKUs sabendo quais venderiam, e a ClasseAbc,
+    /// que entra como feature, carregaria o volume de depois do corte.
+    /// </para>
     /// </remarks>
     private static async Task<(HashSet<string> Skus, Dictionary<string, string> Abc)> SelectTopSkusAndAbcAsync(
-        SqlConnection conn, int redeId, int maxSkus, CancellationToken ct)
+        SqlConnection conn, int redeId, int maxSkus, DateOnly? treinoAte, CancellationToken ct)
     {
         var totals = new List<(string Sku, decimal Vol)>();
         await using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = @"
+            cmd.CommandText = $@"
                 SELECT Sku, SUM(Quantidade) AS Vol
                 FROM dbo.Vendas
-                WHERE RedeId = @redeId
+                WHERE RedeId = @redeId {CorteData("Data", treinoAte, cmd)}
                 GROUP BY Sku ORDER BY Vol DESC";
             cmd.Parameters.AddWithValue("@redeId", redeId);
             cmd.CommandTimeout = 300;
@@ -113,15 +131,16 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         return (selected, abc);
     }
 
+    /// <remarks>A variável-alvo. É o vazamento que o corte existe para impedir.</remarks>
     private static async Task ReadVendasAsync(
-        SqlConnection conn, int redeId, HashSet<string> skus,
+        SqlConnection conn, int redeId, HashSet<string> skus, DateOnly? treinoAte,
         Dictionary<(string, int, DateOnly), Mutable> acc, CancellationToken ct)
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $@"
             SELECT Data, LojaId, Sku, Quantidade, PrecoUnitario
             FROM dbo.Vendas
-            WHERE RedeId = @redeId AND Sku IN ({InClause(skus, cmd)})";
+            WHERE RedeId = @redeId AND Sku IN ({InClause(skus, cmd)}) {CorteData("Data", treinoAte, cmd)}";
         cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.CommandTimeout = 600;
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -137,8 +156,13 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         }
     }
 
+    /// <remarks>
+    /// Datada e materializante: uma ruptura sem venda correspondente <b>cria</b> a
+    /// observação. Sem o corte, um dia posterior a ele entraria na série mesmo com
+    /// Vendas já filtrada.
+    /// </remarks>
     private static async Task MarkRupturasAsync(
-        SqlConnection conn, int redeId, HashSet<string> skus,
+        SqlConnection conn, int redeId, HashSet<string> skus, DateOnly? treinoAte,
         Dictionary<(string, int, DateOnly), Mutable> acc, CancellationToken ct)
     {
         // Dias com estoque <= 0 são ruptura. Podem não ter linha em Vendas (não
@@ -148,7 +172,8 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         cmd.CommandText = $@"
             SELECT Data, LojaId, Sku
             FROM dbo.EstoquesDiarios
-            WHERE RedeId = @redeId AND QuantidadeEmEstoque <= 0 AND Sku IN ({InClause(skus, cmd)})";
+            WHERE RedeId = @redeId AND QuantidadeEmEstoque <= 0
+              AND Sku IN ({InClause(skus, cmd)}) {CorteData("Data", treinoAte, cmd)}";
         cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.CommandTimeout = 600;
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -160,6 +185,12 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         }
     }
 
+    /// <remarks>
+    /// <b>Sem corte, deliberadamente.</b> Categoria e princípio ativo são atributos de
+    /// cadastro sem eixo temporal — a tabela não tem coluna de data e não há
+    /// historização de versões. Não há o que filtrar: um produto conhecido hoje
+    /// descreve o mesmo produto de um ano atrás.
+    /// </remarks>
     private static async Task<Dictionary<string, (string? Categoria, string? PrincipioAtivo)>> LoadProdutosAsync(
         SqlConnection conn, int redeId, CancellationToken ct)
     {
@@ -173,6 +204,13 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         return d;
     }
 
+    /// <remarks>
+    /// <b>Sem corte, deliberadamente.</b> UF, região e perfil são geografia da loja,
+    /// não evento datado. A tabela tem <c>DataAbertura</c>, mas nenhuma das colunas
+    /// lidas aqui depende dela, e uma loja aberta depois do corte não vira observação:
+    /// só entram no dicionário lojas que já aparecem em Vendas/EstoquesDiarios, ambas
+    /// já cortadas.
+    /// </remarks>
     private static async Task<Dictionary<int, (string? UF, string? Regiao, string? Perfil)>> LoadLojasAsync(
         SqlConnection conn, int redeId, CancellationToken ct)
     {
@@ -189,12 +227,23 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         return d;
     }
 
+    /// <remarks>
+    /// Cortada por <c>DataInicio</c>: uma promoção que ainda não começou no corte não
+    /// é informação disponível naquele instante. O filtro é redundante na aritmética
+    /// atual — <see cref="IsEmPromocao"/> só casa datas dentro do intervalo, e toda
+    /// observação já é anterior ao corte —, mas a invariante fica local ao SQL em vez
+    /// de depender de como o consumidor a usa. Campanhas iniciadas antes do corte
+    /// permanecem, inclusive as que terminam depois: só afetam dias anteriores a ele.
+    /// </remarks>
     private static async Task<Dictionary<string, List<(DateOnly Ini, DateOnly Fim, int? Loja)>>> LoadPromocoesAsync(
-        SqlConnection conn, int redeId, CancellationToken ct)
+        SqlConnection conn, int redeId, DateOnly? treinoAte, CancellationToken ct)
     {
         var d = new Dictionary<string, List<(DateOnly, DateOnly, int?)>>(StringComparer.OrdinalIgnoreCase);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT DataInicio, DataFim, Sku, LojaId FROM dbo.Promocoes WHERE RedeId = @redeId";
+        cmd.CommandText = $@"
+            SELECT DataInicio, DataFim, Sku, LojaId
+            FROM dbo.Promocoes
+            WHERE RedeId = @redeId {CorteData("DataInicio", treinoAte, cmd)}";
         cmd.Parameters.AddWithValue("@redeId", redeId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
@@ -220,6 +269,17 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Devolve o predicado de corte para a coluna de data indicada, ou string vazia
+    /// quando não há corte. Estritamente menor: o dia do corte já é futuro.
+    /// </summary>
+    private static string CorteData(string coluna, DateOnly? treinoAte, SqlCommand cmd)
+    {
+        if (treinoAte is not { } corte) return "";
+        cmd.Parameters.AddWithValue("@treinoAte", corte);
+        return $"AND {coluna} < @treinoAte";
     }
 
     /// <summary>Monta um IN (@s0, @s1, ...) parametrizado e adiciona os parâmetros ao comando.</summary>

@@ -37,9 +37,15 @@ internal sealed class TreinoProcessor(
             ?? throw new InvalidOperationException("Connection string 'Stage' não encontrada.");
 
         var loader = new StageObservationLoader(connStr, logger);
-        var observations = await loader.LoadAsync(job.RedeId, job.MaxSkus, ct);
+        var observations = await loader.LoadAsync(job.RedeId, job.MaxSkus, job.TreinoAte, ct);
         if (observations.Count == 0)
             throw new InvalidOperationException("Sem observações no Stage. Importe dados antes de treinar.");
+
+        // Data efetivamente mais recente que entrou no ajuste. Com corte, é no máximo
+        // o dia anterior a ele; sem corte, é o fim do histórico importado. É este o
+        // valor que a comparação declara como ModeloTreinadoAte — derivar do corte
+        // pedido seria adivinhar, porque o Stage pode simplesmente parar antes.
+        var ultimaDataTreinada = observations.Max(o => o.Data);
 
         var features = new FeatureBuilder().Build(observations).ToList();
         logger.LogInformation("{N} features geradas.", features.Count);
@@ -85,7 +91,9 @@ internal sealed class TreinoProcessor(
             Folds: Backtest.NumberOfFolds,
             TestWindowDias: Backtest.TestWindowDays,
             Engines: engineResults,
-            MelhorEngine: melhor);
+            MelhorEngine: melhor,
+            TreinoAte: job.TreinoAte,
+            UltimaDataTreinada: ultimaDataTreinada);
 
         var json = JsonSerializer.Serialize(result);
         return new Outcome(blobKey, json, features.Count);
