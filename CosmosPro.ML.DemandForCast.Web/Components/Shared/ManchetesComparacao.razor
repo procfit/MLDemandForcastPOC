@@ -130,6 +130,22 @@
                             sugestão inteira, e somar populações diferentes lado a lado favoreceria quem foi medido
                             em menos itens.
                         </RadzenText>
+
+                        @if (Resultado.ValoresSubestimados)
+                        {
+                            @* Mesmo defeito do lado do PBS: itens sem preço de compra entram com zero em
+                               reais nos dois braços (SessaoResultadoMontador.Valor), então o valor do ML
+                               e o "compare com" logo acima estão subestimados na mesma proporção — e este
+                               ramo não depende de Resultado.Pbs existir, então a ressalva não some quando
+                               o bloco do PBS falha em ler. *@
+                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                <strong>Estes valores em reais também estão incompletos.</strong>
+                                @Resultado.ItensSemPrecoCompra.ToString("N0") item(ns) desta sugestão não têm preço
+                                de compra cadastrado, então as unidades deles entram na conta e o dinheiro, não —
+                                nos dois métodos. Os totais reais são maiores que os mostrados acima. Para fechar a
+                                conta, cadastre o preço de compra desses itens no ERP e envie os dados de novo.
+                            </RadzenText>
+                        }
                     }
                     else
                     {

@@ -4,6 +4,7 @@
    Nenhuma célula do braço de ML pode virar traço ou zero quando o valor é nulo: nulo é
    "não foi possível calcular" e zero é "o ML mandaria não comprar nada". *@
 @inject ComparacoesApiClient ComparacoesApi
+@inject ILogger<TabelaItensComparacao> Logger
 
 <RadzenStack Gap="0.75rem">
     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
@@ -144,6 +145,15 @@
     /// </summary>
     private const string SemCalculoDoMl = "sem cálculo do ML";
 
+    /// <summary>
+    /// Texto para o comprador no lugar de <c>ex.Message</c> — a mensagem técnica ("Response
+    /// status code does not indicate success…") não diz nada a quem não programa, e vai só
+    /// para o log.
+    /// </summary>
+    private const string ErroDeLeituraParaOComprador =
+        "Não deu para buscar esta página de itens agora. Tente novamente em alguns instantes; " +
+        "se continuar acontecendo, procure o suporte.";
+
     private RadzenDataGrid<SessaoItem> _grid = null!;
     private IReadOnlyList<SessaoItem> _itens = [];
     private int _total;
@@ -195,8 +205,9 @@
         }
         catch (Exception ex)
         {
+            Logger.LogError(ex, "Falha ao buscar itens da sessao {SessaoId}", SessaoId);
             _itens = [];
-            _erro = ex.Message;
+            _erro = ErroDeLeituraParaOComprador;
         }
         finally
         {

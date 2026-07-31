@@ -93,10 +93,10 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         corpo.Should().Contain("Dinheiro parado na prateleira no fim do período");
         corpo.Should().Contain("2 item(ns) desta sugestão foram acompanhados");
         corpo.Should().Contain("Faltou produto na prateleira em 3 dia(s)");
-        // Sem o percentual na asserção: a aplicação não fixa cultura, e "P0" sai "8%" ou
-        // "8 %" conforme a máquina. O que está sob prova é a presença da ressalva.
-        corpo.Should().Contain("Só temos a posição de estoque de",
-            "zero dia zerado sem snapshot é 'não sabemos', não 'não faltou'");
+        // Program.cs fixa pt-BR (CultureInfo.DefaultThreadCurrentCulture), então "P0" para
+        // 5/60 sempre sai "8%" — sem o fixador isto oscilaria com a cultura do host.
+        corpo.Should().Contain("Só temos a posição de estoque de 8% dos dias do período",
+            "zero dia zerado sem snapshot é 'não sabemos', não 'não faltou', e a cultura da tela é pt-BR fixo");
     }
 
     /// <summary>

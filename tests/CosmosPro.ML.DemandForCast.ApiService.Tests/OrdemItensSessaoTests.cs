@@ -19,7 +19,6 @@ public sealed class OrdemItensSessaoTests
     [InlineData(null)]
     public void Coluna_fora_da_whitelist_e_recusada_e_cai_no_padrao(string? pedida)
     {
-        OrdemItensSessao.Aceita(pedida).Should().BeFalse();
         OrdemItensSessao.Resolver(pedida).Should().Be(OrdemItensSessao.Padrao,
             "coluna desconhecida ordena pelo padrão declarado, e nunca pelo texto recebido");
     }
@@ -42,7 +41,6 @@ public sealed class OrdemItensSessaoTests
     [InlineData("NomeProduto", "NomeProduto")]
     public void Coluna_da_whitelist_e_resolvida_para_o_nome_canonico(string pedida, string esperada)
     {
-        OrdemItensSessao.Aceita(pedida).Should().BeTrue();
         OrdemItensSessao.Resolver(pedida).Should().Be(esperada,
             "o nome que volta na resposta é o canônico, não o que o cliente digitou");
     }
@@ -110,20 +108,37 @@ public sealed class OrdemItensSessaoTests
     private static readonly IComparer<object?> ComparadorDeValores =
         Comparer<object?>.Create((a, b) => Comparer<object>.Default.Compare(a!, b!));
 
+    /// <summary>
+    /// As cinco linhas não podem ser co-monotônicas entre si: se toda coluna crescesse junto
+    /// com <c>SobraPbsUnidades</c> (o padrão para onde qualquer coluna esquecida no
+    /// <c>switch</c> de <see cref="OrdemItensSessao.Aplicar"/> cai), o desempate silencioso
+    /// passaria despercebido — a ordem por padrão já responderia certo por acidente. Aqui cada
+    /// coluna segue uma permutação (rank 3,1,5,2,4 sobre os 5 itens, na ordem de criação) que
+    /// diverge da ordem por <c>SobraPbsUnidades</c>: remover qualquer branch do switch faz a
+    /// coluna cair no padrão e a asserção de ordem crescente/decrescente falhar.
+    /// </summary>
     private static List<ComparacaoSessaoItem> Amostra() =>
     [
-        Item(loja: 1, sku: "AAA", sobra: 5m, curva: "A", nome: "Alfa",
-            compraMl: 1m, sobraMl: 1m, sobraValor: 1m, sobraMlValor: 1m,
-            demandaMl: 1m, demandaReal: 1m, demandaPbs: 1m,
-            comprado: 1m, vendido: 1m, alemDoHistorico: false),
-        Item(loja: 2, sku: "BBB", sobra: 15m, curva: "B", nome: "Beta",
-            compraMl: 2m, sobraMl: 2m, sobraValor: 2m, sobraMlValor: 2m,
-            demandaMl: 2m, demandaReal: 2m, demandaPbs: 2m,
-            comprado: 2m, vendido: 2m, alemDoHistorico: true),
-        Item(loja: 3, sku: "CCC", sobra: 25m, curva: "C", nome: "Gama",
-            compraMl: 3m, sobraMl: 3m, sobraValor: 3m, sobraMlValor: 3m,
-            demandaMl: 3m, demandaReal: 3m, demandaPbs: 3m,
-            comprado: 3m, vendido: 3m, alemDoHistorico: true),
+        Item(loja: 30, sku: "CCC", sobra: 10m, curva: "C", nome: "Delta",
+            compraMl: 21m, sobraMl: 27m, sobraValor: 57m, sobraMlValor: 69m,
+            demandaMl: 39m, demandaReal: 51m, demandaPbs: 9m,
+            comprado: 300m, vendido: 33m, alemDoHistorico: true),
+        Item(loja: 10, sku: "AAA", sobra: 20m, curva: "A", nome: "Alfa",
+            compraMl: 7m, sobraMl: 9m, sobraValor: 19m, sobraMlValor: 23m,
+            demandaMl: 13m, demandaReal: 17m, demandaPbs: 3m,
+            comprado: 100m, vendido: 11m, alemDoHistorico: false),
+        Item(loja: 50, sku: "EEE", sobra: 30m, curva: "E", nome: "Gama",
+            compraMl: 35m, sobraMl: 45m, sobraValor: 95m, sobraMlValor: 115m,
+            demandaMl: 65m, demandaReal: 85m, demandaPbs: 15m,
+            comprado: 500m, vendido: 55m, alemDoHistorico: true),
+        Item(loja: 20, sku: "BBB", sobra: 40m, curva: "B", nome: "Beta",
+            compraMl: 14m, sobraMl: 18m, sobraValor: 38m, sobraMlValor: 46m,
+            demandaMl: 26m, demandaReal: 34m, demandaPbs: 6m,
+            comprado: 200m, vendido: 22m, alemDoHistorico: false),
+        Item(loja: 40, sku: "DDD", sobra: 50m, curva: "D", nome: "Epsilon",
+            compraMl: 28m, sobraMl: 36m, sobraValor: 76m, sobraMlValor: 92m,
+            demandaMl: 52m, demandaReal: 68m, demandaPbs: 12m,
+            comprado: 400m, vendido: 44m, alemDoHistorico: true),
     ];
 
     private static ComparacaoSessaoItem Item(

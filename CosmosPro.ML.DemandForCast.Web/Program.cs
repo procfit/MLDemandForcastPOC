@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
 using CosmosPro.ML.DemandForCast.Web;
@@ -5,6 +7,14 @@ using CosmosPro.ML.DemandForCast.Web.Components;
 using CosmosPro.ML.DemandForCast.Web.Services;
 using Microsoft.AspNetCore.Identity;
 using Radzen;
+
+// Esta tela mostra dinheiro para um comprador brasileiro (N2/N0/P0 sem cultura
+// explícita seguem a cultura ambiente do host). Um host de container com
+// globalização invariante formataria R$ 1.234,50 como R$ 1,234.50 — erro de três
+// ordens de grandeza para quem lê. Fixado uma vez aqui em vez de em cada call site.
+var culturaPadrao = new CultureInfo("pt-BR");
+CultureInfo.DefaultThreadCurrentCulture = culturaPadrao;
+CultureInfo.DefaultThreadCurrentUICulture = culturaPadrao;
 
 var builder = WebApplication.CreateBuilder(args);
 

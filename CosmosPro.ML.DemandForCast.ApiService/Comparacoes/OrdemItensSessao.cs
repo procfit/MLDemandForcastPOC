@@ -44,10 +44,6 @@ internal static class OrdemItensSessao
         nameof(ComparacaoSessaoItem.JanelaAlemDoHistorico),
     ];
 
-    /// <summary>Se a coluna pedida está na whitelist. Ausente e desconhecida são o mesmo: não.</summary>
-    public static bool Aceita(string? pedida) =>
-        pedida is not null && Colunas.Any(c => c.Equals(pedida, StringComparison.OrdinalIgnoreCase));
-
     /// <summary>
     /// Nome canônico da coluna a aplicar. Coluna fora da whitelist cai em
     /// <see cref="Padrao"/>, e quem chama devolve este nome na resposta — sem isso a tela

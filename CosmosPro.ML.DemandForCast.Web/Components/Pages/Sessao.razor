@@ -47,6 +47,16 @@
             </RadzenText>
         }
 
+        @if (_erroCarregamento is not null)
+        {
+            @* _sessao não é nulo aqui (esse caso já saiu pelo ramo de cima), então uma
+               falha de atualização — por exemplo em GetAnaliseAsync — não pode ficar muda só
+               porque a página ainda tem dados antigos para mostrar. *@
+            <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">
+                Nem tudo nesta página pôde ser atualizado agora: @_erroCarregamento
+            </RadzenAlert>
+        }
+
         @if (_sessao.Status == "Inviavel")
         {
             <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">
@@ -171,7 +181,15 @@
             if (!ReferenceEquals(json, _resultadoJsonLido))
             {
                 _resultadoJsonLido = json;
-                _resultado = ComparacoesApiClient.ParseResultado(json);
+                var lido = ComparacoesApiClient.ParseResultado(json);
+
+                // Payload antigo pode não ter gravado SkusSemCadastro dentro do
+                // ResultadoJson; GET /{id} projeta o mesmo número à parte
+                // (SessaoView.SkusSemCadastro), e sem este fallback o aviso "N itens sem
+                // cadastro" sumiria da manchete em silêncio para uma sessão que o tem.
+                _resultado = lido is not null && lido.SkusSemCadastro is null && _sessao?.SkusSemCadastro is { } n
+                    ? lido with { SkusSemCadastro = n }
+                    : lido;
             }
             return _resultado;
         }
