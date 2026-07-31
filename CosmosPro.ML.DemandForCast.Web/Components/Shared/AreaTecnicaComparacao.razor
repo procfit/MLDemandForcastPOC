@@ -1,0 +1,198 @@
+@* Área técnica desta sessão: previsão contra previsão, com o mesmo desenho do drill-down
+   da tela do comparativo (F13) — tabela por dimensão, com a marca de onde o ML perde. *@
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">
+            Previsão de venda: o seu ERP contra o ML
+        </RadzenText>
+        <HelpTip Text="@TipUnidade" />
+    </RadzenStack>
+
+    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+        Esta parte não depende da quantidade a comprar: ela compara a <strong>venda diária prevista</strong> por
+        cada método contra a venda que de fato aconteceu, item por item. É o que continua medível quando a
+        cobertura da compra é longa demais para o ML calcular quanto comprar.
+    </RadzenText>
+
+    @if (Analise is null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+            Não foi possível ler o detalhe desta comparação, então nenhuma métrica é exibida. Ausência de
+            resposta não é resultado zero.
+        </RadzenAlert>
+    }
+    else if (Analise.ItensComPrevisaoMl == 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+            Nenhum item desta sugestão recebeu previsão do ML <b>e</b> venda real apurada no mesmo período, então
+            não há par a pontuar. Isto não é empate entre os dois métodos: é ausência de medida.
+        </RadzenAlert>
+    }
+    else
+    {
+        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+            Apurado sobre @Analise.ItensComPrevisaoMl.ToString("N0") de @Analise.Itens.ToString("N0") item(ns) da
+            sugestão. Os demais ficaram fora por não terem série completa no período, por não caberem no
+            orçamento de SKUs do treino, ou por a janela avançar além do histórico importado — o subconjunto é
+            este, e as métricas abaixo não falam da população inteira.
+        </RadzenText>
+
+        <RadzenDataGrid TItem="BracoLinha" Data="@Bracos(Analise.Global)" AllowPaging="false" Density="Density.Compact">
+            <Columns>
+                <RadzenDataGridColumn TItem="BracoLinha" Property="Nome" Title="Método">
+                    <Template Context="b"><strong>@b.Nome</strong></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="BracoLinha" Title="WAPE" Width="130px" TextAlign="TextAlign.Right">
+                    <HeaderTemplate><span>WAPE</span><HelpTip Text="@TipWape" Size="0.85rem" /></HeaderTemplate>
+                    <Template Context="b">@Pct(b.Wape)</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="BracoLinha" Title="MAE (un./dia)" Width="150px" TextAlign="TextAlign.Right">
+                    <HeaderTemplate><span>MAE (un./dia)</span><HelpTip Text="@TipMae" Size="0.85rem" /></HeaderTemplate>
+                    <Template Context="b">@Num(b.Mae)</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="BracoLinha" Title="Itens" Width="110px" TextAlign="TextAlign.Right">
+                    <Template Context="b">@b.N.ToString("N0")</Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+
+        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+            Item a item: o ML ficou mais perto em @Analise.VitoriasMl.ToString("N0"), o seu ERP em
+            @Analise.VitoriasPbs.ToString("N0"), com @Analise.Empates.ToString("N0") empate(s) em
+            @Analise.ItensComPrevisaoMl.ToString("N0") item(ns). Empate conta no total e nunca como vitória.
+        </RadzenText>
+
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Abertura por curva e por loja</RadzenText>
+            <HelpTip Text="@TipRegressao" />
+        </RadzenStack>
+
+        <RadzenTabs RenderMode="TabRenderMode.Client">
+            <Tabs>
+                @foreach (var dimensao in Dimensoes(Analise))
+                {
+                    var fatias = dimensao.Fatias;
+                    var regressoes = fatias.Count(f => f.MlPerde);
+
+                    <RadzenTabsItem Text="@($"{dimensao.Rotulo} ({fatias.Count})")">
+                        @if (fatias.Count == 0)
+                        {
+                            <RadzenText TextStyle="TextStyle.Body2" Style="color: var(--rz-text-secondary-color)">
+                                Sem dados nesta abertura.
+                            </RadzenText>
+                        }
+                        else
+                        {
+                            @if (regressoes > 0)
+                            {
+                                <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Style="margin-bottom: 0.5rem">
+                                    <RadzenIcon Icon="warning" Style="margin-right: 0.25rem; vertical-align: middle;" />
+                                    @regressoes de @fatias.Count grupo(s) com o ML errando MAIS que o seu ERP
+                                    @(Analise.Global.MlPerde ? "." : " — e o resultado do conjunto todo favorece o ML. A média está escondendo estes grupos.")
+                                </RadzenAlert>
+                            }
+                            <RadzenDataGrid TItem="SessaoFatia" Data="@fatias" AllowPaging="true" PageSize="10" AllowSorting="true" Density="Density.Compact">
+                                <Columns>
+                                    <RadzenDataGridColumn TItem="SessaoFatia" Property="Chave" Title="@dimensao.Rotulo" />
+                                    <RadzenDataGridColumn TItem="SessaoFatia" Property="Itens" Title="Itens" Width="100px" TextAlign="TextAlign.Right">
+                                        <Template Context="f">@f.Itens.ToString("N0")</Template>
+                                    </RadzenDataGridColumn>
+                                    <RadzenDataGridColumn TItem="SessaoFatia" Property="ItensComPrevisaoMl" Title="Medidos" Width="110px" TextAlign="TextAlign.Right">
+                                        <Template Context="f">@f.ItensComPrevisaoMl.ToString("N0")</Template>
+                                    </RadzenDataGridColumn>
+                                    <RadzenDataGridColumn TItem="SessaoFatia" Title="WAPE do PBS" Width="140px" TextAlign="TextAlign.Right" Sortable="false">
+                                        <Template Context="f">@Pct(f.WapePbs)</Template>
+                                    </RadzenDataGridColumn>
+                                    <RadzenDataGridColumn TItem="SessaoFatia" Title="WAPE do ML" Width="140px" TextAlign="TextAlign.Right" Sortable="false">
+                                        <Template Context="f">@Pct(f.WapeMl)</Template>
+                                    </RadzenDataGridColumn>
+                                    <RadzenDataGridColumn TItem="SessaoFatia" Title="Placar (ML × PBS)" Width="160px" Sortable="false">
+                                        <Template Context="f">@f.VitoriasMl × @f.VitoriasPbs</Template>
+                                    </RadzenDataGridColumn>
+                                    <RadzenDataGridColumn TItem="SessaoFatia" Title="ML perde aqui?" Width="150px" Sortable="false">
+                                        <Template Context="f">
+                                            @if (f.MlPerde)
+                                            {
+                                                <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger); vertical-align: middle;" />
+                                                <span style="color: var(--rz-danger); margin-left: 0.25rem;">sim</span>
+                                            }
+                                        </Template>
+                                    </RadzenDataGridColumn>
+                                </Columns>
+                            </RadzenDataGrid>
+                        }
+                    </RadzenTabsItem>
+                }
+            </Tabs>
+        </RadzenTabs>
+    }
+
+    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        <strong>Venda perdida em reais não é exibida em lugar nenhum desta tela.</strong>
+        <div style="margin-top: 0.35rem">
+            Ela seria uma <b>estimativa</b>, não uma medida: onde faltou produto ninguém sabe quanto teria
+            vendido, e o número sairia do mesmo tipo de modelo de demanda que produziu a decisão de compra. Sob
+            essa premissa, o método que prevê mais alto compra mais, fica com menos falta e aparece com menos
+            venda perdida — sem ter previsto melhor em nada. O que esta tela mostra é o que sobrou, que é
+            observável: unidades em prateleira e o custo de compra delas.
+        </div>
+    </RadzenAlert>
+
+    @if (Resultado is not null)
+    {
+        <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+            Resultado gerado em @Resultado.GeradoEm.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ·
+            execução de comparação @Resultado.ComparacaoPbsId.ToString()[..8] ·
+            método de cálculo do ERP @Resultado.TipoCalculo ·
+            @Resultado.ItensAvaliados.ToString("N0") item(ns) avaliado(s) ·
+            @Resultado.ItensComDecisaoMl.ToString("N0") com quantidade calculada pelo ML ·
+            @Resultado.ItensComPrevisaoMl.ToString("N0") com previsão do ML
+            @if (!string.IsNullOrWhiteSpace(Resultado.UtilidadeDecisaoMl))
+            {
+                <text> · estado da comparação de compra: @Resultado.UtilidadeDecisaoMl</text>
+            }
+        </RadzenText>
+    }
+</RadzenStack>
+
+@code {
+    [Parameter] public SessaoAnalise? Analise { get; set; }
+
+    [Parameter] public SessaoResultadoView? Resultado { get; set; }
+
+    private const string TipUnidade =
+        "Um ponto de erro por item (loja, SKU), em unidades por dia sobre o período que a compra deveria " +
+        "cobrir. NÃO é comparável com o MAE/RMSE do backtest de treinamento, que usa um ponto por dia: " +
+        "promediar o período encolhe a variância e reduz o MAE do mesmo modelo.";
+    private const string TipWape =
+        "WAPE: soma dos erros absolutos dividida pela soma da venda real. Menor é melhor. Mais robusta que " +
+        "MAPE em item de giro baixo ou zero, comum em farma.";
+    private const string TipMae =
+        "MAE: erro médio em unidades por dia. Fácil de ler, mas não comparável entre itens de giro muito " +
+        "diferente — para isso, olhe o WAPE.";
+    private const string TipRegressao =
+        "Média global esconde regressão local (CLAUDE.md §6). Os grupos marcados são aqueles em que o ML erra " +
+        "mais que o ERP, inclusive quando o resultado do conjunto favorece o ML.";
+
+    private sealed record BracoLinha(string Nome, double? Wape, double? Mae, int N);
+
+    private static IReadOnlyList<BracoLinha> Bracos(SessaoFatia global) =>
+    [
+        new("Seu ERP (PBS)", global.WapePbs, global.MaePbs, global.ItensComPrevisaoMl),
+        new("ML (LightGBM)", global.WapeMl, global.MaeMl, global.ItensComPrevisaoMl),
+    ];
+
+    private sealed record Dimensao(string Rotulo, IReadOnlyList<SessaoFatia> Fatias);
+
+    private static IReadOnlyList<Dimensao> Dimensoes(SessaoAnalise analise) =>
+    [
+        new("Curva do ERP", analise.PorCurva ?? []),
+        new("Loja", analise.PorLoja ?? []),
+    ];
+
+    /// <summary>Nulo vira texto, nunca traço: "—" numa métrica lê como zero.</summary>
+    private static string Pct(double? v) => v is { } d ? d.ToString("P1") : "não apurado";
+
+    private static string Num(double? v) => v is { } d ? d.ToString("N2") : "não apurado";
+}

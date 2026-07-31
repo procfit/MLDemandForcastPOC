@@ -1,0 +1,221 @@
+@* Manchete da sessão para o COMPRADOR. Duas colunas: o que aconteceu pelo ERP e o que
+   teria acontecido pelo ML. Nenhuma ressalva em tooltip aqui — quem lê não vai passar o
+   mouse para descobrir que o número está incompleto.
+
+   Venda perdida em R$ NÃO aparece nesta manchete: onde houve ruptura a demanda é estimada
+   pelo mesmo tipo de modelo que produziu a decisão, então o braço que prevê mais alto
+   compra mais e aparece com menos venda perdida sem ter previsto melhor. *@
+
+<RadzenStack Gap="1rem">
+    <RadzenCard Variant="Variant.Outlined">
+        <RadzenStack Gap="0.75rem">
+            <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">@Veredito</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                @Resultado.ItensAvaliados.ToString("N0") item(ns) desta sugestão foram acompanhados até o fim
+                do período que a compra deveria cobrir. Vendidos no período:
+                @Resultado.VendidoNaJanelaUnidades.ToString("N0") unidade(s).
+            </RadzenText>
+        </RadzenStack>
+    </RadzenCard>
+
+    @* Duas colunas com RadzenStack + flex, e não com grid do Radzen: é o arranjo que as
+       demais telas usam para cards lado a lado. *@
+    <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" AlignItems="AlignItems.Stretch" Gap="1rem">
+        <div style="flex: 1 1 340px">
+            <RadzenCard Variant="Variant.Outlined" Style="height: 100%">
+                <RadzenStack Gap="0.75rem">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenIcon Icon="receipt_long" Style="color: var(--rz-primary)" />
+                        <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">Pelo PBS</RadzenText>
+                        <RadzenBadge Text="o que você comprou de verdade" BadgeStyle="BadgeStyle.Light" IsPill="true" />
+                    </RadzenStack>
+
+                    @if (Resultado.Pbs is not { } pbs)
+                    {
+                        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                            Este resultado não trouxe os números da compra do seu ERP. Nada é exibido aqui:
+                            ausência de número não é número zero.
+                        </RadzenAlert>
+                    }
+                    else
+                    {
+                        <RadzenStack Gap="0.25rem">
+                            <RadzenText TextStyle="TextStyle.Overline" Style="margin: 0">
+                                Dinheiro parado na prateleira no fim do período
+                            </RadzenText>
+                            <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">@Reais(pbs.SobraValor)</RadzenText>
+                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                @pbs.SobraUnidades.ToString("N0") unidade(s) compradas além do que a loja vendeu,
+                                de @pbs.CompraUnidades.ToString("N0") comprada(s) no total.
+                            </RadzenText>
+                        </RadzenStack>
+
+                        @if (Resultado.ValoresSubestimados)
+                        {
+                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                <strong>Este valor em reais está incompleto.</strong>
+                                @Resultado.ItensSemPrecoCompra.ToString("N0") item(ns) desta sugestão não têm preço de
+                                compra cadastrado, então as unidades deles entram na conta e o dinheiro, não. O total
+                                real é maior que o mostrado acima. Para fechar a conta, cadastre o preço de compra
+                                desses itens no ERP e envie os dados de novo.
+                            </RadzenText>
+                        }
+
+                        @if (Resultado.Ruptura is { } ruptura)
+                        {
+                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                Faltou produto na prateleira em @ruptura.DiasSemEstoque.ToString("N0") dia(s), somando
+                                @ruptura.ItensComDiaSemEstoque.ToString("N0") item(ns) que ficaram zerados em algum dia
+                                do período.
+                                @if (Resultado.CoberturaDoSnapshot is { } cobertura && cobertura < 1)
+                                {
+                                    <text>
+                                        Só temos a posição de estoque de @cobertura.ToString("P0") dos dias do período,
+                                        então pode ter faltado produto em dias sobre os quais não sabemos nada — este
+                                        número é o mínimo, não o total.
+                                    </text>
+                                }
+                            </RadzenText>
+                        }
+                    }
+                </RadzenStack>
+            </RadzenCard>
+        </div>
+
+        <div style="flex: 1 1 340px">
+            <RadzenCard Variant="Variant.Outlined" Style="height: 100%">
+                <RadzenStack Gap="0.75rem">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenIcon Icon="psychology" Style="color: var(--rz-info)" />
+                        <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">Como teria sido pelo ML</RadzenText>
+                    </RadzenStack>
+
+                    @if (!Resultado.TemColunaMl)
+                    {
+                        @* O estado real de hoje. Nunca um traço, um zero ou uma célula vazia: os três
+                           leriam como "o ML concordou" ou "o ML mandaria não comprar nada". *@
+                        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                            <strong>@SemColunaMlManchete</strong>
+                            <div style="margin-top: 0.5rem">@Resultado.ExplicacaoSemColunaMl</div>
+                        </RadzenAlert>
+
+                        @if (Resultado.ItensComPrevisaoMl > 0)
+                        {
+                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                O que dá para comparar nesta sugestão é a <strong>previsão de venda</strong>: o ML
+                                estimou quanto sairia por dia em @Resultado.ItensComPrevisaoMl.ToString("N0") dos
+                                @Resultado.ItensAvaliados.ToString("N0") itens, e essa comparação está na área
+                                técnica, mais abaixo.
+                            </RadzenText>
+                        }
+                    }
+                    else if (Resultado.Confronto is { Ml: { } ml, Pbs: { } pbsComparavel } confronto)
+                    {
+                        <RadzenStack Gap="0.25rem">
+                            <RadzenText TextStyle="TextStyle.Overline" Style="margin: 0">
+                                Dinheiro parado na prateleira no fim do período
+                            </RadzenText>
+                            <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">@Reais(ml.SobraValor)</RadzenText>
+                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                @ml.SobraUnidades.ToString("N0") unidade(s) sobrando, de
+                                @ml.CompraUnidades.ToString("N0") que o ML teria comprado.
+                            </RadzenText>
+                        </RadzenStack>
+
+                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                            <strong>Compare com @Reais(pbsComparavel.SobraValor), não com o número da coluna ao
+                            lado.</strong> Esta comparação vale só para os
+                            @confronto.Itens.ToString("N0") item(ns) em que os dois métodos puderam ser calculados,
+                            de @Resultado.ItensAvaliados.ToString("N0") na sugestão. A coluna do PBS mostra a
+                            sugestão inteira, e somar populações diferentes lado a lado favoreceria quem foi medido
+                            em menos itens.
+                        </RadzenText>
+                    }
+                    else
+                    {
+                        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                            Este resultado diz que houve comparação em @Resultado.ItensComDecisaoMl.ToString("N0")
+                            item(ns), mas não trouxe os números dela. Nada é exibido aqui — preferimos a lacuna
+                            declarada a um número que não sabemos de onde veio.
+                        </RadzenAlert>
+                    }
+                </RadzenStack>
+            </RadzenCard>
+        </div>
+    </RadzenStack>
+
+    @if (Resultado.ItensComJanelaAlemDoHistorico > 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+            <strong>@Resultado.ItensComJanelaAlemDoHistorico.ToString("N0") item(ns) com período incompleto.</strong>
+            <div style="margin-top: 0.35rem">
+                Neles, o período que a compra deveria cobrir termina depois do último dia de venda que veio no
+                arquivo. A venda desses itens sai contada por menos e a sobra, por mais — eles estão marcados na
+                tabela e não devem ser comparados com os demais.
+            </div>
+        </RadzenAlert>
+    }
+
+    @if (Resultado.SkusSemCadastro is int semCadastro && semCadastro > 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+            <strong>@semCadastro.ToString("N0") itens sem cadastro.</strong>
+            <div style="margin-top: 0.35rem">
+                Esses itens estavam na sugestão do ERP mas não foram encontrados no cadastro de produtos, então
+                eles aparecem na tabela sem nome. Não é falha do arquivo enviado: é cadastro faltando no ERP.
+            </div>
+        </RadzenAlert>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(Resultado.RessalvaTreinoServe))
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+            <strong>Ressalva que acompanha estes números.</strong>
+            <div style="margin-top: 0.35rem">@Resultado.RessalvaTreinoServe</div>
+        </RadzenAlert>
+    }
+</RadzenStack>
+
+@code {
+    [Parameter, EditorRequired] public SessaoResultadoView Resultado { get; set; } = default!;
+
+    /// <summary>
+    /// A frase que ocupa o lugar dos números do ML quando não houve como calculá-los. Ela
+    /// afirma as duas coisas que o comprador precisa saber para não concluir errado: que a
+    /// conta não saiu, e que nada foi posto no lugar dela.
+    /// </summary>
+    private const string SemColunaMlManchete =
+        "Não é possível dizer o que o método de ML teria comprado nesta sugestão, e nenhum número foi colocado " +
+        "no lugar disso.";
+
+    private string Veredito
+    {
+        get
+        {
+            if (!Resultado.TemColunaMl)
+            {
+                return "Esta comparação mostra o que a compra do seu ERP deixou na prateleira. O lado do ML está " +
+                       "sem número, e o motivo está explicado ao lado.";
+            }
+
+            if (Resultado.Confronto is not { Ml: { } ml, Pbs: { } pbs }) return "Resultado desta comparação";
+
+            var diferenca = pbs.SobraUnidades - ml.SobraUnidades;
+            if (diferenca > 0)
+            {
+                return $"Nos itens em que deu para comparar, o método de ML teria deixado " +
+                       $"{diferenca.ToString("N0")} unidade(s) a menos encalhadas que a compra do seu ERP.";
+            }
+            if (diferenca < 0)
+            {
+                return $"Nos itens em que deu para comparar, o método de ML teria deixado " +
+                       $"{Math.Abs(diferenca).ToString("N0")} unidade(s) a MAIS encalhadas que a compra do seu ERP.";
+            }
+
+            return "Nos itens em que deu para comparar, os dois métodos deixariam a mesma quantidade encalhada.";
+        }
+    }
+
+    /// <summary>Zero em reais é um valor legítimo aqui: significa que nada sobrou em dinheiro.</summary>
+    private static string Reais(decimal valor) => $"R$ {valor.ToString("N2")}";
+}

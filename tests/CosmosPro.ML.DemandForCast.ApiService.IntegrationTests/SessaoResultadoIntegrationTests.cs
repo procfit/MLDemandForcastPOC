@@ -407,6 +407,168 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
         itens.Should().BeEmpty("nenhuma tentativa pode ter deixado linha atrás de si");
     }
 
+    // --- Endpoints que a tela do comprador consome ---------------------------
+
+    /// <summary>
+    /// A página do detalhe: ordenação server-side pela coluna pedida, com o total da
+    /// população e a coluna efetivamente aplicada de volta na resposta.
+    /// </summary>
+    [Fact]
+    public async Task Detalhe_paginado_devolve_os_itens_ordenados_pela_coluna_pedida()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cenario = await CenarioAsync();
+
+        var pagina = await fixture.ComparacoesApi.ItensAsync(
+            cenario.SessaoId, cenario.RedeId,
+            skip: 0, take: 25, orderBy: "SobraPbsUnidades", desc: true, ct);
+
+        pagina.IsSuccessStatusCode.Should().BeTrue();
+        pagina.Content!.Total.Should().Be(2);
+        pagina.Content.OrderBy.Should().Be("SobraPbsUnidades");
+        pagina.Content.Itens.Select(i => i.Sku).Should().Equal([SkuComPrevisao, SkuSemPrevisao],
+            "55 unidades sobrando vêm antes de 20");
+
+        var primeiro = pagina.Content.Itens[0];
+        primeiro.NomeProduto.Should().Be(NomeDoProduto);
+        primeiro.SobraPbsValor.Should().Be(192.5m);
+        primeiro.CompraSugeridaMl.Should().BeNull(
+            "nulo atravessa a API: zero diria ao comprador que o ML mandaria não comprar nada");
+        primeiro.SobraMlUnidades.Should().BeNull();
+
+        var segundo = pagina.Content.Itens[1];
+        segundo.SobraPbsValor.Should().BeNull("este item não tem preço de compra cadastrado");
+    }
+
+    /// <summary>
+    /// A paginação recorta a mesma ordenação, e não uma ordem qualquer que o banco devolva.
+    /// </summary>
+    [Fact]
+    public async Task Detalhe_pagina_de_verdade_em_vez_de_devolver_tudo()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cenario = await CenarioAsync();
+
+        var segundaPagina = await fixture.ComparacoesApi.ItensAsync(
+            cenario.SessaoId, cenario.RedeId,
+            skip: 1, take: 1, orderBy: "Sku", desc: false, ct);
+
+        segundaPagina.Content!.Total.Should().Be(2, "o total é da população, não da página");
+        segundaPagina.Content.Itens.Should().HaveCount(1);
+        segundaPagina.Content.Itens[0].Sku.Should().Be(SkuSemPrevisao);
+    }
+
+    /// <summary>
+    /// Coluna fora da whitelist cai no padrão e a resposta diz qual coluna valeu — em vez de
+    /// interpolar o texto recebido numa consulta, ou de estourar na cara do comprador que
+    /// clicou num cabeçalho.
+    /// </summary>
+    [Fact]
+    public async Task Coluna_de_ordenacao_desconhecida_cai_no_padrao_e_a_resposta_declara_qual_foi()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cenario = await CenarioAsync();
+
+        var pagina = await fixture.ComparacoesApi.ItensAsync(
+            cenario.SessaoId, cenario.RedeId,
+            skip: 0, take: 25, orderBy: "SobraPbsValor; DROP TABLE dbo.ComparacaoSessaoItens", desc: true, ct);
+
+        pagina.IsSuccessStatusCode.Should().BeTrue("nome de coluna inválido não pode virar erro 500");
+        pagina.Content!.OrderBy.Should().Be("SobraPbsUnidades");
+        pagina.Content.Itens.Should().HaveCount(2);
+    }
+
+    /// <summary>
+    /// <b>Multi-inquilino na tabela sem RedeId próprio.</b>
+    /// <c>ComparacaoSessaoItens</c> se escopa pelo pai, então uma consulta por
+    /// <c>SessaoId</c> sozinho entregaria o detalhe comercial de um cliente a quem acertasse
+    /// um Guid. A resposta é <b>404</b> e não 403: um 403 confirmaria a quem sondasse que a
+    /// sessão existe em outra rede.
+    /// </summary>
+    [Fact]
+    public async Task Detalhe_de_sessao_de_outra_rede_responde_404_e_nunca_403()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cenario = await CenarioAsync();
+        var outraRedeId = await EnsureRedeAsync("Rede Sessao Resultado Outra", SlugOutraRede);
+
+        outraRedeId.Should().NotBe(cenario.RedeId);
+
+        var itens = await fixture.ComparacoesApi.ItensAsync(
+            cenario.SessaoId, outraRedeId, ct: ct);
+
+        itens.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        itens.Content.Should().BeNull("nenhuma linha da outra rede pode atravessar");
+
+        var analise = await fixture.ComparacoesApi.AnaliseAsync(cenario.SessaoId, outraRedeId, ct);
+
+        analise.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "o agregado passa pelo mesmo join do detalhe, não por um caminho mais frouxo");
+    }
+
+    /// <summary>
+    /// A área técnica: previsão contra previsão apurada sobre o subconjunto que a camada A
+    /// mediu, com o denominador visível. Um item de dois entrou na camada A, e é sobre ele —
+    /// não sobre os dois — que MAE e WAPE são apurados.
+    /// </summary>
+    [Fact]
+    public async Task Analise_apura_previsao_contra_previsao_sobre_o_subconjunto_medido()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cenario = await CenarioAsync();
+
+        var analise = await fixture.ComparacoesApi.AnaliseAsync(cenario.SessaoId, cenario.RedeId, ct);
+
+        analise.IsSuccessStatusCode.Should().BeTrue();
+        var conteudo = analise.Content!;
+
+        conteudo.Itens.Should().Be(2, "o denominador é a população da sugestão");
+        conteudo.ItensComDecisaoMl.Should().Be(0, "nenhum item teve compra calculada pelo ML");
+        conteudo.ItensComSobraMlMaior.Should().Be(0);
+        conteudo.PioresNaCompra.Should().BeEmpty(
+            "sem braço de ML não há item em que ele tenha sobrado mais");
+
+        var medidos = conteudo.PorCurva.Sum(f => f.ItensComPrevisaoMl);
+        medidos.Should().Be(1, "só o primeiro item entrou na camada A");
+
+        conteudo.PorCurva.Sum(f => f.SomaDemandaRealDiaria).Should().Be(2m);
+        conteudo.PorCurva.Sum(f => f.SomaErroAbsPbs).Should().Be(0m, "o ERP previu 2 e a real foi 2");
+        conteudo.PorCurva.Sum(f => f.SomaErroAbsMl).Should().Be(0.4m, "o ML previu 2,4 e a real foi 2");
+        conteudo.PorCurva.Sum(f => f.VitoriasMl).Should().Be(0);
+        conteudo.PorCurva.Sum(f => f.VitoriasPbs).Should().Be(1, "o ML errou mais neste item");
+
+        conteudo.PorCurva.Select(f => f.Chave).Should().BeEquivalentTo(["A", "C"],
+            "cada curva é uma fatia própria: média global esconde regressão local");
+        conteudo.PorLoja.Should().HaveCount(1);
+        conteudo.PorLoja[0].Chave.Should().Be($"Loja {LojaId}");
+
+        conteudo.PioresNaPrevisao.Should().HaveCount(1,
+            "o bloco de 'onde o ML foi pior' precisa do item concreto, não só da contagem");
+        conteudo.PioresNaPrevisao[0].Sku.Should().Be(SkuComPrevisao);
+        conteudo.PioresNaPrevisao[0].ErroMl.Should().Be(0.4m);
+        conteudo.PioresNaPrevisao[0].ErroPbs.Should().Be(0m);
+    }
+
+    /// <summary>
+    /// O <c>ResultadoJson</c> só viaja no detalhe da sessão, e é por ele que a tela monta a
+    /// manchete. A listagem não o traz: seriam os agregados de 50 sessões para desenhar 50
+    /// badges de status.
+    /// </summary>
+    [Fact]
+    public async Task Detalhe_da_sessao_traz_o_resultado_e_a_listagem_nao()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cenario = await CenarioAsync();
+
+        var detalhe = await fixture.ComparacoesApi.GetAsync(cenario.SessaoId, cenario.RedeId, ct);
+        detalhe.Content!.ResultadoJson.Should().NotBeNullOrWhiteSpace();
+        detalhe.Content.SkusSemCadastro.Should().Be(SkusSemCadastro);
+
+        var lista = await fixture.ComparacoesApi.ListAsync(cenario.RedeId, ct: ct);
+        lista.Content!.Single(s => s.Id == cenario.SessaoId)
+            .ResultadoJson.Should().BeNull();
+    }
+
     // --- Infra do teste ------------------------------------------------------
 
     private async Task<Cenario> CenarioAsync()

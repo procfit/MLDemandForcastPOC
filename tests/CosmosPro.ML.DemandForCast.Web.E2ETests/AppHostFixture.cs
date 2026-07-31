@@ -3,6 +3,7 @@ using System.Data;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
+using CosmosPro.ML.DemandForCast.Engine.Entities;
 using CosmosPro.ML.DemandForCast.Tests.Shared;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
@@ -181,6 +182,129 @@ public sealed class AppHostFixture : IAsyncLifetime
             insert.Parameters.AddWithValue("@tipoCalculo", tipoCalculo);
             insert.Parameters.AddWithValue("@resultado", resultadoJson);
             await insert.ExecuteNonQueryAsync(ct);
+        }
+
+        return id;
+    }
+
+    /// <summary>
+    /// Semeia uma <b>sessão de comparação já concluída</b>, com os agregados da manchete e o
+    /// detalhe por item materializados, na rede que a página vai enxergar.
+    ///
+    /// <para>
+    /// Mesma razão de <see cref="SemearComparacaoConcluidaAsync"/>: o caminho legítimo passa
+    /// por importar um ZIP, treinar um modelo e esperar o Worker — dezenas de minutos —, e o
+    /// que estes testes exercitam é o <b>render</b> da manchete e da tabela. O
+    /// <paramref name="resultadoJson"/> vem serializado dos tipos reais do Worker, para a tela
+    /// ser lida contra o contrato de verdade.
+    /// </para>
+    ///
+    /// <para>
+    /// A sessão nasce em <c>Concluida</c>, que é terminal: ela não é reclamada pelo
+    /// <c>SessaoWorker</c> nem conta como sessão viva no bloqueio por rede, então semeá-la não
+    /// trava os outros cenários E2E da mesma rede. As linhas de execuções anteriores com o
+    /// mesmo <paramref name="nome"/> são removidas antes — o banco é persistente e reexecutar
+    /// o teste acumularia sessões idênticas na lista.
+    /// </para>
+    /// </summary>
+    public async Task<Guid> SemearSessaoConcluidaAsync(
+        string nome,
+        long sugestaoId,
+        DateTime sugestaoDataHora,
+        byte tipoCalculo,
+        int? skusSemCadastro,
+        string resultadoJson,
+        IReadOnlyList<ComparacaoSessaoItem> itens,
+        CancellationToken ct = default)
+    {
+        var connectionString = await App.GetConnectionStringAsync("engine", ct)
+            ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+
+        // Detalhe antes do pai: a FK é cascade no modelo, mas depender disso aqui deixaria a
+        // limpeza calada se o comportamento mudar.
+        await using (var limpezaItens = conn.CreateCommand())
+        {
+            limpezaItens.CommandText = """
+                DELETE FROM dbo.ComparacaoSessaoItens
+                WHERE SessaoId IN (SELECT Id FROM dbo.ComparacaoSessoes WHERE Nome = @nome);
+                """;
+            limpezaItens.Parameters.AddWithValue("@nome", nome);
+            await limpezaItens.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var limpeza = conn.CreateCommand())
+        {
+            limpeza.CommandText = "DELETE FROM dbo.ComparacaoSessoes WHERE Nome = @nome;";
+            limpeza.Parameters.AddWithValue("@nome", nome);
+            await limpeza.ExecuteNonQueryAsync(ct);
+        }
+
+        int redeId;
+        await using (var consulta = conn.CreateCommand())
+        {
+            consulta.CommandText = "SELECT TOP 1 Id FROM dbo.Redes WHERE Ativo = 1 ORDER BY Id;";
+            redeId = (int?)await consulta.ExecuteScalarAsync(ct)
+                ?? throw new InvalidOperationException("Nenhuma rede ativa no banco engine.");
+        }
+
+        var id = Guid.CreateVersion7();
+        await using (var insert = conn.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO dbo.ComparacaoSessoes
+                    (Id, RedeId, Nome, Status, CriadoEm, AtualizadoEm, SugestaoId, SugestaoDescricao,
+                     SugestaoDataHora, SugestaoTipoCalculo, SkusSemCadastro, ResultadoJson)
+                VALUES
+                    (@id, @redeId, @nome, 'Concluida', @agora, @agora, @sugestaoId, @descricao,
+                     @dataHora, @tipoCalculo, @skusSemCadastro, @resultado);
+                """;
+            var agora = DateTimeOffset.UtcNow;
+            insert.Parameters.AddWithValue("@id", id);
+            insert.Parameters.AddWithValue("@redeId", redeId);
+            insert.Parameters.AddWithValue("@nome", nome);
+            insert.Parameters.AddWithValue("@agora", agora);
+            insert.Parameters.AddWithValue("@sugestaoId", sugestaoId);
+            insert.Parameters.AddWithValue("@descricao", "Sugestao semeada pelo E2E");
+            insert.Parameters.Add("@dataHora", SqlDbType.DateTime2).Value = sugestaoDataHora;
+            insert.Parameters.AddWithValue("@tipoCalculo", tipoCalculo);
+            insert.Parameters.AddWithValue("@skusSemCadastro", (object?)skusSemCadastro ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@resultado", resultadoJson);
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+
+        foreach (var item in itens)
+        {
+            await using var insertItem = conn.CreateCommand();
+            insertItem.CommandText = """
+                INSERT INTO dbo.ComparacaoSessaoItens
+                    (SessaoId, LojaId, Sku, NomeProduto, Curva, CompraSugeridaPbs, CompraSugeridaMl,
+                     VendidoNaJanela, DemandaDiaPbs, DemandaDiaMl, DemandaDiaReal,
+                     SobraPbsUnidades, SobraMlUnidades, SobraPbsValor, SobraMlValor, JanelaAlemDoHistorico)
+                VALUES
+                    (@sessaoId, @lojaId, @sku, @nomeProduto, @curva, @compraPbs, @compraMl,
+                     @vendido, @demandaPbs, @demandaMl, @demandaReal,
+                     @sobraPbsUn, @sobraMlUn, @sobraPbsVl, @sobraMlVl, @alemDoHistorico);
+                """;
+            insertItem.Parameters.AddWithValue("@sessaoId", id);
+            insertItem.Parameters.AddWithValue("@lojaId", item.LojaId);
+            insertItem.Parameters.AddWithValue("@sku", item.Sku);
+            insertItem.Parameters.AddWithValue("@nomeProduto", (object?)item.NomeProduto ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@curva", (object?)item.Curva ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@compraPbs", item.CompraSugeridaPbs);
+            insertItem.Parameters.AddWithValue("@compraMl", (object?)item.CompraSugeridaMl ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@vendido", item.VendidoNaJanela);
+            insertItem.Parameters.AddWithValue("@demandaPbs", item.DemandaDiaPbs);
+            insertItem.Parameters.AddWithValue("@demandaMl", (object?)item.DemandaDiaMl ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@demandaReal", (object?)item.DemandaDiaReal ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@sobraPbsUn", item.SobraPbsUnidades);
+            insertItem.Parameters.AddWithValue("@sobraMlUn", (object?)item.SobraMlUnidades ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@sobraPbsVl", (object?)item.SobraPbsValor ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@sobraMlVl", (object?)item.SobraMlValor ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@alemDoHistorico", item.JanelaAlemDoHistorico);
+            await insertItem.ExecuteNonQueryAsync(ct);
         }
 
         return id;

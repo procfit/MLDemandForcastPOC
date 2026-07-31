@@ -1,0 +1,208 @@
+@* Detalhe item a item. Paginação e ordenação são do SERVIDOR: a população é a da sugestão
+   inteira do ERP e o comprador ordena a tabela para achar o pior item.
+
+   Nenhuma célula do braço de ML pode virar traço ou zero quando o valor é nulo: nulo é
+   "não foi possível calcular" e zero é "o ML mandaria não comprar nada". *@
+@inject ComparacoesApiClient ComparacoesApi
+
+<RadzenStack Gap="0.75rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+        <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">Item por item</RadzenText>
+        <RadzenBadge Text="@($"{_total:N0} itens")" BadgeStyle="BadgeStyle.Light" IsPill="true" />
+        <HelpTip Text="Cada página é buscada no servidor sob demanda, e clicar num cabeçalho refaz a consulta ordenada no banco. Ordene por 'Sobrou' para achar o que mais encalhou." />
+    </RadzenStack>
+
+    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+        "Sobrou" é o que restou na prateleira no fim do período que a compra deveria cobrir: o que foi
+        comprado, mais o que já havia em estoque e o que estava a caminho, menos o que a loja vendeu.
+    </RadzenText>
+
+    @if (_erro is not null)
+    {
+        @* Falha de leitura não pode virar "nenhum item": o EmptyText da grade afirma que a
+           comparação não deixou item nenhum, e aqui o que faltou foi a resposta. *@
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+            <strong>Não foi possível carregar os itens desta comparação.</strong>
+            <div style="margin-top: 0.35rem">@_erro</div>
+        </RadzenAlert>
+    }
+
+    <RadzenDataGrid @ref="_grid" TItem="SessaoItem"
+                    Data="@_itens" Count="@_total" LoadData="@LoadData"
+                    AllowPaging="true" PageSize="25"
+                    AllowSorting="true"
+                    IsLoading="@_loading"
+                    Density="Density.Compact"
+                    PagerHorizontalAlign="HorizontalAlign.Center"
+                    EmptyText="Esta comparação não deixou nenhum item para detalhar.">
+        <Columns>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="Sku" Title="Código" Width="120px" />
+            <RadzenDataGridColumn TItem="SessaoItem" Property="NomeProduto" Title="Produto" Width="220px">
+                <Template Context="i">
+                    @if (string.IsNullOrWhiteSpace(i.NomeProduto))
+                    {
+                        <span style="color: var(--rz-warning)">sem cadastro no ERP</span>
+                    }
+                    else
+                    {
+                        @i.NomeProduto
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="LojaId" Title="Loja" Width="90px" TextAlign="TextAlign.Right" />
+            <RadzenDataGridColumn TItem="SessaoItem" Property="Curva" Title="Curva" Width="90px">
+                <Template Context="i">@(string.IsNullOrWhiteSpace(i.Curva) ? "sem curva" : i.Curva)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="CompraSugeridaPbs" Title="Comprado (PBS)" Width="140px" TextAlign="TextAlign.Right">
+                <Template Context="i">@Unidades(i.CompraSugeridaPbs)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="CompraSugeridaMl" Title="Compraria (ML)" Width="150px" TextAlign="TextAlign.Right">
+                <Template Context="i">
+                    @if (i.CompraSugeridaMl is { } ml)
+                    {
+                        @Unidades(ml)
+                    }
+                    else
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">@SemCalculoDoMl</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="VendidoNaJanela" Title="Vendido no período" Width="150px" TextAlign="TextAlign.Right">
+                <Template Context="i">@Unidades(i.VendidoNaJanela)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="SobraPbsUnidades" Title="Sobrou (PBS)" Width="130px" TextAlign="TextAlign.Right">
+                <Template Context="i">@Unidades(i.SobraPbsUnidades)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="SobraMlUnidades" Title="Sobraria (ML)" Width="140px" TextAlign="TextAlign.Right">
+                <Template Context="i">
+                    @if (i.SobraMlUnidades is { } ml)
+                    {
+                        @Unidades(ml)
+                    }
+                    else
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">@SemCalculoDoMl</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="SobraPbsValor" Title="Dinheiro parado" Width="150px" TextAlign="TextAlign.Right">
+                <Template Context="i">
+                    @if (i.SobraPbsValor is { } valor)
+                    {
+                        @($"R$ {valor.ToString("N2")}")
+                    }
+                    else
+                    {
+                        <span style="color: var(--rz-warning)">sem preço de compra</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Title="Quem ficou mais perto" Width="180px" Sortable="false">
+                <Template Context="i">
+                    @if (i.MlFicouMaisPerto is null)
+                    {
+                        <RadzenBadge Text="só o PBS foi calculado" BadgeStyle="BadgeStyle.Light" Shade="Shade.Lighter" IsPill="true" />
+                    }
+                    else if (i.Empate)
+                    {
+                        <RadzenBadge Text="empate" BadgeStyle="BadgeStyle.Light" Shade="Shade.Lighter" IsPill="true" />
+                    }
+                    else if (i.MlFicouMaisPerto is true)
+                    {
+                        <RadzenBadge Text="ML ficou mais perto" BadgeStyle="BadgeStyle.Success" Shade="Shade.Lighter" IsPill="true" />
+                    }
+                    else
+                    {
+                        <RadzenBadge Text="PBS ficou mais perto" BadgeStyle="BadgeStyle.Info" Shade="Shade.Lighter" IsPill="true" />
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="JanelaAlemDoHistorico" Title="Ressalva" Width="170px">
+                <Template Context="i">
+                    @if (i.JanelaAlemDoHistorico)
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                            <RadzenIcon Icon="warning" Style="color: var(--rz-warning); font-size: 1rem" />
+                            <span style="color: var(--rz-warning)">período incompleto</span>
+                            <HelpTip Size="0.85rem" Text="O período que esta compra deveria cobrir termina depois do último dia de venda que veio no arquivo. A venda deste item sai contada por menos e a sobra, por mais: não compare esta linha com as outras." />
+                        </RadzenStack>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenStack>
+
+@code {
+    [Parameter, EditorRequired] public Guid SessaoId { get; set; }
+
+    /// <summary>
+    /// Texto no lugar do número quando o braço de ML não existe para a linha. Traço ou zero
+    /// aqui leriam como "o ML concordou" e "o ML mandaria não comprar nada" — as duas coisas
+    /// que ninguém calculou.
+    /// </summary>
+    private const string SemCalculoDoMl = "sem cálculo do ML";
+
+    private RadzenDataGrid<SessaoItem> _grid = null!;
+    private IReadOnlyList<SessaoItem> _itens = [];
+    private int _total;
+    private bool _loading;
+    private string? _erro;
+
+    /// <summary>
+    /// Dispara a primeira página à mão. A grade só chama <c>LoadData</c> sozinha quando
+    /// <c>Data</c> chega nula, e aqui ela chega numa lista vazia — sem este
+    /// <c>Reload</c> a tabela renderizava o <c>EmptyText</c> ("não deixou nenhum item")
+    /// sem nunca ter perguntado ao servidor, que é a mentira mais barata desta tela.
+    ///
+    /// <para>
+    /// Em <c>OnAfterRenderAsync</c> e não em <c>OnInitializedAsync</c> porque o <c>@ref</c>
+    /// da grade só existe depois do primeiro render; e o método não roda no prerender, então
+    /// a carga acontece uma vez, no circuito interativo.
+    /// </para>
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _grid is not null)
+        {
+            await _grid.Reload();
+        }
+    }
+
+    private async Task LoadData(LoadDataArgs args)
+    {
+        _loading = true;
+        try
+        {
+            // args.OrderBy chega como "Coluna asc" / "Coluna desc" (uma por vez). O nome
+            // sai daqui para a whitelist do servidor, que decide se ele vale.
+            string? orderBy = null;
+            var desc = true;
+            if (!string.IsNullOrWhiteSpace(args.OrderBy))
+            {
+                var partes = args.OrderBy.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                orderBy = partes[0];
+                desc = partes.Length > 1 && partes[1].Equals("desc", StringComparison.OrdinalIgnoreCase);
+            }
+
+            var pagina = await ComparacoesApi.GetItensAsync(
+                SessaoId, args.Skip ?? 0, args.Top ?? 25, orderBy, desc);
+
+            _itens = pagina.Itens;
+            _total = pagina.Total;
+            _erro = null;
+        }
+        catch (Exception ex)
+        {
+            _itens = [];
+            _erro = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string Unidades(decimal valor) => valor.ToString("N0");
+}
