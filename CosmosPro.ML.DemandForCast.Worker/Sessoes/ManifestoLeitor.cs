@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 
-namespace CosmosPro.ML.DemandForCast.Worker.Comparacoes;
+namespace CosmosPro.ML.DemandForCast.Worker.Sessoes;
 
 /// <summary>
 /// Declaração que o extrator escreve na raiz do ZIP dizendo qual sugestão do PBS ele

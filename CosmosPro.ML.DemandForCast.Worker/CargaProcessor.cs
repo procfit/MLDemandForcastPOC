@@ -2,7 +2,7 @@ using System.Globalization;
 using System.IO.Compression;
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
-using CosmosPro.ML.DemandForCast.Worker.Comparacoes;
+using CosmosPro.ML.DemandForCast.Worker.Sessoes;
 using CsvHelper;
 using CsvHelper.Configuration;
 using Microsoft.Data.SqlClient;

@@ -1,5 +1,5 @@
 using CosmosPro.ML.DemandForCast.Extractor;
-using CosmosPro.ML.DemandForCast.Worker.Comparacoes;
+using CosmosPro.ML.DemandForCast.Worker.Sessoes;
 
 namespace CosmosPro.ML.DemandForCast.Extractor.Tests;
 
