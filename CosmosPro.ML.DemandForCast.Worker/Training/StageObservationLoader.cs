@@ -21,6 +21,15 @@ namespace CosmosPro.ML.DemandForCast.Worker.Training;
 /// nova aqui, decida explicitamente se ela é datada (filtra) ou atemporal (não
 /// filtra); esquecer o filtro reintroduz o vazamento sem nenhum sintoma visível.
 /// </para>
+///
+/// <para>
+/// Duas brechas residuais, ambas sem conserto na modelagem atual do Stage e por
+/// isso registradas em vez de silenciadas: (a) Produtos e Lojas não são
+/// historizados e o import substitui a tabela inteira, então um produto
+/// recategorizado depois do corte carrega o valor novo para trás; (b) uma campanha
+/// cadastrada retroativamente entra com <c>DataInicio</c> anterior ao corte, porque
+/// não existe coluna de "data de cadastro" para distinguir.
+/// </para>
 /// </summary>
 internal sealed class StageObservationLoader(string connectionString, ILogger logger)
 {
@@ -274,12 +283,18 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     /// <summary>
     /// Devolve o predicado de corte para a coluna de data indicada, ou string vazia
     /// quando não há corte. Estritamente menor: o dia do corte já é futuro.
+    /// <para>
+    /// O parâmetro é numerado porque um mesmo <see cref="SqlCommand"/> pode precisar
+    /// cortar duas colunas (uma tabela com início e fim, por exemplo); nome fixo
+    /// estouraria "parameter already added" só em runtime.
+    /// </para>
     /// </summary>
     private static string CorteData(string coluna, DateOnly? treinoAte, SqlCommand cmd)
     {
         if (treinoAte is not { } corte) return "";
-        cmd.Parameters.AddWithValue("@treinoAte", corte);
-        return $"AND {coluna} < @treinoAte";
+        var p = $"@treinoAte{cmd.Parameters.Count}";
+        cmd.Parameters.AddWithValue(p, corte);
+        return $"AND {coluna} < {p}";
     }
 
     /// <summary>Monta um IN (@s0, @s1, ...) parametrizado e adiciona os parâmetros ao comando.</summary>
