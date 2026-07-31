@@ -84,13 +84,21 @@ internal static class LoginEndpoints
     /// </summary>
     private static async Task<IResult> TrocarRedeAsync(
         HttpContext http,
-        [FromForm] int redeId,
+        [FromForm] int? redeId,
         [FromForm] string? retorno,
         EngineDbContext db,
         ILogger<Program> logger,
         CancellationToken ct)
     {
         var destino = DestinoLocal(retorno);
+
+        // redeId ausente ou não-numérico: mesmo destino da recusa, em vez do 400 cru que
+        // o binding de um int não-anulável devolveria — o usuário sempre volta para uma
+        // página, nunca para uma tela de erro em branco.
+        if (redeId is not { } redeIdValida)
+        {
+            return Results.Redirect(destino);
+        }
 
         var atual = await http.AuthenticateAsync(IdentityConstants.ApplicationScheme);
         if (!atual.Succeeded || atual.Principal?.Identity is not ClaimsIdentity identidade)
@@ -101,17 +109,17 @@ internal static class LoginEndpoints
         // Recusa sem trocar o escopo e sem 500: usuário de rede não tem seletor (e um
         // POST forjado por ele não pode escapar do cadastro dele), e uma rede pode ter
         // sido desativada entre o render da barra e este POST.
-        if (!await RedeContext.PodeAtivarAsync(db, atual.Principal, redeId, ct))
+        if (!await RedeContext.PodeAtivarAsync(db, atual.Principal, redeIdValida, ct))
         {
             logger.LogWarning("Troca para a rede {RedeId} recusada para {Usuario}.",
-                redeId, atual.Principal.Identity?.Name);
+                redeIdValida, atual.Principal.Identity?.Name);
             return Results.Redirect(destino);
         }
 
         var claims = identidade.Claims
             .Where(c => c.Type != RedeContext.ClaimRedeSelecionada)
             .Append(new Claim(RedeContext.ClaimRedeSelecionada,
-                              redeId.ToString(CultureInfo.InvariantCulture)));
+                              redeIdValida.ToString(CultureInfo.InvariantCulture)));
 
         var renovada = new ClaimsIdentity(
             claims,
@@ -129,7 +137,7 @@ internal static class LoginEndpoints
             IdentityConstants.ApplicationScheme, new ClaimsPrincipal(renovada), propriedades);
 
         logger.LogInformation("Escopo trocado para a rede {RedeId} por {Usuario}.",
-            redeId, atual.Principal.Identity?.Name);
+            redeIdValida, atual.Principal.Identity?.Name);
 
         return Results.Redirect(destino);
     }
@@ -138,6 +146,14 @@ internal static class LoginEndpoints
     /// Só caminho local volta: <c>retorno</c> chega em campo de formulário, e aceitar
     /// valor absoluto transformaria o endpoint em redirecionador aberto.
     /// </summary>
+    /// <remarks>
+    /// Reproduz deliberadamente a forma do <c>IsLocalUrl</c> do próprio framework — e,
+    /// com ela, a mesma lacuna: nenhum dos dois normaliza tab horizontal, e
+    /// <c>/\tevil.com</c> vira <c>//evil.com</c> no Chrome antes da navegação. Não é
+    /// explorável aqui: o endpoint só aceita POST (não há link clicável para carregar o
+    /// payload) e o cookie de autenticação é <c>SameSite=Lax</c>, que não acompanha POST
+    /// cross-site. Não altere esta checagem por causa disso — registre aqui, não refaça.
+    /// </remarks>
     private static string DestinoLocal(string? retorno) =>
         !string.IsNullOrWhiteSpace(retorno)
         && retorno.StartsWith('/')

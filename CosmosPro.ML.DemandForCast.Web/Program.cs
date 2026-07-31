@@ -59,7 +59,17 @@ builder.Services.Configure<SecurityStampValidatorOptions>(o =>
     o.OnRefreshingPrincipal = contexto =>
     {
         var escolha = contexto.CurrentPrincipal?.FindFirst(RedeContext.ClaimRedeSelecionada);
-        if (escolha is not null && contexto.NewPrincipal?.Identity is ClaimsIdentity identidade)
+
+        // O papel é reconferido aqui, e não só no leitor, para o gancho não depender de
+        // ninguém mais barrar um principal que ele mesmo montou: se o usuário perdeu o
+        // papel PowerUser entre uma revalidação e outra (ex.: rebaixado pelo admin), o
+        // claim não atravessa. A checagem de posse evita duplicar o claim caso ele um dia
+        // passe a vir de uma claims factory — dois claims do mesmo tipo fariam
+        // FindFirstValue escolher entre eles por ordem arbitrária.
+        if (escolha is not null
+            && contexto.NewPrincipal?.Identity is ClaimsIdentity identidade
+            && contexto.NewPrincipal.IsInRole(Papeis.PowerUser)
+            && identidade.FindFirst(RedeContext.ClaimRedeSelecionada) is null)
         {
             identidade.AddClaim(new Claim(escolha.Type, escolha.Value));
         }

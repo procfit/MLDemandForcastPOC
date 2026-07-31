@@ -3,9 +3,12 @@ using System.Data;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
+using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
 using CosmosPro.ML.DemandForCast.Tests.Shared;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Playwright;
@@ -44,6 +47,20 @@ public sealed class AppHostFixture : IAsyncLifetime
     /// </summary>
     public const string PowerUserEmail = "e2e@teste.local";
     public const string PowerUserSenha = "TesteE2E!2026";
+
+    /// <summary>
+    /// Credenciais do usuário operacional (<see cref="Papeis.UsuarioRede"/>) semeado por
+    /// <see cref="GarantirUsuarioRedeAsync"/> — usado pelos cenários que precisam de uma
+    /// identidade sem o seletor de rede do PowerUser.
+    /// <para>
+    /// E-mail próprio, pela mesma razão de <see cref="PowerUserEmail"/>: o banco
+    /// <c>engine</c> é persistente e compartilhado entre execuções, então reaproveitar um
+    /// e-mail já usado por outro fixture (ou pelo admin de debug) faria os dois disputarem
+    /// a senha do mesmo usuário.
+    /// </para>
+    /// </summary>
+    public const string UsuarioRedeEmail = "e2e-usuario-rede@teste.local";
+    public const string UsuarioRedeSenha = "TesteE2ERede!2026";
 
     public async ValueTask InitializeAsync()
     {
@@ -153,6 +170,115 @@ public sealed class AppHostFixture : IAsyncLifetime
         return (int?)await cmd.ExecuteScalarAsync(ct)
             ?? throw new InvalidOperationException($"Rede '{slug}' não foi criada.");
     }
+
+    /// <summary>
+    /// Garante o usuário operacional <see cref="UsuarioRedeEmail"/>, vinculado a
+    /// <paramref name="redeId"/> e no papel <see cref="Papeis.UsuarioRede"/>.
+    ///
+    /// <para>
+    /// Passa por <c>UserManager</c>/<c>RoleManager</c> reais (contra a mesma connection
+    /// string do recurso <c>engine</c>) em vez de <c>INSERT</c> direto: o hash de senha e
+    /// as colunas normalizadas do Identity são detalhe de implementação do framework, e
+    /// escrevê-las à mão aqui duplicaria — e poderia divergir de — o que
+    /// <c>IdentityBootstrapper</c> já faz para o PowerUser.
+    /// </para>
+    ///
+    /// <para>
+    /// Idempotente e reconciliado a cada chamada — o banco é persistente, então reexecutar
+    /// o teste precisa reencontrar o mesmo usuário em vez de esbarrar em e-mail duplicado, e
+    /// precisa realinhar rede/senha/papel caso uma execução anterior tenha deixado o cadastro
+    /// diferente do esperado.
+    /// </para>
+    /// </summary>
+    public async Task GarantirUsuarioRedeAsync(int redeId, CancellationToken ct = default)
+    {
+        var connectionString = await App.GetConnectionStringAsync("engine", ct)
+            ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+        var services = new ServiceCollection();
+        services.AddDbContext<EngineDbContext>(o => o.UseSqlServer(connectionString));
+        services.AddLogging(l => l.SetMinimumLevel(LogLevel.Warning));
+        services.AddIdentityCore<Usuario>(o => o.User.RequireUniqueEmail = true)
+            .AddRoles<IdentityRole<Guid>>()
+            .AddEntityFrameworkStores<EngineDbContext>();
+
+        await using var sp = services.BuildServiceProvider();
+        await using var scope = sp.CreateAsyncScope();
+
+        var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+        if (!await roleManager.RoleExistsAsync(Papeis.UsuarioRede))
+        {
+            await roleManager.CreateAsync(new IdentityRole<Guid>(Papeis.UsuarioRede));
+        }
+
+        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<Usuario>>();
+        var usuario = await userManager.FindByEmailAsync(UsuarioRedeEmail);
+
+        if (usuario is null)
+        {
+            usuario = new Usuario
+            {
+                Id = Guid.CreateVersion7(),
+                UserName = UsuarioRedeEmail,
+                Email = UsuarioRedeEmail,
+                EmailConfirmed = true,
+                NomeCompleto = "Usuario Operacional E2E",
+                RedeId = redeId,
+                Ativo = true,
+                CriadoEm = DateTimeOffset.UtcNow,
+            };
+
+            var criado = await userManager.CreateAsync(usuario, UsuarioRedeSenha);
+            if (!criado.Succeeded)
+            {
+                throw new InvalidOperationException(
+                    $"Falha ao criar usuário operacional E2E: {Descrever(criado)}");
+            }
+        }
+        else
+        {
+            if (!await userManager.CheckPasswordAsync(usuario, UsuarioRedeSenha))
+            {
+                var token = await userManager.GeneratePasswordResetTokenAsync(usuario);
+                var reset = await userManager.ResetPasswordAsync(usuario, token, UsuarioRedeSenha);
+                if (!reset.Succeeded)
+                {
+                    throw new InvalidOperationException(
+                        $"Falha ao realinhar senha do usuário operacional E2E: {Descrever(reset)}");
+                }
+            }
+
+            if (usuario.RedeId != redeId || !usuario.Ativo)
+            {
+                usuario.RedeId = redeId;
+                usuario.Ativo = true;
+                var atualizado = await userManager.UpdateAsync(usuario);
+                if (!atualizado.Succeeded)
+                {
+                    throw new InvalidOperationException(
+                        $"Falha ao realinhar cadastro do usuário operacional E2E: {Descrever(atualizado)}");
+                }
+            }
+        }
+
+        if (!await userManager.IsInRoleAsync(usuario, Papeis.UsuarioRede))
+        {
+            var papel = await userManager.AddToRoleAsync(usuario, Papeis.UsuarioRede);
+            if (!papel.Succeeded)
+            {
+                throw new InvalidOperationException(
+                    $"Falha ao atribuir papel ao usuário operacional E2E: {Descrever(papel)}");
+            }
+        }
+
+        if (await userManager.IsInRoleAsync(usuario, Papeis.PowerUser))
+        {
+            await userManager.RemoveFromRoleAsync(usuario, Papeis.PowerUser);
+        }
+    }
+
+    private static string Descrever(IdentityResult r) =>
+        string.Join("; ", r.Errors.Select(e => $"{e.Code}: {e.Description}"));
 
     /// <summary>
     /// Semeia uma sessão de comparação <c>Concluida</c> numa rede <b>escolhida</b>, sem
