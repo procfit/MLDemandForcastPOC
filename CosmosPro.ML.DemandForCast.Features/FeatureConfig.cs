@@ -26,9 +26,9 @@ public sealed record FeatureConfig
     /// conhecido ESTRITAMENTE antes do corte, e não o preço realizado em D.
     ///
     /// <para>
-    /// Existe porque o preço unitário que chega a este builder é o preço médio
-    /// REALIZADO da venda do dia (<c>StageObservationLoader</c> lê
-    /// <c>AVG(PrecoUnitario)</c> de <c>Vendas</c>), não um preço de tabela planejado.
+    /// Existe porque o preço unitário que chega a este builder é o preço
+    /// REALIZADO da venda do dia (<c>Worker/Training/StageObservationLoader</c> lê
+    /// <c>PrecoUnitario</c> de <c>Vendas</c>), não um preço de tabela planejado.
     /// Num dia com remarcação não planejada, o desconto realizado entraria na linha de
     /// features daquele mesmo dia e o modelo leria desconto → volume no dia que está
     /// sendo pontuado (CLAUDE.md §6). Para treino isso é indiferente — o passado é
