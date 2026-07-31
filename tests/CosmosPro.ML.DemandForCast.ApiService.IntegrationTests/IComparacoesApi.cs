@@ -18,6 +18,14 @@ public interface IComparacoesApi
     [Get("/api/comparacoes")]
     Task<IApiResponse<List<SessaoView>>> ListAsync(
         [Query] int redeId, [Query] int take = 50, CancellationToken ct = default);
+
+    [Multipart]
+    [Post("/api/comparacoes/{id}/dados")]
+    Task<IApiResponse> UploadDadosAsync(
+        Guid id,
+        [AliasAs("file")] StreamPart file,
+        [Query] int redeId,
+        CancellationToken ct = default);
 }
 
 public sealed record CreateSessaoRequest(string? Nome);

@@ -1,4 +1,5 @@
 using CosmosPro.ML.DemandForCast.Extractor;
+using CosmosPro.ML.DemandForCast.Worker.Comparacoes;
 
 namespace CosmosPro.ML.DemandForCast.Extractor.Tests;
 
@@ -54,4 +55,71 @@ public sealed class ZipManifestTests
 
         acao.Should().Throw<InvalidOperationException>();
     }
+}
+
+/// <summary>
+/// O extrator roda na máquina do cliente e o Worker não pode depender dele (mesma razão
+/// pela qual o contrato de colunas do Stage é duplicado — ver <see cref="StageContractTests"/>).
+/// Por isso o Worker tem leitor próprio para o mesmo JSON, e estes testes são o que
+/// impede as duas formas de divergirem em silêncio: quem escreve o manifesto está aqui,
+/// quem o lê está no Worker, e nenhum compilador liga os dois.
+/// </summary>
+public sealed class ManifestoContratoTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(
+        Path.GetTempPath(), $"manifesto-contrato-{Guid.NewGuid():N}");
+
+    public ManifestoContratoTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); }
+        catch (IOException) { /* diretório temporário */ }
+    }
+
+    [Fact]
+    public void Forma_do_manifesto_bate_campo_a_campo_entre_extrator_e_Worker()
+    {
+        var noExtrator = Campos(typeof(ZipManifest));
+        var noWorker = Campos(typeof(ManifestoDaSugestao));
+
+        noWorker.Should().Equal(noExtrator,
+            "o Worker desserializa o JSON que o extrator escreve; nome, tipo ou ordem diferente " +
+            "quebra a leitura em produção sem quebrar nenhuma compilação");
+    }
+
+    [Fact]
+    public void Nome_do_arquivo_na_raiz_do_envio_e_o_mesmo_nos_dois_lados()
+    {
+        ManifestoLeitor.NomeArquivo.Should().Be(ZipManifest.EntryName);
+    }
+
+    /// <summary>
+    /// Prova de ponta a ponta do contrato: escreve com o serializador REAL do extrator e
+    /// lê com o leitor REAL do Worker. A comparação de forma acima não pegaria uma
+    /// divergência de casing, de política de nomes ou de formato de data — só isto pega.
+    /// </summary>
+    [Fact]
+    public void Leitor_do_Worker_le_o_que_o_extrator_de_fato_escreve()
+    {
+        var escrito = new ZipManifest(21217, "MATTEL", new DateTime(2026, 3, 10, 10, 27, 0), 2,
+                                      new DateOnly(2025, 3, 10), new DateOnly(2026, 4, 9), "1.2.3", 3);
+        File.WriteAllText(Path.Combine(_dir, ZipManifest.EntryName), ZipManifest.Escrever(escrito));
+
+        var leitura = ManifestoLeitor.Ler(_dir);
+
+        leitura.MotivoInviabilidade.Should().BeNull();
+        leitura.Manifesto.Should().BeEquivalentTo(escrito, o => o.ComparingRecordsByMembers());
+    }
+
+    /// <summary>
+    /// Parâmetros do construtor primário na ordem declarada. Records posicionais também
+    /// expõem um construtor de cópia, então o critério é "o de mais parâmetros".
+    /// </summary>
+    private static (string Nome, string Tipo)[] Campos(Type tipo) =>
+        [.. tipo.GetConstructors()
+              .OrderByDescending(c => c.GetParameters().Length)
+              .First()
+              .GetParameters()
+              .Select(p => (p.Name!, p.ParameterType.Name))];
 }

@@ -1,9 +1,12 @@
 using System.Globalization;
 using System.IO.Compression;
+using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
+using CosmosPro.ML.DemandForCast.Worker.Comparacoes;
 using CsvHelper;
 using CsvHelper.Configuration;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 using Minio;
 using Minio.DataModel.Args;
 
@@ -12,6 +15,7 @@ namespace CosmosPro.ML.DemandForCast.Worker;
 internal sealed class CargaProcessor(
     IMinioClient minio,
     IConfiguration config,
+    IServiceProvider services,
     ILogger<CargaProcessor> logger)
 {
     private const string BucketName = "imports";
@@ -58,13 +62,117 @@ internal sealed class CargaProcessor(
         try
         {
             await DownloadAndExtractAsync(carga.BlobKey, workDir, ct);
-            return await LoadIntoStageAsync(workDir, rede, ct);
+
+            // Import avulso não tem sessão e continua sem conhecer manifesto nenhum: a
+            // exigência da declaração da sugestão nasce da sessão, não do import.
+            var sessao = await CarregarSessaoAsync(carga.Id, ct);
+            var leitura = sessao is null ? null : ManifestoLeitor.Ler(workDir);
+
+            var linhas = await LoadIntoStageAsync(workDir, rede, ct);
+
+            if (sessao is not null)
+            {
+                await RegistrarNaSessaoAsync(sessao, leitura!, ct);
+            }
+
+            return linhas;
         }
         finally
         {
             try { Directory.Delete(workDir, recursive: true); }
             catch (Exception ex) { logger.LogWarning(ex, "Falha ao limpar diretório temporário {Dir}.", workDir); }
         }
+    }
+
+    /// <summary>
+    /// A sessão de comparação (F14) é quem aponta para a carga, não o contrário — logo a
+    /// pergunta "esta carga pertence a uma sessão?" só se responde de <c>ComparacaoSessoes</c>.
+    /// Devolve <c>null</c> para todo import avulso, que é a maioria.
+    /// </summary>
+    private async Task<SessaoDaCarga?> CarregarSessaoAsync(Guid cargaId, CancellationToken ct)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<EngineDbContext>();
+
+        return await db.ComparacaoSessoes.AsNoTracking()
+            .Where(s => s.CargaStageId == cargaId)
+            .Select(s => new SessaoDaCarga(s.Id, s.Status))
+            .FirstOrDefaultAsync(ct);
+    }
+
+    private sealed record SessaoDaCarga(Guid Id, SessaoStatus Status);
+
+    /// <summary>
+    /// Transcreve para a sessão o que o ZIP declarou — ou por que ele não sustenta
+    /// comparação nenhuma.
+    ///
+    /// <para>
+    /// Roda <b>depois</b> do import, e o import roda mesmo quando o envio é inviável: os
+    /// CSVs já passaram pelo validador do upload e os dados são da própria rede, então
+    /// carregá-los é honesto e deixa a carga com contagem de linhas verdadeira. Marcar a
+    /// carga como concluída sem ter carregado nada seria pior — mentiria sobre o import
+    /// para descrever um problema que é da sessão.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>SugestaoDataHora</c> e <c>SugestaoTipoCalculo</c> não são retrato de tela: a fase
+    /// seguinte deriva da primeira o corte anti-vazamento do treino (sem ele a comparação se
+    /// recusa a rodar, ver <c>ComparacaoProcessor</c>) e da segunda contra qual dos dois
+    /// métodos do ERP a disputa acontece.
+    /// </para>
+    /// </summary>
+    private async Task RegistrarNaSessaoAsync(
+        SessaoDaCarga sessao, LeituraDoManifesto leitura, CancellationToken ct)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<EngineDbContext>();
+        var agora = DateTimeOffset.UtcNow;
+
+        if (leitura.MotivoInviabilidade is { } motivo)
+        {
+            // Inviável não é falha: nada quebrou, faltou pré-condição no que foi enviado, e
+            // o remédio (gerar de novo pelo extrator) é outro. Ver ManifestoLeitor.
+            if (!ComparacaoSessao.PodeTransicionar(sessao.Status, SessaoStatus.Inviavel))
+            {
+                logger.LogWarning(
+                    "Sessão {SessaoId} está em {Status} e não pode ir para Inviavel; motivo descartado: {Motivo}",
+                    sessao.Id, sessao.Status, motivo);
+                return;
+            }
+
+            var marcadas = await db.ComparacaoSessoes
+                .Where(s => s.Id == sessao.Id && s.Status == sessao.Status)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.Status, SessaoStatus.Inviavel)
+                    .SetProperty(x => x.MotivoInviabilidade, motivo)
+                    .SetProperty(x => x.AtualizadoEm, agora), ct);
+
+            if (marcadas == 0)
+            {
+                logger.LogWarning(
+                    "Sessão {SessaoId} mudou de estado durante o import; inviabilidade não gravada.", sessao.Id);
+                return;
+            }
+
+            logger.LogInformation("Sessão {SessaoId} marcada como inviável: {Motivo}", sessao.Id, motivo);
+            return;
+        }
+
+        var manifesto = leitura.Manifesto!;
+        await db.ComparacaoSessoes
+            .Where(s => s.Id == sessao.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.SugestaoId, manifesto.SugestaoId)
+                .SetProperty(x => x.SugestaoDescricao, manifesto.SugestaoDescricao)
+                .SetProperty(x => x.SugestaoDataHora, manifesto.SugestaoDataHora)
+                .SetProperty(x => x.SugestaoTipoCalculo, manifesto.SugestaoTipoCalculo)
+                .SetProperty(x => x.AtualizadoEm, agora), ct);
+
+        logger.LogInformation(
+            "Sessão {SessaoId} vinculada à sugestão {SugestaoId} de {DataHora:dd/MM/yyyy} (método {TipoCalculo}), " +
+            "extrator {Versao}, {SkusSemCadastro} SKU(s) sem cadastro.",
+            sessao.Id, manifesto.SugestaoId, manifesto.SugestaoDataHora, manifesto.SugestaoTipoCalculo,
+            manifesto.VersaoExtractor, manifesto.SkusSemCadastro);
     }
 
     private async Task DownloadAndExtractAsync(string blobKey, string workDir, CancellationToken ct)
