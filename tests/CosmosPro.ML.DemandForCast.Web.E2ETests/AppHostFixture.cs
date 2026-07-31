@@ -1,7 +1,10 @@
+using System.Data;
+
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
 using CosmosPro.ML.DemandForCast.Tests.Shared;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Playwright;
@@ -106,6 +109,81 @@ public sealed class AppHostFixture : IAsyncLifetime
         });
 
         return page;
+    }
+
+    /// <summary>
+    /// Semeia uma execução de comparação já concluída, com <paramref name="resultadoJson"/>
+    /// pronto, na rede que a página vai enxergar.
+    ///
+    /// <para>
+    /// Escreve direto no banco <c>engine</c> porque o caminho legítimo — treinar um modelo e
+    /// rodar o Worker — leva dezenas de minutos e depende de dado importado; o que estes
+    /// testes exercitam é o <b>render</b> do bloco de resultados, não o cálculo dele.
+    /// </para>
+    ///
+    /// <para>
+    /// A rede é a mesma que <c>RedeContext</c> resolve para um PowerUser sem seleção (a
+    /// primeira ativa por id); repetir a consulta aqui é o que mantém o dado semeado visível
+    /// para a sessão do teste. As linhas anteriores com o mesmo <paramref name="treinoJobId"/>
+    /// são removidas antes: o banco é persistente e reexecutar o teste acumularia execuções
+    /// idênticas na grade.
+    /// </para>
+    /// </summary>
+    public async Task<Guid> SemearComparacaoConcluidaAsync(
+        Guid treinoJobId,
+        DateOnly janelaInicio,
+        DateOnly janelaFim,
+        byte tipoCalculo,
+        string resultadoJson,
+        CancellationToken ct = default)
+    {
+        var connectionString = await App.GetConnectionStringAsync("engine", ct)
+            ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+
+        await using (var limpeza = conn.CreateCommand())
+        {
+            limpeza.CommandText = "DELETE FROM dbo.ComparacoesPbs WHERE TreinoJobId = @treino;";
+            limpeza.Parameters.AddWithValue("@treino", treinoJobId);
+            await limpeza.ExecuteNonQueryAsync(ct);
+        }
+
+        int redeId;
+        await using (var consulta = conn.CreateCommand())
+        {
+            consulta.CommandText = "SELECT TOP 1 Id FROM dbo.Redes WHERE Ativo = 1 ORDER BY Id;";
+            redeId = (int?)await consulta.ExecuteScalarAsync(ct)
+                ?? throw new InvalidOperationException("Nenhuma rede ativa no banco engine.");
+        }
+
+        var id = Guid.CreateVersion7();
+        await using (var insert = conn.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO dbo.ComparacoesPbs
+                    (Id, RedeId, Status, DataAgendamento, DataInicioProcessamento, DataConclusao,
+                     TreinoJobId, JanelaInicio, JanelaFim, TipoCalculo, ResultadoJson, MensagemErro)
+                VALUES
+                    (@id, @redeId, 'Concluido', @agendamento, @inicio, @conclusao,
+                     @treino, @janelaInicio, @janelaFim, @tipoCalculo, @resultado, NULL);
+                """;
+            var agora = DateTimeOffset.UtcNow;
+            insert.Parameters.AddWithValue("@id", id);
+            insert.Parameters.AddWithValue("@redeId", redeId);
+            insert.Parameters.AddWithValue("@agendamento", agora);
+            insert.Parameters.AddWithValue("@inicio", agora);
+            insert.Parameters.AddWithValue("@conclusao", agora);
+            insert.Parameters.AddWithValue("@treino", treinoJobId);
+            insert.Parameters.Add("@janelaInicio", SqlDbType.Date).Value = janelaInicio.ToDateTime(TimeOnly.MinValue);
+            insert.Parameters.Add("@janelaFim", SqlDbType.Date).Value = janelaFim.ToDateTime(TimeOnly.MinValue);
+            insert.Parameters.AddWithValue("@tipoCalculo", tipoCalculo);
+            insert.Parameters.AddWithValue("@resultado", resultadoJson);
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+
+        return id;
     }
 
     private static void OverrideSqlProjectWithBuiltDacpac(IDistributedApplicationTestingBuilder builder, string resourceName)

@@ -93,8 +93,11 @@ public class ComparisonApiClient(HttpClient httpClient, IRedeContext redeContext
     public static ComparacaoResultado? ParseResultado(string? resultadoJson)
     {
         if (string.IsNullOrWhiteSpace(resultadoJson)) return null;
+        // Catch largo de propósito (mesmo de TrainingApiClient.ParseResultado): isto roda
+        // dentro do render da página, e qualquer exceção que escape aqui vira 500 na tela
+        // inteira em vez de "sem resultado" numa aba.
         try { return JsonSerializer.Deserialize<ComparacaoResultado>(resultadoJson, JsonOpts); }
-        catch (JsonException) { return null; }
+        catch { return null; }
     }
 }
 
@@ -115,10 +118,7 @@ public sealed record ComparacaoPbsRunView(
     DateOnly JanelaFim,
     byte TipoCalculo,
     string? MensagemErro,
-    string? ResultadoJson)
-{
-    public bool EstadoTerminal => Status is "Concluido" or "Falha";
-}
+    string? ResultadoJson);
 
 /// <summary>
 /// Rótulos dos dois métodos de cálculo do ERP. São <b>baselines distintos</b>: a tela
@@ -292,6 +292,15 @@ public sealed record CamadaBResultado(
     /// </summary>
     public bool EhUtilizavel => Utilidade == "Utilizavel";
 
+    /// <summary>
+    /// Se os números de decisão podem ser <b>exibidos</b>. Mais estrito que
+    /// <see cref="EhUtilizavel"/>: com a concordância de reconciliação abaixo do patamar, o
+    /// resultado existe e é bem formado, mas mede o nosso desconhecimento da regra do ERP —
+    /// e a página afirma isso em texto. Exibir a tabela mesmo assim contradiria o próprio
+    /// aviso que ela imprime logo acima.
+    /// </summary>
+    public bool NumerosApresentaveis => EhUtilizavel && Reconciliacao?.AbaixoDoPatamar != true;
+
     /// <summary>Horizonte declarado do braço ML, lido dos próprios itens recusados.</summary>
     public int? HorizonteMl => ForaDoHorizonteMl is { Count: > 0 } lista ? lista[0].HorizonteMaximoMl : null;
 
@@ -306,8 +315,12 @@ public sealed record CamadaBResultado(
 
         "ForaDoHorizonteMl" =>
             "Esta camada não comparou nenhum item. Todos os itens que reconciliaram exigem previsão para " +
-            $"mais dias do que o modelo alcança: a cobertura das compras do ERP excede o horizonte de " +
-            $"{HorizonteMl?.ToString() ?? "7"} dia(s) do pipeline atual (cobertura corrente no PBS é de 15 ou 30 dias). " +
+            "mais dias do que o modelo alcança: a cobertura das compras do ERP excede o horizonte " +
+            (HorizonteMl is { } dias
+                ? $"de {dias} dia(s) do pipeline atual"
+                : "do pipeline atual, cujo tamanho este resultado não informou — a lista de itens " +
+                  "recusados veio vazia, e inventar um número aqui seria afirmar o que não sabemos") +
+            " (cobertura corrente no PBS é de 15 ou 30 dias). " +
             "Isto NÃO é empate entre ERP e ML, nem diferença zero — é ausência de comparação. Enquanto não " +
             "houver previsão multi-horizonte, nenhum número de decisão pode ser lido daqui. É o estado " +
             "esperado hoje, e a camada A (previsão contra previsão) continua válida.",

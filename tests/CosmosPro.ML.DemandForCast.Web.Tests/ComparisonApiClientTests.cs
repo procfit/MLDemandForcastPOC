@@ -261,6 +261,73 @@ public sealed class ComparisonApiClientTests
         curvaBoa.AbaixoDoPatamar.Should().BeFalse();
     }
 
+    /// <summary>
+    /// A página afirma que nenhum número de decisão é apresentável enquanto a concordância
+    /// não subir. Utilizável e abaixo do patamar é justamente o caso em que ela exibiria uma
+    /// tabela de vitórias logo abaixo do próprio aviso que a desautoriza.
+    /// </summary>
+    [Fact]
+    public void Camada_B_utilizavel_com_concordancia_abaixo_do_patamar_nao_tem_numeros_apresentaveis()
+    {
+        var abaixo = CamadaB("Utilizavel") with
+        {
+            ItensComparados = 40,
+            Reconciliacao = new ReconciliacaoResumoView(100, 62, 38, 0, 40, 2m, 8m, 0.62, null),
+        };
+
+        abaixo.EhUtilizavel.Should().BeTrue("o resultado existe e é bem formado");
+        abaixo.NumerosApresentaveis.Should().BeFalse(
+            "com 0,62 de concordância a diferença medida seria o nosso erro de modelagem da regra do ERP");
+    }
+
+    [Fact]
+    public void Camada_B_utilizavel_acima_do_patamar_tem_numeros_apresentaveis()
+    {
+        var acima = CamadaB("Utilizavel") with
+        {
+            ItensComparados = 40,
+            Reconciliacao = new ReconciliacaoResumoView(100, 98, 2, 0, 40, 0m, 1m, 0.98, null),
+        };
+
+        acima.NumerosApresentaveis.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Taxa nula não retém os números: ela já tem estado próprio na tela, e tratá-la como
+    /// "abaixo do patamar" esconderia o resultado por um motivo que não é o dela.
+    /// </summary>
+    [Fact]
+    public void Camada_B_utilizavel_com_taxa_nula_nao_e_retida_pelo_patamar()
+    {
+        var semTaxa = CamadaB("Utilizavel") with
+        {
+            Reconciliacao = new ReconciliacaoResumoView(0, 0, 0, 0, 0, 0m, 0m, null, null),
+        };
+
+        semTaxa.NumerosApresentaveis.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Camada_B_nao_utilizavel_nunca_tem_numeros_apresentaveis()
+    {
+        CamadaB("ForaDoHorizonteMl").NumerosApresentaveis.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Sem a lista de itens recusados não há de onde ler o horizonte — a explicação diz que
+    /// não sabe, em vez de afirmar um número que ninguém apurou.
+    /// </summary>
+    [Fact]
+    public void Estado_fora_do_horizonte_sem_itens_recusados_nao_inventa_o_numero_de_dias()
+    {
+        var b = CamadaB("ForaDoHorizonteMl");
+
+        b.HorizonteMl.Should().BeNull();
+        b.ExplicacaoNaoUtilizavel.Should().NotContain("de 7 dia(s)",
+            "7 era um default embutido na tela; o horizonte tem de vir do resultado");
+        b.ExplicacaoNaoUtilizavel.Should().Contain("este resultado não informou");
+    }
+
     // --- Camada C -------------------------------------------------------------
 
     [Fact]

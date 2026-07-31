@@ -143,7 +143,7 @@
                     @foreach (var tipo in TipoCalculoErp.Todos)
                     {
                         var run = _selecionados.GetValueOrDefault(tipo);
-                        var res = run is null ? null : ComparisonApiClient.ParseResultado(run.ResultadoJson);
+                        var res = run is null ? null : ResultadoDe(run);
 
                         <RadzenTabsItem Text="@($"{TipoCalculoErp.Nome(tipo)} (método {tipo})")">
                             <RadzenStack Gap="1.25rem">
@@ -187,7 +187,15 @@
                                     @* --- Ressalva padrão treino/serve (viaja com os números) ----------- *@
                                     <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
                                         <strong>Ressalva metodológica que acompanha estes números.</strong>
-                                        <div style="margin-top: 0.35rem">@res.RessalvaTreinoServe</div>
+                                        <div style="margin-top: 0.35rem">
+                                            @(string.IsNullOrWhiteSpace(res.RessalvaTreinoServe)
+                                                ? "Este resultado foi gravado sem o texto da ressalva de treino contra serviço. "
+                                                  + "A ressalva não deixou de valer por estar ausente: as features servidas ao modelo "
+                                                  + "nesta comparação são congeladas na data da sugestão, enquanto o treino usou o preço "
+                                                  + "realizado de cada dia. Leia os números abaixo com essa diferença em mente e, para o "
+                                                  + "texto completo, execute a comparação novamente."
+                                                : res.RessalvaTreinoServe)
+                                        </div>
                                     </RadzenAlert>
 
                                     @* --- População e quem saiu dela ------------------------------------ *@
@@ -502,6 +510,28 @@
                                                         </RadzenDataGrid>
                                                     }
                                                 }
+                                                else if (!b.NumerosApresentaveis)
+                                                {
+                                                    @* A página afirma acima que nada é apresentável abaixo do patamar;
+                                                       renderizar a tabela aqui contradiria o próprio aviso. Retido não é
+                                                       inexistente — o leitor precisa saber que os números existem. *@
+                                                    <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                        <strong>Resultados retidos pelo portão de reconciliação.</strong>
+                                                        <div style="margin-top: 0.35rem">
+                                                            Esta camada comparou @b.ItensComparados.ToString("N0") item(ns) de
+                                                            @b.ItensNaPopulacao na população e produziu tabela, placar e traço — eles
+                                                            existem e estão gravados no resultado. Não são exibidos porque a
+                                                            concordância de reconciliação
+                                                            (@(b.Reconciliacao?.TaxaConcordancia?.ToString("P1") ?? "não apurada"))
+                                                            está abaixo do patamar de
+                                                            @ReconciliacaoResumoView.PatamarAceitavel.ToString("P0"): sobre uma
+                                                            aritmética do ERP que não reproduzimos, a diferença medida seria o nosso
+                                                            erro de modelagem da regra dele, não a qualidade da previsão. Suba a
+                                                            concordância e os números aparecem sozinhos — a camada A, que não depende
+                                                            deste portão, continua exibida acima.
+                                                        </div>
+                                                    </RadzenAlert>
+                                                }
                                                 else
                                                 {
                                                     <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
@@ -788,6 +818,26 @@
     /// </summary>
     private readonly Dictionary<byte, ComparacaoPbsRunView> _selecionados = [];
 
+    /// <summary>
+    /// Resultado já desserializado, por execução. Sem isto o render desserializa o
+    /// <c>ResultadoJson</c> inteiro — com <c>Detalhe</c>, <c>DetalheReconciliacao</c> e
+    /// <c>ForaDoHorizonteMl</c> — uma vez por aba a cada tick de 3 s, em cada aba de
+    /// navegador aberta. Só entra no cache o JSON já presente: um id cujo resultado ainda
+    /// não chegou nunca é memoizado, então a transição "sem resultado → concluído"
+    /// dispensa invalidação.
+    /// </summary>
+    private readonly Dictionary<Guid, ComparacaoResultado?> _resultados = [];
+
+    private ComparacaoResultado? ResultadoDe(ComparacaoPbsRunView run)
+    {
+        if (run.ResultadoJson is null) return null;
+        if (_resultados.TryGetValue(run.Id, out var memoizado)) return memoizado;
+
+        var parseado = ComparisonApiClient.ParseResultado(run.ResultadoJson);
+        _resultados[run.Id] = parseado;
+        return parseado;
+    }
+
     private Timer? _timer;
     private readonly CancellationTokenSource _cts = new();
 
@@ -803,8 +853,27 @@
 
         await CarregarTreinosAsync();
         await RefreshAsync();
-        _timer = new Timer(async _ => await InvokeAsync(RefreshAsync), null,
-            TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>
+    /// Liga o polling enquanto houver execução pendente ou em processamento, e desliga
+    /// quando não houver — que é o que o texto ao lado do título promete. Um timer eterno
+    /// sobre uma lista estável só gera round-trip de SignalR por circuito aberto.
+    /// </summary>
+    private void AjustarPolling()
+    {
+        var pendente = _jobs.Any(j => j.Status is "Pendente" or "Processando");
+
+        if (pendente && _timer is null)
+        {
+            _timer = new Timer(async _ => await InvokeAsync(RefreshAsync), null,
+                TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+        }
+        else if (!pendente && _timer is not null)
+        {
+            _timer.Dispose();
+            _timer = null;
+        }
     }
 
     private async Task CarregarTreinosAsync()
@@ -855,6 +924,7 @@
         finally
         {
             _loading = false;
+            AjustarPolling();
             StateHasChanged();
         }
     }
