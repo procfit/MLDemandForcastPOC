@@ -1,0 +1,1044 @@
+@page "/comparacao"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ComparisonApiClient ComparisonApi
+@inject TrainingApiClient TrainingApi
+@inject NotificationService Notifications
+@implements IDisposable
+
+@* Tela do INSTRUMENTO (F13): é lida por quem valida o método, não pelo comprador.
+   A tela do usuário leigo é outra (F14). Aqui as ressalvas ficam na página, não em
+   tooltip: o trabalho desta tela é impedir que se conclua do resultado mais do que
+   ele suporta. *@
+
+<PageTitle>Comparativo ERP × ML</PageTitle>
+
+<RadzenStack Orientation="Orientation.Vertical" Gap="1.5rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Comparativo do ERP contra o ML</RadzenText>
+        <HelpTip Position="TooltipPosition.Bottom" Text="@TipPagina" />
+        <div style="flex: 1"></div>
+    </RadzenStack>
+
+    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        Tela técnica de validação do método. Cada execução compara UM método de cálculo do ERP contra o
+        modelo de ML em três camadas: previsão contra previsão (camada A), decisão de compra contra decisão
+        de compra (camada B) e sugestão do ERP contra aprovação do comprador (camada C). As camadas medem
+        coisas diferentes e não se somam.
+    </RadzenAlert>
+
+    <RadzenCard Variant="Variant.Outlined">
+        <RadzenStack Gap="1rem">
+            <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Nova execução</RadzenText>
+            <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" Gap="1rem" AlignItems="AlignItems.End">
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.25rem" AlignItems="AlignItems.Center">
+                    <RadzenFormField Text="Treino de origem" Variant="Variant.Outlined" Style="width: 360px">
+                        <RadzenDropDown Data="@_treinos" TValue="Guid" @bind-Value="_treinoJobId"
+                                        TextProperty="Label" ValueProperty="Id"
+                                        Placeholder="Escolha um treino concluído" AllowClear="false" />
+                    </RadzenFormField>
+                    <HelpTip Text="@TipTreino" />
+                </RadzenStack>
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.25rem" AlignItems="AlignItems.Center">
+                    <RadzenFormField Text="Janela: início" Variant="Variant.Outlined" Style="width: 170px">
+                        <RadzenDatePicker @bind-Value="_janelaInicio" DateFormat="dd/MM/yyyy" ShowTime="false" />
+                    </RadzenFormField>
+                    <RadzenFormField Text="Janela: fim" Variant="Variant.Outlined" Style="width: 170px">
+                        <RadzenDatePicker @bind-Value="_janelaFim" DateFormat="dd/MM/yyyy" ShowTime="false" />
+                    </RadzenFormField>
+                    <HelpTip Text="@TipJanela" />
+                </RadzenStack>
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.25rem" AlignItems="AlignItems.Center">
+                    <RadzenFormField Text="Método de cálculo do ERP" Variant="Variant.Outlined" Style="width: 260px">
+                        <RadzenDropDown Data="@_tiposCalculo" TValue="byte" @bind-Value="_tipoCalculo"
+                                        TextProperty="Label" ValueProperty="Tipo" AllowClear="false" />
+                    </RadzenFormField>
+                    <HelpTip Text="@TipTipoCalculo" />
+                </RadzenStack>
+                <RadzenButton Click="@Comparar"
+                              Icon="@(_enqueuing ? "hourglass_empty" : "compare_arrows")"
+                              Text="@(_enqueuing ? "Enfileirando…" : "Comparar")"
+                              ButtonStyle="ButtonStyle.Primary"
+                              Disabled="@(_enqueuing || _treinoJobId == Guid.Empty)" />
+            </RadzenStack>
+
+            @if (TreinoSelecionadoSemCorte)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                    O treino escolhido rodou SEM data de corte, ou seja, aprendeu também com as vendas
+                    posteriores à sugestão do ERP — que são justamente o gabarito desta comparação. O
+                    resultado mediria memória, não previsão, e o Worker recusa a execução. Rode um treino
+                    novo informando a data de corte (a data da sugestão que será comparada, ou anterior).
+                </RadzenAlert>
+            }
+        </RadzenStack>
+    </RadzenCard>
+
+    <RadzenCard Variant="Variant.Outlined">
+        <RadzenStack Gap="1rem">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Execuções</RadzenText>
+                <HelpTip Text="A lista se atualiza sozinha a cada 3 segundos enquanto houver execução pendente ou em processamento. Selecione uma execução concluída para ver o resultado dela na aba do método correspondente." />
+            </RadzenStack>
+            <RadzenDataGrid TItem="ComparacaoPbsRunView" Data="@_jobs" AllowPaging="true" PageSize="8"
+                            Density="Density.Compact" IsLoading="@(_loading && _jobs.Count == 0)"
+                            EmptyText="Nenhuma comparação executada ainda."
+                            RowSelect="@OnSelect"
+                            SelectionMode="DataGridSelectionMode.Single">
+                <Columns>
+                    <RadzenDataGridColumn TItem="ComparacaoPbsRunView" Property="Status" Title="Status" Width="130px">
+                        <Template Context="j">
+                            <RadzenBadge Text="@j.Status" BadgeStyle="@BadgeFor(j.Status)" Shade="Shade.Lighter" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="ComparacaoPbsRunView" Property="DataAgendamento" Title="Agendado" Width="160px">
+                        <Template Context="j"><small>@j.DataAgendamento.ToLocalTime().ToString("dd/MM HH:mm:ss")</small></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="ComparacaoPbsRunView" Property="DataConclusao" Title="Concluído" Width="120px">
+                        <Template Context="j"><small>@(j.DataConclusao?.ToLocalTime().ToString("HH:mm:ss") ?? "—")</small></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="ComparacaoPbsRunView" Property="TipoCalculo" Title="Método" Width="180px">
+                        <HeaderTemplate><span>Método</span><HelpTip Text="@TipTipoCalculo" Size="0.85rem" /></HeaderTemplate>
+                        <Template Context="j">@TipoCalculoErp.Nome(j.TipoCalculo)</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="ComparacaoPbsRunView" Title="Janela" Width="180px" Sortable="false">
+                        <Template Context="j">
+                            <small>@j.JanelaInicio.ToString("dd/MM/yyyy") → @j.JanelaFim.ToString("dd/MM/yyyy")</small>
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="ComparacaoPbsRunView" Title="Detalhe">
+                        <Template Context="j">
+                            @if (j.Status == "Falha")
+                            {
+                                <small style="color: var(--rz-danger)">@j.MensagemErro</small>
+                            }
+                            else if (j.Status == "Concluido")
+                            {
+                                <RadzenButton Text="Ver resultado" Icon="bar_chart" Size="ButtonSize.Small"
+                                              ButtonStyle="ButtonStyle.Light" Click="@(() => OnSelect(j))" />
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenStack>
+    </RadzenCard>
+
+    <RadzenCard Variant="Variant.Outlined">
+        <RadzenStack Gap="1rem">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Resultado por método de cálculo do ERP</RadzenText>
+                <HelpTip Text="@TipTipoCalculo" />
+            </RadzenStack>
+
+            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                O ERP tem dois métodos de cálculo e uma mesma rede pode usar os dois. Eles são baselines
+                distintos: cada aba abaixo mostra o resultado de UMA execução de UM método. Os números das
+                duas abas nunca são somados nem promediados — a média entre eles não descreveria nenhum
+                dos dois.
+            </RadzenText>
+
+            <RadzenTabs RenderMode="TabRenderMode.Client" @bind-SelectedIndex="_abaTipo">
+                <Tabs>
+                    @foreach (var tipo in TipoCalculoErp.Todos)
+                    {
+                        var run = _selecionados.GetValueOrDefault(tipo);
+                        var res = run is null ? null : ComparisonApiClient.ParseResultado(run.ResultadoJson);
+
+                        <RadzenTabsItem Text="@($"{TipoCalculoErp.Nome(tipo)} (método {tipo})")">
+                            <RadzenStack Gap="1.25rem">
+                                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                    @TipoCalculoErp.Descricao(tipo)
+                                </RadzenText>
+
+                                @if (run is null)
+                                {
+                                    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                        Nenhuma execução do método "@TipoCalculoErp.Nome(tipo)" selecionada. Escolha uma
+                                        execução concluída deste método na tabela de execuções acima. Esta aba não recebe
+                                        números de outro método.
+                                    </RadzenAlert>
+                                }
+                                else if (run.Status == "Falha")
+                                {
+                                    <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                        A execução falhou e não produziu resultado: @run.MensagemErro
+                                    </RadzenAlert>
+                                }
+                                else if (res is null)
+                                {
+                                    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                        A execução selecionada está em "@run.Status" e ainda não tem resultado legível.
+                                        Nenhum número é exibido — ausência de resultado não é resultado zero.
+                                    </RadzenAlert>
+                                }
+                                else
+                                {
+                                    @* --- Identificação da execução ------------------------------------ *@
+                                    <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                        Gerado em @res.GeradoEm.ToLocalTime().ToString("dd/MM/yyyy HH:mm") ·
+                                        treino @res.TreinoJobId.ToString()[..8] ·
+                                        modelo treinado até @res.ModeloTreinadoAte.ToString("dd/MM/yyyy")
+                                        (corte pedido: @(res.TreinoAte?.ToString("dd/MM/yyyy") ?? "sem corte")) ·
+                                        janela de sugestões @res.JanelaInicio.ToString("dd/MM/yyyy") → @res.JanelaFim.ToString("dd/MM/yyyy") ·
+                                        @res.Sugestoes sugestão(ões) do ERP
+                                    </RadzenText>
+
+                                    @* --- Ressalva padrão treino/serve (viaja com os números) ----------- *@
+                                    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                        <strong>Ressalva metodológica que acompanha estes números.</strong>
+                                        <div style="margin-top: 0.35rem">@res.RessalvaTreinoServe</div>
+                                    </RadzenAlert>
+
+                                    @* --- População e quem saiu dela ------------------------------------ *@
+                                    <RadzenStack Gap="0.75rem">
+                                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                            <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">População</RadzenText>
+                                            <HelpTip Text="@TipPopulacao" />
+                                        </RadzenStack>
+
+                                        <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" Gap="1rem">
+                                            <KpiCard Label="Itens que o ERP avaliou" Value="@res.ItensDaSugestao" Icon="inventory_2"
+                                                     Help="Total de linhas da sugestão do ERP na janela — o teto da população. As camadas só encolhem a partir daqui; nenhum item que o ERP não olhou entra." />
+                                            <KpiCard Label="Na camada A" Value="@res.ItensCamadaA" Icon="query_stats" Color="var(--rz-info)"
+                                                     Help="Itens que chegaram à comparação de previsão contra previsão." />
+                                            <KpiCard Label="Na camada B" Value="@res.ItensCamadaB" Icon="shopping_cart" Color="var(--rz-info)"
+                                                     Help="Itens que chegaram ao comparador de decisão. Chegar não é ser comparado: veja o estado da camada B." />
+                                            <KpiCard Label="Excluídos (todos os motivos)" Value="@res.TotalExcluido" Icon="filter_alt_off" Color="var(--rz-warning)"
+                                                     Help="Soma das linhas da tabela abaixo. Um resultado calculado sobre um subconjunto inexplicado é pior que nenhum resultado." />
+                                        </RadzenStack>
+
+                                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                            Os motivos abaixo são contadores separados de propósito: cada um significa uma
+                                            coisa distinta, e lidos como um balde só esconderiam de que subconjunto o
+                                            resultado foi calculado.
+                                        </RadzenText>
+
+                                        <RadzenDataGrid TItem="ExclusaoPopulacao" Data="@res.Exclusoes" AllowPaging="false" Density="Density.Compact">
+                                            <Columns>
+                                                <RadzenDataGridColumn TItem="ExclusaoPopulacao" Property="Motivo" Title="Motivo da saída" Width="290px" />
+                                                <RadzenDataGridColumn TItem="ExclusaoPopulacao" Property="Itens" Title="Itens" Width="90px" TextAlign="TextAlign.Right">
+                                                    <Template Context="e">@e.Itens.ToString("N0")</Template>
+                                                </RadzenDataGridColumn>
+                                                <RadzenDataGridColumn TItem="ExclusaoPopulacao" Property="Significado" Title="O que isso significa" Sortable="false">
+                                                    <Template Context="e"><small>@e.Significado</small></Template>
+                                                </RadzenDataGridColumn>
+                                            </Columns>
+                                        </RadzenDataGrid>
+                                    </RadzenStack>
+
+                                    @* ================= CAMADA A ======================================== *@
+                                    <RadzenCard Variant="Variant.Outlined">
+                                        <RadzenStack Gap="0.75rem">
+                                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                                <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">
+                                                    Camada A — previsão do ERP contra previsão do ML
+                                                </RadzenText>
+                                                <HelpTip Text="@TipCamadaA" />
+                                                <RadzenBadge Text="resultado de manchete" BadgeStyle="BadgeStyle.Info" Shade="Shade.Lighter" IsPill="true" />
+                                            </RadzenStack>
+
+                                            @if (res.Previsao is not { } a)
+                                            {
+                                                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                    O resultado não trouxe a camada A. Nenhum número é exibido.
+                                                </RadzenAlert>
+                                            }
+                                            else if (a.ParesAvaliados == 0)
+                                            {
+                                                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                    Nenhum par foi pontuado nesta camada (@a.ParesDescartados descartado(s) por ruptura
+                                                    ou janela vazia). Sem par pontuado não há comparação: isto não é empate entre ERP e
+                                                    ML, é ausência de medida.
+                                                </RadzenAlert>
+                                            }
+                                            else
+                                            {
+                                                <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                    <strong>Unidade das métricas.</strong>
+                                                    <div style="margin-top: 0.35rem">@a.UnidadeTexto</div>
+                                                </RadzenAlert>
+
+                                                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                                    @a.ParesAvaliados.ToString("N0") par(es) avaliado(s) ·
+                                                    @a.ParesDescartados.ToString("N0") descartado(s) por ruptura na janela ou janela vazia
+                                                    (@FracaoDescartada(a) do total que entrou na camada). Fração descartada alta reduz o
+                                                    poder da comparação e precisa ser lida junto do resultado.
+                                                </RadzenText>
+
+                                                <RadzenDataGrid TItem="ArmRow" Data="@ArmRows(a)" AllowPaging="false" Density="Density.Compact">
+                                                    <Columns>
+                                                        <RadzenDataGridColumn TItem="ArmRow" Property="Nome" Title="Braço">
+                                                            <Template Context="r"><strong>@r.Nome</strong></Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="ArmRow" Title="WAPE" Width="110px" TextAlign="TextAlign.Right">
+                                                            <HeaderTemplate><span>WAPE</span><HelpTip Text="@TipWape" Size="0.85rem" /></HeaderTemplate>
+                                                            <Template Context="r">@Pct(r.Metricas?.Wape)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="ArmRow" Title="MAE" Width="110px" TextAlign="TextAlign.Right">
+                                                            <HeaderTemplate><span>MAE</span><HelpTip Text="@TipMae" Size="0.85rem" /></HeaderTemplate>
+                                                            <Template Context="r">@Num(r.Metricas?.Mae)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="ArmRow" Title="RMSE" Width="110px" TextAlign="TextAlign.Right">
+                                                            <Template Context="r">@Num(r.Metricas?.Rmse)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="ArmRow" Title="MAPE" Width="110px" TextAlign="TextAlign.Right">
+                                                            <HeaderTemplate><span>MAPE</span><HelpTip Text="@TipMape" Size="0.85rem" /></HeaderTemplate>
+                                                            <Template Context="r">@Pct(r.Metricas?.Mape)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="ArmRow" Title="n" Width="100px" TextAlign="TextAlign.Right">
+                                                            <Template Context="r">@(r.Metricas?.N.ToString("N0") ?? "sem métrica")</Template>
+                                                        </RadzenDataGridColumn>
+                                                    </Columns>
+                                                </RadzenDataGrid>
+
+                                                @if (a.Vitoria is { } placar)
+                                                {
+                                                    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                                        Placar par a par: ML venceu @placar.VitoriasMl (@placar.TaxaVitoriaMl.ToString("P1")),
+                                                        ERP venceu @placar.VitoriasErp (@placar.TaxaVitoriaErp.ToString("P1")),
+                                                        @placar.Empates empate(s) em @placar.N par(es). Empate conta no denominador e nunca
+                                                        como vitória.
+                                                    </RadzenText>
+                                                }
+
+                                                @* --- Drill-down camada A --------------------------------- *@
+                                                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                                    <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Drill-down por hierarquia</RadzenText>
+                                                    <HelpTip Text="@TipRegressao" />
+                                                </RadzenStack>
+
+                                                <RadzenTabs RenderMode="TabRenderMode.Client">
+                                                    <Tabs>
+                                                        @foreach (var dim in Dimensoes(a))
+                                                        {
+                                                            var rows = BuildDrillA(a, dim);
+                                                            var regressoes = rows.Count(x => x.MlPerde);
+                                                            <RadzenTabsItem Text="@($"{RotuloDim(dim)} ({rows.Count})")">
+                                                                @if (rows.Count == 0)
+                                                                {
+                                                                    <RadzenText TextStyle="TextStyle.Body2" Style="color: var(--rz-text-secondary-color)">
+                                                                        Sem dados nesta dimensão.
+                                                                    </RadzenText>
+                                                                }
+                                                                else
+                                                                {
+                                                                    @if (regressoes > 0)
+                                                                    {
+                                                                        <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Style="margin-bottom: 0.5rem">
+                                                                            <RadzenIcon Icon="warning" Style="margin-right: 0.25rem; vertical-align: middle;" />
+                                                                            @regressoes de @rows.Count chave(s) com o ML PERDENDO para o ERP nesta dimensão
+                                                                            @(MlVenceGlobal(a) ? "— e o resultado global favorece o ML. A média global está escondendo estes segmentos." : ".")
+                                                                            Investigue antes de concluir qualquer coisa sobre o método.
+                                                                        </RadzenAlert>
+                                                                    }
+                                                                    <RadzenDataGrid TItem="DrillRowA" Data="@rows" AllowPaging="true" PageSize="10" AllowSorting="true" Density="Density.Compact">
+                                                                        <Columns>
+                                                                            <RadzenDataGridColumn TItem="DrillRowA" Property="Chave" Title="@RotuloDim(dim)" />
+                                                                            <RadzenDataGridColumn TItem="DrillRowA" Property="N" Title="n" Width="90px" TextAlign="TextAlign.Right">
+                                                                                <Template Context="row">@row.N.ToString("N0")</Template>
+                                                                            </RadzenDataGridColumn>
+                                                                            <RadzenDataGridColumn TItem="DrillRowA" Property="WapeErp" Title="WAPE ERP" Width="120px" TextAlign="TextAlign.Right">
+                                                                                <Template Context="row">@Pct(row.WapeErp)</Template>
+                                                                            </RadzenDataGridColumn>
+                                                                            <RadzenDataGridColumn TItem="DrillRowA" Property="WapeMl" Title="WAPE ML" Width="120px" TextAlign="TextAlign.Right">
+                                                                                <Template Context="row">@Pct(row.WapeMl)</Template>
+                                                                            </RadzenDataGridColumn>
+                                                                            <RadzenDataGridColumn TItem="DrillRowA" Title="Placar (ML × ERP)" Width="160px" Sortable="false">
+                                                                                <Template Context="row">
+                                                                                    @(row.Placar is { } p ? $"{p.VitoriasMl} × {p.VitoriasErp} ({p.Empates} emp.)" : "sem placar")
+                                                                                </Template>
+                                                                            </RadzenDataGridColumn>
+                                                                            <RadzenDataGridColumn TItem="DrillRowA" Title="ML perde aqui?" Width="150px" Sortable="false">
+                                                                                <Template Context="row">
+                                                                                    @if (row.MlPerde)
+                                                                                    {
+                                                                                        <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger); vertical-align: middle;" />
+                                                                                        <span style="color: var(--rz-danger); margin-left: 0.25rem;">sim</span>
+                                                                                    }
+                                                                                </Template>
+                                                                            </RadzenDataGridColumn>
+                                                                        </Columns>
+                                                                    </RadzenDataGrid>
+                                                                }
+                                                            </RadzenTabsItem>
+                                                        }
+                                                    </Tabs>
+                                                </RadzenTabs>
+                                            }
+                                        </RadzenStack>
+                                    </RadzenCard>
+
+                                    @* ================= CAMADA B ======================================== *@
+                                    <RadzenCard Variant="Variant.Outlined">
+                                        <RadzenStack Gap="0.75rem">
+                                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                                <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">
+                                                    Camada B — decisão de compra do ERP contra decisão do ML
+                                                </RadzenText>
+                                                <HelpTip Text="@TipCamadaB" />
+                                            </RadzenStack>
+
+                                            @if (res.Decisao is not { } b)
+                                            {
+                                                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                    O resultado não trouxe a camada B. Nenhum número é exibido.
+                                                </RadzenAlert>
+                                            }
+                                            else
+                                            {
+                                                @* 1) O portão de validade vem ANTES dos números que ele valida. *@
+                                                <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">
+                                                    Portão de validade: reconciliação da aritmética do ERP
+                                                </RadzenText>
+                                                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                                    Antes de trocar a demanda do ERP pela do ML, recalculamos a quantidade que o
+                                                    próprio ERP sugeriu a partir da demanda que ele próprio usou. Se a nossa
+                                                    aritmética não reproduz o que ele gravou, tudo abaixo deste ponto mede o nosso
+                                                    desconhecimento da regra dele, não a qualidade da previsão.
+                                                </RadzenText>
+
+                                                @if (b.Reconciliacao is not { } rec)
+                                                {
+                                                    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                        O resultado não trouxe o portão de reconciliação. Sem ele, nenhum número de
+                                                        decisão é interpretável, e por isso nada é exibido abaixo.
+                                                    </RadzenAlert>
+                                                }
+                                                else
+                                                {
+                                                    @if (rec.TaxaConcordancia is { } taxa)
+                                                    {
+                                                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+                                                            <RadzenBadge Text="@($"concordância {taxa.ToString("P1")}")"
+                                                                         BadgeStyle="@(rec.AbaixoDoPatamar ? BadgeStyle.Danger : BadgeStyle.Success)"
+                                                                         Shade="Shade.Lighter" IsPill="true" />
+                                                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                                                @rec.Reconciliados de @rec.Itens item(ns) reconciliado(s) ·
+                                                                @rec.Divergentes divergente(s) ·
+                                                                @rec.BracoMlIndeterminado com braço ML indeterminado ·
+                                                                divergência absoluta média @rec.DivergenciaAbsMedia.ToString("N3")
+                                                                (máxima @rec.DivergenciaAbsMaxima.ToString("N3")), medida só sobre os divergentes.
+                                                            </RadzenText>
+                                                        </RadzenStack>
+
+                                                        @if (rec.AbaixoDoPatamar)
+                                                        {
+                                                            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                                Concordância abaixo de @ReconciliacaoResumoView.PatamarAceitavel.ToString("P0"): não
+                                                                reproduzimos a regra do ERP em parte relevante da população. Uma taxa baixa
+                                                                significa "não modelamos o ERP", nunca "o ML ganhou" — nenhum número de decisão
+                                                                abaixo é apresentável enquanto ela não subir.
+                                                            </RadzenAlert>
+                                                        }
+                                                    }
+                                                    else
+                                                    {
+                                                        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                            <strong>Taxa de concordância: não apurada.</strong>
+                                                            <div style="margin-top: 0.35rem">@rec.ExplicacaoTaxaNula</div>
+                                                        </RadzenAlert>
+                                                    }
+
+                                                    @if (rec.PorCurva is { Count: > 0 } porCurva)
+                                                    {
+                                                        var curvas = porCurva.Values.OrderByDescending(c => c.Itens).ToList();
+                                                        var curvasRuins = curvas.Count(c => c.AbaixoDoPatamar);
+                                                        @if (curvasRuins > 0)
+                                                        {
+                                                            <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false">
+                                                                <RadzenIcon Icon="warning" Style="margin-right: 0.25rem; vertical-align: middle;" />
+                                                                @curvasRuins curva(s) de giro com concordância abaixo do patamar. Uma taxa global
+                                                                alta com uma curva inteira divergindo é sobrevivência seletiva: a comparação
+                                                                estaria rodando só sobre a metade fácil do catálogo.
+                                                            </RadzenAlert>
+                                                        }
+                                                        <RadzenDataGrid TItem="ReconciliacaoCurvaView" Data="@curvas" AllowPaging="false" Density="Density.Compact">
+                                                            <Columns>
+                                                                <RadzenDataGridColumn TItem="ReconciliacaoCurvaView" Property="Curva" Title="Curva de giro (ERP)" Width="170px" />
+                                                                <RadzenDataGridColumn TItem="ReconciliacaoCurvaView" Property="Itens" Title="Itens" Width="90px" TextAlign="TextAlign.Right" />
+                                                                <RadzenDataGridColumn TItem="ReconciliacaoCurvaView" Property="Reconciliados" Title="Reconciliados" Width="130px" TextAlign="TextAlign.Right" />
+                                                                <RadzenDataGridColumn TItem="ReconciliacaoCurvaView" Property="Divergentes" Title="Divergentes" Width="120px" TextAlign="TextAlign.Right" />
+                                                                <RadzenDataGridColumn TItem="ReconciliacaoCurvaView" Property="TaxaConcordancia" Title="Concordância" Width="140px" TextAlign="TextAlign.Right">
+                                                                    <Template Context="c">
+                                                                        <span style="@(c.AbaixoDoPatamar ? "color: var(--rz-danger)" : "")">@c.TaxaConcordancia.ToString("P1")</span>
+                                                                    </Template>
+                                                                </RadzenDataGridColumn>
+                                                                <RadzenDataGridColumn TItem="ReconciliacaoCurvaView" Title="Divergência (méd. / máx.)" Width="200px" Sortable="false">
+                                                                    <Template Context="c">@c.DivergenciaAbsMedia.ToString("N3") / @c.DivergenciaAbsMaxima.ToString("N3")</Template>
+                                                                </RadzenDataGridColumn>
+                                                            </Columns>
+                                                        </RadzenDataGrid>
+                                                    }
+                                                }
+
+                                                @* 2) Só depois do portão: o estado da camada e, se utilizável, os números. *@
+                                                @if (!b.EhUtilizavel)
+                                                {
+                                                    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                        <strong>Esta camada não produziu comparação (estado: @(string.IsNullOrEmpty(b.Utilidade) ? "não informado" : b.Utilidade)).</strong>
+                                                        <div style="margin-top: 0.35rem">@b.ExplicacaoNaoUtilizavel</div>
+                                                        <div style="margin-top: 0.35rem">
+                                                            População da camada: @b.ItensNaPopulacao item(ns) ·
+                                                            comparados: @b.ItensComparados ·
+                                                            fora do horizonte do ML: @(b.ForaDoHorizonteMl?.Count ?? 0) ·
+                                                            descartados por ruptura: @b.ItensDescartadosPorRuptura.
+                                                        </div>
+                                                    </RadzenAlert>
+
+                                                    @if (b.ForaDoHorizonteMl is { Count: > 0 } fora)
+                                                    {
+                                                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                                            Itens que o braço ML não alcança (@fora.Count no total; a lista mostra os primeiros):
+                                                        </RadzenText>
+                                                        <RadzenDataGrid TItem="ItemForaDoHorizonteView" Data="@fora" AllowPaging="true" PageSize="8" Density="Density.Compact">
+                                                            <Columns>
+                                                                <RadzenDataGridColumn TItem="ItemForaDoHorizonteView" Property="SugestaoId" Title="Sugestão" Width="120px" />
+                                                                <RadzenDataGridColumn TItem="ItemForaDoHorizonteView" Property="LojaId" Title="Loja" Width="90px" />
+                                                                <RadzenDataGridColumn TItem="ItemForaDoHorizonteView" Property="Sku" Title="SKU" Width="140px" />
+                                                                <RadzenDataGridColumn TItem="ItemForaDoHorizonteView" Property="DiasEstoque" Title="Cobertura (dias)" Width="150px" TextAlign="TextAlign.Right" />
+                                                                <RadzenDataGridColumn TItem="ItemForaDoHorizonteView" Property="HorizonteMaximoMl" Title="Horizonte do ML" Width="150px" TextAlign="TextAlign.Right" />
+                                                            </Columns>
+                                                        </RadzenDataGrid>
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                                        @b.ItensComparados.ToString("N0") item(ns) comparado(s) de @b.ItensNaPopulacao na população ·
+                                                        @b.ItensDescartadosPorRuptura descartado(s) por ruptura ·
+                                                        @(b.ForaDoHorizonteMl?.Count ?? 0) fora do horizonte do ML ·
+                                                        @b.ItensSemPrecoCompra sem preço de compra (contribuem zero nos agregados em R$) ·
+                                                        @b.ItensComFallbackEstoqueSeguranca com estoque de segurança ausente, em que a reescala
+                                                        do eMax degenera na hipótese proporcional.
+                                                    </RadzenText>
+
+                                                    <RadzenDataGrid TItem="ArmDecisaoRow" Data="@ArmDecisaoRows(b)" AllowPaging="false" Density="Density.Compact">
+                                                        <Columns>
+                                                            <RadzenDataGridColumn TItem="ArmDecisaoRow" Property="Nome" Title="Braço">
+                                                                <Template Context="r"><strong>@r.Nome</strong></Template>
+                                                            </RadzenDataGridColumn>
+                                                            <RadzenDataGridColumn TItem="ArmDecisaoRow" Title="Unidades compradas" Width="170px" TextAlign="TextAlign.Right">
+                                                                <Template Context="r">@r.Arm.UnidadesCompradas.ToString("N0")</Template>
+                                                            </RadzenDataGridColumn>
+                                                            <RadzenDataGridColumn TItem="ArmDecisaoRow" Title="Excesso (unid.)" Width="150px" TextAlign="TextAlign.Right">
+                                                                <Template Context="r">@r.Arm.ExcessoUnidades.ToString("N0")</Template>
+                                                            </RadzenDataGridColumn>
+                                                            <RadzenDataGridColumn TItem="ArmDecisaoRow" Title="Excesso (R$)" Width="150px" TextAlign="TextAlign.Right">
+                                                                <Template Context="r">@r.Arm.ExcessoValor.ToString("N2")</Template>
+                                                            </RadzenDataGridColumn>
+                                                            <RadzenDataGridColumn TItem="ArmDecisaoRow" Title="Falta (unid.)" Width="140px" TextAlign="TextAlign.Right">
+                                                                <Template Context="r">@r.Arm.FaltaUnidades.ToString("N0")</Template>
+                                                            </RadzenDataGridColumn>
+                                                            <RadzenDataGridColumn TItem="ArmDecisaoRow" Title="WAPE posição × venda" Width="180px" TextAlign="TextAlign.Right">
+                                                                <HeaderTemplate><span>WAPE posição × venda</span><HelpTip Text="@TipPosicao" Size="0.85rem" /></HeaderTemplate>
+                                                                <Template Context="r">@Pct(r.Arm.PosicaoVsVenda?.Wape)</Template>
+                                                            </RadzenDataGridColumn>
+                                                        </Columns>
+                                                    </RadzenDataGrid>
+
+                                                    <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                                        Venda perdida (ERP @(b.Erp?.VendaPerdida?.Unidades.ToString("N0") ?? "—") unid. ·
+                                                        ML @(b.Ml?.VendaPerdida?.Unidades.ToString("N0") ?? "—") unid.) é ilustrativa e nunca
+                                                        manchete: onde houve ruptura a demanda é estimada pelo mesmo tipo de modelo que produziu
+                                                        a decisão, e o braço que prevê mais alto compra mais e por isso aparece com menos venda
+                                                        perdida — sem que isso seja evidência de ter previsto melhor. A valorização usa preço de
+                                                        compra, que é custo, não margem.
+                                                    </RadzenText>
+
+                                                    @if (b.Vitoria is { } placarB)
+                                                    {
+                                                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                                            Placar item a item: ML @placarB.VitoriasMl (@placarB.TaxaVitoriaMl.ToString("P1")) ×
+                                                            ERP @placarB.VitoriasErp (@placarB.TaxaVitoriaErp.ToString("P1")),
+                                                            @placarB.Empates empate(s) em @placarB.N item(ns).
+                                                        </RadzenText>
+                                                    }
+
+                                                    @if (b.VitoriaPorDimensao is { Count: > 0 })
+                                                    {
+                                                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                                            <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Drill-down da decisão</RadzenText>
+                                                            <HelpTip Text="@TipRegressao" />
+                                                        </RadzenStack>
+                                                        <RadzenTabs RenderMode="TabRenderMode.Client">
+                                                            <Tabs>
+                                                                @foreach (var dim in b.VitoriaPorDimensao.Keys.OrderBy(k => k))
+                                                                {
+                                                                    var rowsB = BuildDrillB(b, dim);
+                                                                    var regB = rowsB.Count(x => x.MlPerde);
+                                                                    <RadzenTabsItem Text="@($"{RotuloDim(dim)} ({rowsB.Count})")">
+                                                                        @if (regB > 0)
+                                                                        {
+                                                                            <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Style="margin-bottom: 0.5rem">
+                                                                                <RadzenIcon Icon="warning" Style="margin-right: 0.25rem; vertical-align: middle;" />
+                                                                                @regB de @rowsB.Count chave(s) com o ML perdendo para o ERP na decisão.
+                                                                            </RadzenAlert>
+                                                                        }
+                                                                        <RadzenDataGrid TItem="DrillRowB" Data="@rowsB" AllowPaging="true" PageSize="10" AllowSorting="true" Density="Density.Compact">
+                                                                            <Columns>
+                                                                                <RadzenDataGridColumn TItem="DrillRowB" Property="Chave" Title="@RotuloDim(dim)" />
+                                                                                <RadzenDataGridColumn TItem="DrillRowB" Property="N" Title="n" Width="90px" TextAlign="TextAlign.Right" />
+                                                                                <RadzenDataGridColumn TItem="DrillRowB" Property="VitoriasMl" Title="Vitórias ML" Width="120px" TextAlign="TextAlign.Right" />
+                                                                                <RadzenDataGridColumn TItem="DrillRowB" Property="VitoriasErp" Title="Vitórias ERP" Width="130px" TextAlign="TextAlign.Right" />
+                                                                                <RadzenDataGridColumn TItem="DrillRowB" Title="ML perde aqui?" Width="150px" Sortable="false">
+                                                                                    <Template Context="row">
+                                                                                        @if (row.MlPerde)
+                                                                                        {
+                                                                                            <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger); vertical-align: middle;" />
+                                                                                            <span style="color: var(--rz-danger); margin-left: 0.25rem;">sim</span>
+                                                                                        }
+                                                                                    </Template>
+                                                                                </RadzenDataGridColumn>
+                                                                            </Columns>
+                                                                        </RadzenDataGrid>
+                                                                    </RadzenTabsItem>
+                                                                }
+                                                            </Tabs>
+                                                        </RadzenTabs>
+                                                    }
+                                                }
+                                            }
+                                        </RadzenStack>
+                                    </RadzenCard>
+
+                                    @* ================= CAMADA C ======================================== *@
+                                    <RadzenCard Variant="Variant.Outlined">
+                                        <RadzenStack Gap="0.75rem">
+                                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                                                <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">
+                                                    Camada C — sugestão do ERP contra aprovação do comprador
+                                                </RadzenText>
+                                            </RadzenStack>
+
+                                            <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                @CamadaCResultado.RessalvaDescritiva
+                                            </RadzenAlert>
+
+                                            @if (res.Intervencao is not { } c)
+                                            {
+                                                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                    O resultado não trouxe a camada C. Nenhum número é exibido.
+                                                </RadzenAlert>
+                                            }
+                                            else if (c.ItensNaPopulacao == 0)
+                                            {
+                                                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                                                    Nenhuma linha de sugestão chegou a esta camada, então não há intervenção humana a
+                                                    descrever. Não é "zero override" — é ausência de população.
+                                                </RadzenAlert>
+                                            }
+                                            else
+                                            {
+                                                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                                    @c.ItensNaPopulacao.ToString("N0") linha(s) avaliada(s) pelo comprador ·
+                                                    @c.ItensSemPreco sem preço de compra (fora dos agregados ponderados por valor,
+                                                    dentro dos não ponderados).
+                                                </RadzenText>
+
+                                                <RadzenDataGrid TItem="OverrideRow" Data="@OverrideRows(c)" AllowPaging="false" Density="Density.Compact">
+                                                    <Columns>
+                                                        <RadzenDataGridColumn TItem="OverrideRow" Property="Escopo" Title="Base de cálculo" Width="220px">
+                                                            <Template Context="r"><strong>@r.Escopo</strong></Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="OverrideRow" Title="Com override" Width="140px" TextAlign="TextAlign.Right">
+                                                            <Template Context="r">@Pct(r.Figuras?.FracaoOverride)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="OverrideRow" Title="Vetos" Width="120px" TextAlign="TextAlign.Right">
+                                                            <Template Context="r">@Pct(r.Figuras?.FracaoVetos)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="OverrideRow" Title="Adições" Width="120px" TextAlign="TextAlign.Right">
+                                                            <Template Context="r">@Pct(r.Figuras?.FracaoAdicoes)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="OverrideRow" Title="Para cima" Width="130px" TextAlign="TextAlign.Right">
+                                                            <Template Context="r">@Pct(r.Figuras?.FracaoAjustesParaCima)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="OverrideRow" Title="Para baixo" Width="130px" TextAlign="TextAlign.Right">
+                                                            <Template Context="r">@Pct(r.Figuras?.FracaoAjustesParaBaixo)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="OverrideRow" Title="Desvio |rel.| médio" Width="170px" TextAlign="TextAlign.Right">
+                                                            <Template Context="r">@Pct(r.Figuras?.DesvioRelativoMedioAbsoluto)</Template>
+                                                        </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="OverrideRow" Title="Desvio rel. assinado" Width="180px" TextAlign="TextAlign.Right">
+                                                            <Template Context="r">@Pct(r.Figuras?.DesvioRelativoMedioAssinado)</Template>
+                                                        </RadzenDataGridColumn>
+                                                    </Columns>
+                                                </RadzenDataGrid>
+
+                                                @if (c.Ponderado is null)
+                                                {
+                                                    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                                        A base ponderada por valor não existe nesta população: nenhuma linha tem preço de
+                                                        compra, então não há R$ a ponderar. A linha "ponderado por valor" está ausente de
+                                                        propósito — exibi-la zerada leria como "os overrides não movem valor".
+                                                    </RadzenText>
+                                                }
+
+                                                <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                                    Desvio absoluto e desvio assinado andam juntos: overrides que se cancelam (um +50%,
+                                                    outro −50%) deixam o assinado perto de zero enquanto o absoluto continua alto. Só os
+                                                    dois lado a lado distinguem "sem intervenção" de "intervenção que se cancela no agregado".
+                                                </RadzenText>
+
+                                                @if (c.PorCurva is { Count: > 0 } curvasC)
+                                                {
+                                                    <RadzenDataGrid TItem="OverrideCurvaView" Data="@curvasC.Values.OrderByDescending(x => x.Itens).ToList()"
+                                                                    AllowPaging="true" PageSize="8" Density="Density.Compact">
+                                                        <Columns>
+                                                            <RadzenDataGridColumn TItem="OverrideCurvaView" Property="Curva" Title="Curva de giro (ERP)" Width="180px" />
+                                                            <RadzenDataGridColumn TItem="OverrideCurvaView" Property="Itens" Title="Itens" Width="100px" TextAlign="TextAlign.Right" />
+                                                            <RadzenDataGridColumn TItem="OverrideCurvaView" Title="Com override" Width="150px" TextAlign="TextAlign.Right">
+                                                                <Template Context="x">@Pct(x.NaoPonderado?.FracaoOverride)</Template>
+                                                            </RadzenDataGridColumn>
+                                                            <RadzenDataGridColumn TItem="OverrideCurvaView" Title="Vetos" Width="120px" TextAlign="TextAlign.Right">
+                                                                <Template Context="x">@Pct(x.NaoPonderado?.FracaoVetos)</Template>
+                                                            </RadzenDataGridColumn>
+                                                            <RadzenDataGridColumn TItem="OverrideCurvaView" Title="Desvio rel. assinado" Width="180px" TextAlign="TextAlign.Right">
+                                                                <Template Context="x">@Pct(x.NaoPonderado?.DesvioRelativoMedioAssinado)</Template>
+                                                            </RadzenDataGridColumn>
+                                                        </Columns>
+                                                    </RadzenDataGrid>
+                                                }
+                                            }
+                                        </RadzenStack>
+                                    </RadzenCard>
+                                }
+                            </RadzenStack>
+                        </RadzenTabsItem>
+                    }
+                </Tabs>
+            </RadzenTabs>
+        </RadzenStack>
+    </RadzenCard>
+</RadzenStack>
+
+@code {
+    // --- Textos ----------------------------------------------------------------
+
+    private const string TipPagina =
+        "Compara a sugestão de compra que o ERP (PBS) de fato produziu contra a que o modelo de ML produziria " +
+        "sobre os mesmos itens, na mesma janela. A população nunca é alargada: só entram os itens que o ERP olhou.";
+    private const string TipTreino =
+        "O modelo tem de ter sido treinado com data de corte anterior à sugestão mais antiga da janela. Sem isso " +
+        "ele já viu o gabarito e a comparação mediria memória, não previsão — o Worker recusa a execução.";
+    private const string TipJanela =
+        "Primeiro e último dia em que a sugestão do ERP pode ter sido calculada. NÃO é o último dia de venda " +
+        "pontuado: cada sugestão é medida sobre a cobertura que começa na data dela (15 ou 30 dias), então uma " +
+        "janela até 31/07 pontua venda real até meados de agosto.";
+    private const string TipTipoCalculo =
+        "1 = Emax e Eseg (repõe até um nível de estoque máximo); 2 = Dias de Reposição (cobertura fixa em dias). " +
+        "São baselines distintos do ERP: uma execução mira em UM método, e média entre os dois não significa nada.";
+    private const string TipPopulacao =
+        "O teto é o total de linhas que o ERP avaliou na janela. As camadas só encolhem a partir daí, e cada motivo " +
+        "de encolhimento é contado à parte para que o subconjunto sobre o qual o resultado foi calculado seja explícito.";
+    private const string TipCamadaA =
+        "Compara a demanda/dia prevista pelo ERP contra a prevista pelo ML, ambas contra a venda real da janela. " +
+        "É o resultado de manchete do comparativo. Dias em ruptura invalidam o par inteiro (política padrão), " +
+        "porque é o único modo em que os dois braços são pontuados sobre exatamente os mesmos dias.";
+    private const string TipCamadaB =
+        "Troca só a demanda dentro da própria aritmética do ERP e compara a quantidade decidida. Depende do portão " +
+        "de reconciliação: sem reproduzir o ERP, a diferença medida seria o nosso erro de modelagem da regra dele.";
+    private const string TipWape =
+        "WAPE: soma dos erros absolutos / soma dos valores reais. Métrica primária — mais robusta que MAPE em " +
+        "demanda baixa ou zero (comum em farma). Menor = melhor.";
+    private const string TipMae =
+        "MAE: erro absoluto médio, na unidade da demanda. Nesta camada o ponto de erro é o par na janela, não o dia.";
+    private const string TipMape =
+        "MAPE: erro percentual médio. Quebra quando o real é zero — calculado só sobre pontos com real diferente " +
+        "de zero. Use o WAPE como referência.";
+    private const string TipPosicao =
+        "Erro da posição resultante (estoque + pendentes + compra) contra a venda real da janela. Outra grandeza " +
+        "que a camada A: aqui é unidades na janela, não unidades/dia.";
+    private const string TipRegressao =
+        "Média global esconde regressão local (CLAUDE.md §6). Chaves marcadas são aquelas em que o ML PERDE para o " +
+        "ERP, mesmo quando o resultado global favorece o ML — são exatamente as que um número único apagaria.";
+
+    private static readonly List<string> _ordemDimensoes = ["Categoria", "ClasseAbc", "CurvaErp", "Loja", "UF"];
+
+    private static string RotuloDim(string dim) => dim switch
+    {
+        "ClasseAbc" => "Classe ABC",
+        "CurvaErp" => "Curva do ERP",
+        _ => dim,
+    };
+
+    // --- Estado ----------------------------------------------------------------
+
+    private sealed record TreinoOpt(Guid Id, string Label, DateOnly? TreinoAte);
+
+    private sealed record TipoOpt(byte Tipo, string Label);
+
+    private static readonly IReadOnlyList<TipoOpt> _tiposCalculo =
+        [.. TipoCalculoErp.Todos.Select(t => new TipoOpt(t, $"{t} — {TipoCalculoErp.Nome(t)}"))];
+
+    private List<TreinoOpt> _treinos = [];
+    private Guid _treinoJobId;
+    private DateTime _janelaInicio = DateTime.Today.AddDays(-30);
+    private DateTime _janelaFim = DateTime.Today;
+    private byte _tipoCalculo = TipoCalculoErp.EmaxEseg;
+    private int _abaTipo;
+
+    private bool _enqueuing;
+    private bool _loading;
+    private List<ComparacaoPbsRunView> _jobs = [];
+
+    /// <summary>
+    /// Uma execução selecionada por método de cálculo. Slots separados são o que impede
+    /// que o resultado de um método apareça na aba do outro — eles nunca se somam.
+    /// </summary>
+    private readonly Dictionary<byte, ComparacaoPbsRunView> _selecionados = [];
+
+    private Timer? _timer;
+    private readonly CancellationTokenSource _cts = new();
+
+    private bool TreinoSelecionadoSemCorte =>
+        _treinos.FirstOrDefault(t => t.Id == _treinoJobId) is { TreinoAte: null } && _treinoJobId != Guid.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Prerender roda OnInitializedAsync uma vez antes do circuito interativo; sem
+        // este guard a carga inicial acontece duas vezes e o Timer é agendado num
+        // componente que será descartado.
+        if (!RendererInfo.IsInteractive) return;
+
+        await CarregarTreinosAsync();
+        await RefreshAsync();
+        _timer = new Timer(async _ => await InvokeAsync(RefreshAsync), null,
+            TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+    }
+
+    private async Task CarregarTreinosAsync()
+    {
+        try
+        {
+            var jobs = await TrainingApi.ListAsync(50, _cts.Token);
+            _treinos = jobs
+                .Where(j => j.Status == "Concluido")
+                .Select(j => new TreinoOpt(
+                    j.Id,
+                    $"{j.DataAgendamento.ToLocalTime():dd/MM HH:mm} · {j.MaxSkus} SKUs · corte {(j.TreinoAte?.ToString("dd/MM/yyyy") ?? "nenhum")} · {j.Id.ToString()[..8]}",
+                    j.TreinoAte))
+                .ToList();
+            if (_treinoJobId == Guid.Empty && _treinos.Count > 0) _treinoJobId = _treinos[0].Id;
+        }
+        catch (OperationCanceledException) { }
+        catch { /* POC: silencia */ }
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_loading) return;
+        _loading = true;
+        try
+        {
+            _jobs = [.. await ComparisonApi.ListAsync(50, _cts.Token)];
+
+            // Uma execução selecionada enquanto processava passa a ter resultado; sem
+            // este recarregamento a aba ficaria presa no snapshot sem ResultadoJson.
+            foreach (var (tipo, sel) in _selecionados.ToList())
+            {
+                if (sel.ResultadoJson is not null) continue;
+                var atual = _jobs.FirstOrDefault(j => j.Id == sel.Id);
+                if (atual is { Status: "Concluido" })
+                {
+                    var detalhe = await ComparisonApi.GetAsync(sel.Id, _cts.Token);
+                    if (detalhe is not null) _selecionados[tipo] = detalhe;
+                }
+                else if (atual is not null)
+                {
+                    _selecionados[tipo] = atual;
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch { /* POC: silencia polling */ }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnSelect(ComparacaoPbsRunView j)
+    {
+        var detalhe = j.Status == "Concluido" && j.ResultadoJson is null
+            ? await ComparisonApi.GetAsync(j.Id, _cts.Token) ?? j
+            : j;
+
+        _selecionados[j.TipoCalculo] = detalhe;
+
+        var indice = TipoCalculoErp.Todos.ToList().IndexOf(j.TipoCalculo);
+        if (indice >= 0) _abaTipo = indice;
+    }
+
+    private async Task Comparar()
+    {
+        _enqueuing = true;
+        try
+        {
+            var r = await ComparisonApi.EnqueueAsync(
+                _treinoJobId,
+                DateOnly.FromDateTime(_janelaInicio),
+                DateOnly.FromDateTime(_janelaFim),
+                _tipoCalculo,
+                _cts.Token);
+
+            if (r.Success)
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Comparação enfileirada",
+                    Detail = $"Método {TipoCalculoErp.Nome(_tipoCalculo)}. O Worker processa em background.",
+                    Duration = 5000,
+                });
+                await RefreshAsync();
+            }
+            else
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Error,
+                    Summary = "Não foi possível enfileirar",
+                    Detail = string.Join(" ", r.Errors ?? []),
+                    Duration = 10000,
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Falha ao enfileirar",
+                Detail = ex.Message,
+                Duration = 8000,
+            });
+        }
+        finally { _enqueuing = false; }
+    }
+
+    private static BadgeStyle BadgeFor(string status) => status switch
+    {
+        "Pendente" => BadgeStyle.Secondary,
+        "Processando" => BadgeStyle.Info,
+        "Concluido" => BadgeStyle.Success,
+        "Falha" => BadgeStyle.Danger,
+        _ => BadgeStyle.Light,
+    };
+
+    // --- Formatação ------------------------------------------------------------
+
+    /// <summary>Nulo vira texto, nunca traço: "—" numa métrica lê como zero.</summary>
+    private static string Pct(double? v) => v is { } d ? d.ToString("P1") : "não apurado";
+
+    private static string Num(double? v) => v is { } d ? d.ToString("N2") : "não apurado";
+
+    private static string FracaoDescartada(CamadaAResultado a)
+    {
+        var total = a.ParesAvaliados + a.ParesDescartados;
+        return total == 0 ? "sem base" : ((double)a.ParesDescartados / total).ToString("P1");
+    }
+
+    // --- Linhas das tabelas ----------------------------------------------------
+
+    public sealed record ArmRow(string Nome, MetricsDto? Metricas);
+
+    private static IReadOnlyList<ArmRow> ArmRows(CamadaAResultado a) =>
+    [
+        new(a.Erp?.Nome ?? "ERP", a.Erp?.Global),
+        new(a.Ml?.Nome ?? "ML", a.Ml?.Global),
+    ];
+
+    public sealed record ArmDecisaoRow(string Nome, ArmDecisaoView Arm);
+
+    private static IReadOnlyList<ArmDecisaoRow> ArmDecisaoRows(CamadaBResultado b)
+    {
+        var linhas = new List<ArmDecisaoRow>(2);
+        if (b.Erp is { } erp) linhas.Add(new(erp.Nome ?? "ERP", erp));
+        if (b.Ml is { } ml) linhas.Add(new(ml.Nome ?? "ML", ml));
+        return linhas;
+    }
+
+    public sealed record OverrideRow(string Escopo, OverrideFigurasView? Figuras);
+
+    private static IReadOnlyList<OverrideRow> OverrideRows(CamadaCResultado c)
+    {
+        var linhas = new List<OverrideRow> { new("por item (não ponderado)", c.NaoPonderado) };
+        if (c.Ponderado is { } p) linhas.Add(new("por valor em R$ (ponderado)", p));
+        return linhas;
+    }
+
+    // --- Drill-down ------------------------------------------------------------
+
+    public sealed record DrillRowA(
+        string Chave, int N, double? WapeErp, double? WapeMl, PlacarVitorias? Placar)
+    {
+        /// <summary>ML perde nesta chave quando o WAPE dele é maior que o do ERP.</summary>
+        public bool MlPerde => WapeErp is { } e && WapeMl is { } m && m > e;
+    }
+
+    private static IReadOnlyList<string> Dimensoes(CamadaAResultado a)
+    {
+        var chaves = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var k in a.Erp?.PorDimensao?.Keys ?? []) chaves.Add(k);
+        foreach (var k in a.Ml?.PorDimensao?.Keys ?? []) chaves.Add(k);
+        foreach (var k in a.VitoriaPorDimensao?.Keys ?? []) chaves.Add(k);
+
+        return [.. chaves.OrderBy(k => _ordemDimensoes.IndexOf(k) is var i && i < 0 ? int.MaxValue : i)
+                         .ThenBy(k => k, StringComparer.Ordinal)];
+    }
+
+    private static IReadOnlyList<DrillRowA> BuildDrillA(CamadaAResultado a, string dim)
+    {
+        var erp = Fatia(a.Erp?.PorDimensao, dim);
+        var ml = Fatia(a.Ml?.PorDimensao, dim);
+        var vit = Fatia(a.VitoriaPorDimensao, dim);
+
+        var chaves = new HashSet<string>(erp.Keys, StringComparer.Ordinal);
+        chaves.UnionWith(ml.Keys);
+        chaves.UnionWith(vit.Keys);
+
+        var rows = new List<DrillRowA>(chaves.Count);
+        foreach (var chave in chaves)
+        {
+            var mErp = erp.GetValueOrDefault(chave);
+            var mMl = ml.GetValueOrDefault(chave);
+            var placar = vit.GetValueOrDefault(chave);
+            var n = Math.Max(mErp?.N ?? 0, mMl?.N ?? 0);
+            rows.Add(new DrillRowA(chave, n, mErp?.Wape, mMl?.Wape, placar));
+        }
+
+        return [.. rows.OrderByDescending(r => r.N).ThenBy(r => r.Chave, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    public sealed record DrillRowB(string Chave, int N, int VitoriasMl, int VitoriasErp)
+    {
+        public bool MlPerde => VitoriasErp > VitoriasMl;
+    }
+
+    private static IReadOnlyList<DrillRowB> BuildDrillB(CamadaBResultado b, string dim)
+    {
+        var vit = Fatia(b.VitoriaPorDimensao, dim);
+        return [.. vit.Select(kv => new DrillRowB(kv.Key, kv.Value.N, kv.Value.VitoriasMl, kv.Value.VitoriasErp))
+                      .OrderByDescending(r => r.N)
+                      .ThenBy(r => r.Chave, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    private static IReadOnlyDictionary<string, T> Fatia<T>(
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, T>>? porDimensao, string dim) =>
+        porDimensao is not null && porDimensao.TryGetValue(dim, out var fatia)
+            ? fatia
+            : new Dictionary<string, T>();
+
+    /// <summary>Se o resultado global (WAPE) favorece o ML — usado só para qualificar o alerta de regressão.</summary>
+    private static bool MlVenceGlobal(CamadaAResultado a) =>
+        a.Ml?.Global is { } ml && a.Erp?.Global is { } erp && ml.Wape < erp.Wape;
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

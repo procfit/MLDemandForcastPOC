@@ -70,6 +70,11 @@ builder.Services.AddHttpClient<PurchasingApiClient>(client =>
     client.BaseAddress = new("https+http://apiservice");
 });
 
+builder.Services.AddHttpClient<ComparisonApiClient>(client =>
+{
+    client.BaseAddress = new("https+http://apiservice");
+});
+
 builder.Services.AddHttpClient<ComparacoesApiClient>(client =>
 {
     client.BaseAddress = new("https+http://apiservice");
