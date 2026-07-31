@@ -193,6 +193,10 @@ public sealed record UploadDadosResult(bool Success, IReadOnlyList<string>? Erro
 // Tudo anulável de propósito, inclusive o que o Worker sempre preenche: um payload
 // truncado ou de outra versão precisa render "não consigo ler isto" num card, não uma
 // NullReferenceException que apaga a página inteira.
+//
+// Campo que o payload gravado tem e este espelho não é simplesmente ignorado na
+// desserialização (o JsonSerializerOptions abaixo não recusa membro desconhecido), então
+// sessões materializadas por uma versão anterior continuam abrindo normalmente.
 
 /// <summary>
 /// Agregados da manchete de uma sessão concluída.
@@ -221,7 +225,6 @@ public sealed record SessaoResultadoView(
     int ItensComJanelaAlemDoHistorico,
     int ItensSemPrecoCompra,
     int? SkusSemCadastro,
-    IReadOnlyList<CurvaDaSessaoView>? PorCurva,
     string? RessalvaTreinoServe)
 {
     /// <summary>
@@ -259,7 +262,6 @@ public sealed record SessaoResultadoView(
 
 public sealed record BracoDaSessaoView(
     decimal CompraUnidades,
-    decimal CompraValor,
     decimal SobraUnidades,
     decimal SobraValor);
 
@@ -275,13 +277,6 @@ public sealed record RupturaObservadaView(
     int DiasSemEstoque,
     int DiasComSnapshot,
     int DiasNaJanela);
-
-public sealed record CurvaDaSessaoView(
-    string? Curva,
-    int Itens,
-    int ItensComDecisaoMl,
-    decimal SobraPbsUnidades,
-    decimal SobraPbsValor);
 
 // --- Detalhe por item e análise (endpoints da apiservice) -----------------------------
 
@@ -299,13 +294,9 @@ public sealed record SessaoItem(
     decimal CompraSugeridaPbs,
     decimal? CompraSugeridaMl,
     decimal VendidoNaJanela,
-    decimal DemandaDiaPbs,
-    decimal? DemandaDiaMl,
-    decimal? DemandaDiaReal,
     decimal SobraPbsUnidades,
     decimal? SobraMlUnidades,
     decimal? SobraPbsValor,
-    decimal? SobraMlValor,
     bool JanelaAlemDoHistorico)
 {
     /// <summary>
@@ -398,11 +389,8 @@ public sealed record ItemPior(
     int LojaId,
     string Sku,
     string? NomeProduto,
-    string? Curva,
     decimal? SobraPbsUnidades,
     decimal? SobraMlUnidades,
-    decimal? SobraPbsValor,
-    decimal? SobraMlValor,
     decimal? ErroPbs,
     decimal? ErroMl,
     bool JanelaAlemDoHistorico);

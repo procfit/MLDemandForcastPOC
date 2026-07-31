@@ -178,7 +178,10 @@
             <strong>@semCadastro.ToString("N0") itens sem cadastro.</strong>
             <div style="margin-top: 0.35rem">
                 Esses itens estavam na sugestão do ERP mas não foram encontrados no cadastro de produtos, então
-                eles aparecem na tabela sem nome. Não é falha do arquivo enviado: é cadastro faltando no ERP.
+                na tabela eles aparecem no lugar do nome com o aviso "(SKU ... não encontrado no cadastro do PBS)"
+                e sem categoria. Os números deles continuam valendo — o que falta é a descrição. Não é falha do
+                arquivo enviado: é cadastro faltando no ERP, e para corrigir cadastre esses produtos lá e envie os
+                dados de novo.
             </div>
         </RadzenAlert>
     }

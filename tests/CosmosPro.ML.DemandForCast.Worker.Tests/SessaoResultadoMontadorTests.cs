@@ -332,9 +332,10 @@ public sealed class SessaoResultadoMontadorTests
     }
 
     /// <summary>
-    /// Curva vazia no Stage é ausência de rótulo, não uma curva chamada "". A coluna sai nula
-    /// na linha e o agregado a nomeia em português, senão o eixo por curva ganha um grupo sem
-    /// nome na tela.
+    /// Curva vazia no Stage é ausência de rótulo, não uma curva chamada "": a coluna da linha
+    /// sai <b>nula</b>. Quem batiza o grupo é o recorte por curva de
+    /// <c>GET /api/comparacoes/{id}/analise</c> ("sem curva"), única versão desse corte — o
+    /// resultado materializado não guarda um segundo.
     /// </summary>
     [Fact]
     public void Item_sem_curva_nao_inventa_rotulo()
@@ -342,7 +343,6 @@ public sealed class SessaoResultadoMontadorTests
         var materializacao = Montar(populacao: [Linha(vendido: 1m, curva: "")]);
 
         materializacao.Itens.Single().Curva.Should().BeNull();
-        materializacao.Resultado.PorCurva.Single().Curva.Should().Be("sem curva");
     }
 
     // --- Arranjo --------------------------------------------------------------

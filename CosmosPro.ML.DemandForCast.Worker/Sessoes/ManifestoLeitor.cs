@@ -79,6 +79,18 @@ internal static class ManifestoLeitor
             return Inviavel(Danificada);
         }
 
+        // O ERP calcula sugestão por um de dois métodos, e é contra um deles que a disputa
+        // acontece. Fora dessa faixa não há baseline — e o valor ausente chega aqui como zero,
+        // indistinguível de um número inventado. A recusa mora nesta fronteira porque as outras
+        // quatro camadas que validam a faixa (ForecastVsErpComparer, DecisionComparer e as duas
+        // CHECK do banco) ficam depois do import e do treino: lá o desfecho seria a fila da
+        // comparação recusando a linha em SaveChanges, minutos de LightGBM depois, com o
+        // comprador esperando por uma explicação que ninguém teria como dar.
+        if (manifesto.SugestaoTipoCalculo is not (1 or 2))
+        {
+            return Inviavel(MetodoDesconhecido);
+        }
+
         var diaDaSugestao = DateOnly.FromDateTime(manifesto.SugestaoDataHora);
 
         // Os dois extremos estruturais, e só eles: sem nenhum dia a partir da sugestão não
@@ -109,6 +121,13 @@ internal static class ManifestoLeitor
         "A identificação da sugestão de compra veio danificada e não foi possível saber qual sugestão você " +
         "escolheu. Gere os dados novamente pelo extrator, escolhendo a mesma sugestão, e envie sem abrir nem " +
         "editar o que ele produzir.";
+
+    private const string MetodoDesconhecido =
+        "Não reconhecemos por qual método a sugestão de compra deste envio foi calculada. O seu ERP calcula por " +
+        "estoque máximo e de segurança ou por dias de reposição, e a comparação precisa saber qual dos dois foi " +
+        "usado — são duas formas de comprar diferentes, e medir uma contra a outra não diria nada. Gere os dados " +
+        "novamente pelo extrator, escolhendo a sugestão na lista que ele mostra, e envie o que ele produzir sem " +
+        "alterar o conteúdo.";
 
     private static string SemGabarito(DateOnly diaDaSugestao, DateOnly fim) => string.Format(
         CultureInfo.InvariantCulture,

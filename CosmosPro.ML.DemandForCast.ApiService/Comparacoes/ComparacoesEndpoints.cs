@@ -288,8 +288,8 @@ internal static class ComparacoesEndpoints
             .ThenBy(i => i.LojaId).ThenBy(i => i.Sku)
             .Take(TetoDePiores)
             .Select(i => new ItemPiorView(
-                i.LojaId, i.Sku, i.NomeProduto, i.Curva,
-                i.SobraPbsUnidades, i.SobraMlUnidades, i.SobraPbsValor, i.SobraMlValor,
+                i.LojaId, i.Sku, i.NomeProduto,
+                i.SobraPbsUnidades, i.SobraMlUnidades,
                 null, null, i.JanelaAlemDoHistorico))
             .ToListAsync(ct);
 
@@ -306,9 +306,8 @@ internal static class ComparacoesEndpoints
             .ThenBy(x => x.Item.LojaId).ThenBy(x => x.Item.Sku)
             .Take(TetoDePiores)
             .Select(x => new ItemPiorView(
-                x.Item.LojaId, x.Item.Sku, x.Item.NomeProduto, x.Item.Curva,
+                x.Item.LojaId, x.Item.Sku, x.Item.NomeProduto,
                 x.Item.SobraPbsUnidades, x.Item.SobraMlUnidades,
-                x.Item.SobraPbsValor, x.Item.SobraMlValor,
                 x.ErroPbs, x.ErroMl, x.Item.JanelaAlemDoHistorico))
             .ToListAsync(ct);
 
@@ -502,13 +501,9 @@ internal static class ComparacoesEndpoints
             i.CompraSugeridaPbs,
             i.CompraSugeridaMl,
             i.VendidoNaJanela,
-            i.DemandaDiaPbs,
-            i.DemandaDiaMl,
-            i.DemandaDiaReal,
             i.SobraPbsUnidades,
             i.SobraMlUnidades,
             i.SobraPbsValor,
-            i.SobraMlValor,
             i.JanelaAlemDoHistorico);
 
     private static readonly Expression<Func<ComparacaoSessao, SessaoView>> ProjectToView =
@@ -585,6 +580,13 @@ internal sealed record SessaoItensPage(
 /// Achatar um no outro aqui faria a tela afirmar ao comprador que o ML mandaria não comprar
 /// nada, ou que a compra não deixou capital parado.
 /// </summary>
+/// <remarks>
+/// As taxas de demanda/dia gravadas na linha (<c>DemandaDiaPbs</c>/<c>Ml</c>/<c>Real</c>) e a
+/// sobra em R$ do braço de ML <b>não</b> viajam aqui: a tabela do comprador não tem coluna para
+/// elas, e quem as consome é <c>GET /api/comparacoes/{id}/analise</c>, que as agrega no servidor
+/// em WAPE/MAE por curva e por loja. Mandá-las em cada uma de dezenas de milhares de linhas
+/// pagaria o payload para nada.
+/// </remarks>
 internal sealed record SessaoItemView(
     int LojaId,
     string Sku,
@@ -593,13 +595,9 @@ internal sealed record SessaoItemView(
     decimal CompraSugeridaPbs,
     decimal? CompraSugeridaMl,
     decimal VendidoNaJanela,
-    decimal DemandaDiaPbs,
-    decimal? DemandaDiaMl,
-    decimal? DemandaDiaReal,
     decimal SobraPbsUnidades,
     decimal? SobraMlUnidades,
     decimal? SobraPbsValor,
-    decimal? SobraMlValor,
     bool JanelaAlemDoHistorico);
 
 /// <param name="Itens">População inteira da sessão — o denominador de todo o resto.</param>
@@ -634,16 +632,19 @@ internal sealed record SessaoFatiaView(
 /// Item em que o ML ficou pior. Os campos das duas armas convivem no mesmo tipo porque a
 /// tela mostra as duas listas com o mesmo desenho: <see cref="ErroPbs"/>/<see cref="ErroMl"/>
 /// só existem na lista de previsão, e <see cref="SobraMlUnidades"/> só na de compra.
+///
+/// <para>
+/// Sem curva e sem R$: as duas listas têm dez linhas e mostram código, produto, loja, o par de
+/// números da arma e a ressalva. O total em reais de "onde o ML foi pior" é agregado em
+/// <see cref="SessaoAnaliseView.SobraExtraMlValor"/>, que é onde a tela o lê.
+/// </para>
 /// </summary>
 internal sealed record ItemPiorView(
     int LojaId,
     string Sku,
     string? NomeProduto,
-    string? Curva,
     decimal? SobraPbsUnidades,
     decimal? SobraMlUnidades,
-    decimal? SobraPbsValor,
-    decimal? SobraMlValor,
     decimal? ErroPbs,
     decimal? ErroMl,
     bool JanelaAlemDoHistorico);

@@ -163,6 +163,26 @@ public sealed class ComparacoesApiClientTests
             "5 dias com snapshot em 60 dias-item de cobertura");
     }
 
+    /// <summary>
+    /// <c>ResultadoJson</c> é dado já gravado: toda sessão materializada antes de o recorte por
+    /// curva e a compra em R$ saírem do resultado continua com esses membros no payload — e a
+    /// amostra usada por estes testes é justamente uma dessas. Abrir a tela dessas sessões não
+    /// pode virar "não consigo ler isto": membro desconhecido é ignorado, não recusado.
+    /// </summary>
+    [Fact]
+    public void ParseResultado_de_payload_anterior_ignora_o_que_saiu_do_resultado()
+    {
+        var json = ResultadoSemMl();
+        json.Should().Contain("porCurva").And.Contain("compraValor",
+            "a amostra tem de continuar sendo um payload da versão anterior, senão o teste não prova nada");
+
+        var resultado = ComparacoesApiClient.ParseResultado(json);
+
+        resultado.Should().NotBeNull("payload antigo abre normalmente");
+        resultado!.Pbs!.SobraValor.Should().Be(192.5m, "o que a tela lê continua sendo lido");
+        resultado.ItensAvaliados.Should().Be(2);
+    }
+
     [Fact]
     public void ParseResultado_de_json_ilegivel_devolve_nulo_em_vez_de_estourar_no_render()
     {
@@ -359,12 +379,8 @@ public sealed class ComparacoesApiClientTests
         CompraSugeridaPbs: 100m,
         CompraSugeridaMl: sobraMl is null ? null : 70m,
         VendidoNaJanela: 60m,
-        DemandaDiaPbs: 2m,
-        DemandaDiaMl: null,
-        DemandaDiaReal: null,
         SobraPbsUnidades: sobraPbs,
         SobraMlUnidades: sobraMl,
         SobraPbsValor: null,
-        SobraMlValor: null,
         JanelaAlemDoHistorico: false);
 }

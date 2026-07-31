@@ -156,6 +156,26 @@ public sealed class SessaoJobsTests
     }
 
     /// <summary>
+    /// Nenhuma sugestão no recorte, e a recusa vem <b>antes</b> do treino. O envio pode chegar
+    /// assim sem nada mais reclamar: <c>sugestoes_compra.csv</c> é opcional no ZIP (o fluxo
+    /// sintético não tem sugestão) e o validador do upload não olha para ela, então um ZIP com
+    /// CSVs válidos e sem cabeçalho de sugestão pagaria minutos de LightGBM para morrer na
+    /// comparação, em <c>Falha</c>, com texto técnico em vez de próxima ação.
+    /// </summary>
+    [Fact]
+    public void Envio_sem_nenhuma_sugestao_no_recorte_nao_gera_treino()
+    {
+        var (job, motivo) = SessaoJobs.Treino(
+            Sessao(), new SugestaoNoStage(Cabecalhos: 0, SkusDistintos: 0), Agora);
+
+        job.Should().BeNull("treinar sem sugestão gastaria o treino para descobrir isso uma fase depois");
+        motivo.Should().NotBeNullOrWhiteSpace();
+        motivo.Should().Contain("extrator", "quem lê é comprador: o texto tem de terminar numa próxima ação");
+        motivo.Should().NotContain("sugestões de compra do mesmo dia",
+            "zero e mais de uma são problemas diferentes e pedem ações diferentes");
+    }
+
+    /// <summary>
     /// A janela filtra <c>SugestoesCompra.DataHora</c> e o
     /// <c>StageSugestaoLoader</c> a converte em <c>&gt;= JanelaInicio 00:00</c> e
     /// <c>&lt; JanelaFim + 1 dia 00:00</c>. Uma sessão está ancorada a UMA sugestão, então a

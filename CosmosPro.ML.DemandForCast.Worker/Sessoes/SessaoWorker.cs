@@ -26,19 +26,19 @@ internal sealed class SessaoWorker(
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// Quantas vezes a materialização do resultado pode falhar antes de a sessão ir para
-    /// <c>Falha</c>. Ver <see cref="ConcluirAsync"/>.
+    /// Quantas vezes o avanço de uma sessão pode falhar antes de ela ir para <c>Falha</c>.
+    /// Ver <see cref="AvancarAsync"/>.
     /// </summary>
-    private const int TentativasDeMaterializacao = 3;
+    private const int TentativasDeAvanco = 3;
 
     /// <summary>
-    /// Falhas de materialização já contadas por sessão. Estado em memória de propósito: o que
-    /// ele protege é a janela de segundos de um timeout de bulk ou de uma queda de conexão, e
-    /// um processo que reinicia no meio disso deixa a sessão em <c>Comparando</c> — de onde a
+    /// Falhas de avanço já contadas por sessão. Estado em memória de propósito: o que ele
+    /// protege é a janela de segundos de um timeout de bulk ou de uma queda de conexão, e um
+    /// processo que reinicia no meio disso deixa a sessão na fase em que estava — de onde a
     /// volta seguinte a retoma normalmente, com o contador zerado. Persistir isso pediria
     /// coluna nova para tornar a retentativa <b>mais</b> curta, não mais segura.
     /// </summary>
-    private readonly Dictionary<Guid, int> _falhasDeMaterializacao = [];
+    private readonly Dictionary<Guid, int> _falhasDeAvanco = [];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -90,16 +90,105 @@ internal sealed class SessaoWorker(
             return false;
         }
 
-        return proximo switch
-        {
-            SessaoStatus.Treinando => await AvancarParaTreinoAsync(db, sessao, ct),
-            SessaoStatus.Comparando => await AvancarParaComparacaoAsync(db, sessao, ct),
-            SessaoStatus.Concluida => await ConcluirAsync(scope.ServiceProvider, db, sessao, ct),
-            SessaoStatus.Falha => await GravarStatusAsync(
-                db, sessao, SessaoStatus.Falha, mensagemErro: mensagemErro, ct: ct),
-            _ => false,
-        };
+        return await AvancarAsync(scope.ServiceProvider, db, sessao, proximo, mensagemErro, ct);
     }
+
+    /// <summary>
+    /// Executa o avanço decidido, com o <b>mesmo limite de tentativas para todos os destinos</b>.
+    ///
+    /// <para>
+    /// <b>Por que o try/catch mora aqui e não dentro de cada destino.</b> Uma exceção que
+    /// escapa daqui cai no handler genérico do laço, que só registra e dorme 5 segundos — e a
+    /// volta seguinte reclama a mesma sessão e falha igual. Numa falha permanente (um resultado
+    /// de comparação ilegível, uma sugestão cujo método viola a checagem da fila) isso é giro
+    /// infinito, e o giro é pior do que parece: cada reclamação toca <c>AtualizadoEm</c>, que é
+    /// exatamente o campo que <c>ComparacoesEndpoints.SessaoConcorrenteAsync</c> lê para saber
+    /// se a rede tem sessão viva. A rede ficaria <b>bloqueada para todo envio futuro</b>, sem
+    /// cicatrizar. O relógio de <see cref="SessaoJobs.FaseAbandonada"/> não resgata este caso:
+    /// ele só é alcançado por <see cref="Andamento"/>, isto é, enquanto o job da fase ainda não
+    /// terminou — e aqui ele já está concluído.
+    /// </para>
+    ///
+    /// <para>
+    /// Um limite por destino seria a mesma assimetria de antes escrita de outra forma, então o
+    /// contador é um só e cobre inclusive a gravação de <c>Falha</c>: <b>nenhum</b> caminho de
+    /// avanço pode girar. Esgotado o limite, a sessão termina em <c>Falha</c> com mensagem de
+    /// comprador — e não em <c>Concluida</c>, que mandaria procurar um resultado que nunca foi
+    /// gravado.
+    /// </para>
+    /// </summary>
+    private async Task<bool> AvancarAsync(
+        IServiceProvider scoped,
+        EngineDbContext db,
+        SessaoEmAndamento sessao,
+        SessaoStatus destino,
+        string? mensagemErro,
+        CancellationToken ct)
+    {
+        try
+        {
+            var avancou = destino switch
+            {
+                SessaoStatus.Treinando => await AvancarParaTreinoAsync(db, sessao, ct),
+                SessaoStatus.Comparando => await AvancarParaComparacaoAsync(db, sessao, ct),
+                SessaoStatus.Concluida => await ConcluirAsync(scoped, sessao, ct),
+                SessaoStatus.Falha => await GravarStatusAsync(
+                    db, sessao, SessaoStatus.Falha, mensagemErro: mensagemErro, ct: ct),
+                _ => false,
+            };
+
+            _falhasDeAvanco.Remove(sessao.Id);
+            return avancou;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var tentativa = _falhasDeAvanco[sessao.Id] = _falhasDeAvanco.GetValueOrDefault(sessao.Id) + 1;
+            var acao = AcaoDaFase(destino);
+
+            if (tentativa < TentativasDeAvanco)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Sessão {SessaoId}: falha ao {Acao} (tentativa {Tentativa} de {Limite}). A sessão segue em " +
+                    "{Status} e será retomada na próxima volta.",
+                    sessao.Id, acao, tentativa, TentativasDeAvanco, sessao.Status);
+
+                return false;
+            }
+
+            logger.LogError(
+                ex,
+                "Sessão {SessaoId}: falha ao {Acao} em {Limite} tentativas; encerrando em Falha.",
+                sessao.Id, acao, TentativasDeAvanco);
+
+            // mensagemErro só chega preenchida quando o próprio destino já era Falha (a fase
+            // relatou o motivo dela): nesse caso o texto da fase descreve melhor o que
+            // aconteceu do que a exceção da gravação.
+            var gravou = await GravarStatusAsync(
+                db, sessao, SessaoStatus.Falha,
+                mensagemErro: mensagemErro ?? Detalhar(acao, ex.Message), ct: ct);
+
+            _falhasDeAvanco.Remove(sessao.Id);
+            return gravou;
+        }
+    }
+
+    /// <summary>
+    /// O que a sessão estava tentando fazer, em linguagem de comprador — entra em
+    /// <see cref="Detalhar"/>, que é lido na tela. O nome do estado não descreve nada para
+    /// quem não conhece o código.
+    /// </summary>
+    private static string AcaoDaFase(SessaoStatus destino) => destino switch
+    {
+        SessaoStatus.Treinando => "iniciar o aprendizado do padrão de venda das suas lojas",
+        SessaoStatus.Comparando => "iniciar a comparação dos dois métodos",
+        SessaoStatus.Concluida => "montar o resultado desta comparação",
+        _ => "dar continuidade a esta comparação",
+    };
 
     private async Task<bool> AvancarParaTreinoAsync(
         EngineDbContext db, SessaoEmAndamento sessao, CancellationToken ct)
@@ -208,76 +297,28 @@ internal sealed class SessaoWorker(
     /// </para>
     ///
     /// <para>
-    /// <b>Falha aqui é retentada antes de matar a sessão</b>, ao contrário das demais fases.
-    /// A comparação em si <b>deu certo</b> — o job está <c>Concluido</c> e o resultado dele
-    /// está gravado —, e o que falhou foi a escrita de dezenas de milhares de linhas: timeout
-    /// de bulk e queda de conexão são muito mais prováveis nesta chamada do que nas gravações
-    /// de uma linha das outras fases. Encerrar em <c>Falha</c> na primeira delas obrigaria o
-    /// comprador a subir o ZIP de novo e a esperar treino e comparação outra vez por um
-    /// tropeço de segundos.
+    /// <b>Falha aqui é retentada antes de matar a sessão</b>, e a retentativa é segura sem
+    /// nenhuma limpeza porque a sessão continua em <c>Comparando</c>: a gravação de
+    /// <c>Concluida</c> mora dentro da mesma transação das linhas (ver
+    /// <see cref="SessaoResultadoMaterializador"/>), então uma materialização que falhou não
+    /// deixou linha nem status atrás de si, e o <c>DELETE</c> que abre a transação cobre o caso
+    /// de ela ter falhado depois do <c>SqlBulkCopy</c>. A comparação em si <b>deu certo</b> — o
+    /// job está <c>Concluido</c> e o resultado dele está gravado —, e o que falhou foi a
+    /// escrita de dezenas de milhares de linhas: timeout de bulk e queda de conexão são bem
+    /// mais prováveis aqui do que nas gravações de uma linha das outras fases, e encerrar na
+    /// primeira delas obrigaria o comprador a subir o ZIP de novo e a esperar treino e
+    /// comparação outra vez por um tropeço de segundos.
     /// </para>
     ///
     /// <para>
-    /// A retentativa é segura sem nenhuma limpeza porque a sessão continua em
-    /// <c>Comparando</c>: a gravação de <c>Concluida</c> mora dentro da mesma transação das
-    /// linhas (ver <see cref="SessaoResultadoMaterializador"/>), então uma materialização que
-    /// falhou não deixou linha nem status atrás de si, e o <c>DELETE</c> que abre a transação
-    /// cobre o caso de ela ter falhado depois do <c>SqlBulkCopy</c>. Devolver <c>false</c>
-    /// deixa a volta seguinte do loop reclamar a mesma sessão de novo.
-    /// </para>
-    ///
-    /// <para>
-    /// O limite de <see cref="TentativasDeMaterializacao"/> existe porque nada mais pararia
-    /// uma falha permanente: um resultado de comparação ilegível ou uma rede trocada falham
-    /// igual em toda tentativa, e a fase não tem o relógio de <see cref="SessaoJobs.FaseAbandonada"/>
-    /// para intervir (o job desta fase já está concluído). Esgotado o limite, a sessão vai
-    /// para <c>Falha</c> com mensagem de comprador — e não para <c>Concluida</c> sem
-    /// resultado, que mandaria o comprador procurar um número que nunca foi gravado.
+    /// Quem conta as tentativas e desiste é <see cref="AvancarAsync"/>, que trata todos os
+    /// destinos igual — este método só materializa e deixa a exceção subir.
     /// </para>
     /// </summary>
-    private async Task<bool> ConcluirAsync(
-        IServiceProvider scoped, EngineDbContext db, SessaoEmAndamento sessao, CancellationToken ct)
-    {
-        var materializador = scoped.GetRequiredService<SessaoResultadoMaterializador>();
-
-        try
-        {
-            var materializou = await materializador.MaterializarAsync(sessao, ct);
-            _falhasDeMaterializacao.Remove(sessao.Id);
-            return materializou;
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            var tentativa = _falhasDeMaterializacao[sessao.Id] =
-                _falhasDeMaterializacao.GetValueOrDefault(sessao.Id) + 1;
-
-            if (tentativa < TentativasDeMaterializacao)
-            {
-                logger.LogWarning(
-                    ex,
-                    "Sessão {SessaoId}: falha ao materializar o resultado (tentativa {Tentativa} de {Limite}). " +
-                    "A comparação continua válida e a sessão segue em {Status}; será retomada na próxima volta.",
-                    sessao.Id, tentativa, TentativasDeMaterializacao, sessao.Status);
-
-                return false;
-            }
-
-            logger.LogError(
-                ex,
-                "Sessão {SessaoId}: falha ao materializar o resultado em {Limite} tentativas; encerrando em Falha.",
-                sessao.Id, TentativasDeMaterializacao);
-
-            _falhasDeMaterializacao.Remove(sessao.Id);
-
-            return await GravarStatusAsync(
-                db, sessao, SessaoStatus.Falha,
-                mensagemErro: Detalhar("montar o resultado desta comparação", ex.Message), ct: ct);
-        }
-    }
+    private static async Task<bool> ConcluirAsync(
+        IServiceProvider scoped, SessaoEmAndamento sessao, CancellationToken ct) =>
+        await scoped.GetRequiredService<SessaoResultadoMaterializador>()
+            .MaterializarAsync(sessao, ct);
 
     private async Task<bool> AvancarParaComparacaoAsync(
         EngineDbContext db, SessaoEmAndamento sessao, CancellationToken ct)

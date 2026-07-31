@@ -104,6 +104,56 @@ public sealed class ManifestoLeitorTests : IDisposable
         MotivoAcionavelPorComprador(leitura.MotivoInviabilidade);
     }
 
+    /// <summary>
+    /// O método de cálculo é validado <b>aqui</b>, na fronteira em que o ZIP chega, e não só
+    /// nas quatro camadas que já o validam depois (<c>ForecastVsErpComparer</c>,
+    /// <c>DecisionComparer</c> e as duas <c>CHECK</c> do banco). Um valor fora da faixa cujos
+    /// CSVs importam limpo passaria o import inteiro, pagaria o treino de LightGBM e só
+    /// estouraria ao inserir a linha da comparação — com o comprador olhando um spinner por
+    /// minutos para receber, no fim, um erro que ele não tem como ler nem corrigir.
+    ///
+    /// <para>
+    /// Zero é o caso que chega sem ninguém pedir: o campo ausente na declaração desserializa
+    /// como <c>default(byte)</c>, indistinguível de um número inventado.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    [InlineData(255)]
+    public void Metodo_de_calculo_fora_dos_dois_do_ERP_e_inviavel(byte tipoCalculo)
+    {
+        Escrever(Manifesto(
+            janelaInicio: "2025-03-10", janelaFim: "2026-04-09", tipoCalculo: tipoCalculo));
+
+        var leitura = ManifestoLeitor.Ler(_dir);
+
+        leitura.Manifesto.Should().BeNull(
+            "sem saber por qual método o ERP calculou, não existe baseline contra o que disputar");
+        MotivoAcionavelPorComprador(leitura.MotivoInviabilidade);
+        leitura.MotivoInviabilidade.Should().Contain("estoque máximo",
+            "o comprador reconhece os dois métodos pelo nome que o ERP usa, não por um número");
+        leitura.MotivoInviabilidade.Should().Contain("dias de reposição");
+    }
+
+    /// <summary>
+    /// O par do teste acima: os dois métodos que o ERP de fato usa passam. Sem ele, uma
+    /// validação invertida deixaria todo envio legítimo inviável e nada apontaria isso.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Os_dois_metodos_do_ERP_atravessam_a_leitura(byte tipoCalculo)
+    {
+        Escrever(Manifesto(
+            janelaInicio: "2025-03-10", janelaFim: "2026-04-09", tipoCalculo: tipoCalculo));
+
+        var leitura = ManifestoLeitor.Ler(_dir);
+
+        leitura.MotivoInviabilidade.Should().BeNull();
+        leitura.Manifesto!.SugestaoTipoCalculo.Should().Be(tipoCalculo);
+    }
+
     [Fact]
     public void Periodo_que_termina_antes_do_dia_da_sugestao_e_inviavel()
     {
@@ -136,12 +186,12 @@ public sealed class ManifestoLeitorTests : IDisposable
     private void Escrever(string json) =>
         File.WriteAllText(Path.Combine(_dir, ManifestoLeitor.NomeArquivo), json);
 
-    private static string Manifesto(string janelaInicio, string janelaFim) => $$"""
+    private static string Manifesto(string janelaInicio, string janelaFim, byte tipoCalculo = 2) => $$"""
         {
           "SugestaoId": 21217,
           "SugestaoDescricao": "MATTEL",
           "SugestaoDataHora": "2026-03-10T10:27:00",
-          "SugestaoTipoCalculo": 2,
+          "SugestaoTipoCalculo": {{tipoCalculo}},
           "JanelaInicio": "{{janelaInicio}}",
           "JanelaFim": "{{janelaFim}}",
           "VersaoExtractor": "1.0.0",

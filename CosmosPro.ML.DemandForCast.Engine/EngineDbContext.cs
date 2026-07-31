@@ -180,9 +180,12 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.Property(x => x.NomeProduto).HasMaxLength(200);
             b.Property(x => x.Curva).HasMaxLength(1);
 
-            // Precisão espelha o Stage (Tables/SugestoesCompraItens.sql): unidades em
-            // DECIMAL(15,3), taxas de demanda/dia em DECIMAL(12,4), valor em DECIMAL(14,4).
-            // Sem isso o EF usa decimal(18,2) por padrão e trunca silenciosamente.
+            // Precisão declarada porque o default do EF é decimal(18,2), que truncaria em
+            // silêncio. Unidades e taxas espelham o Stage (Tables/SugestoesCompraItens.sql):
+            // DECIMAL(15,3) e DECIMAL(12,4). Já o valor NÃO é espelho de coluna nenhuma — a
+            // monetária do Stage é PrecoCompra DECIMAL(15,4), preço unitário, e aqui a coluna
+            // guarda unidades × preço. Mantém as 4 casas do dinheiro do Stage com 10 dígitos
+            // inteiros, ordens de grandeza acima de qualquer sobra de uma sugestão.
             b.Property(x => x.CompraSugeridaPbs).HasPrecision(15, 3);
             b.Property(x => x.CompraSugeridaMl).HasPrecision(15, 3);
             b.Property(x => x.VendidoNaJanela).HasPrecision(15, 3);
@@ -194,8 +197,11 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.Property(x => x.SobraPbsValor).HasPrecision(14, 4);
             b.Property(x => x.SobraMlValor).HasPrecision(14, 4);
 
-            // Cascade: apagar a sessão apaga o detalhe — diferente das FKs Restrict
-            // dos jobs, que preservam histórico mesmo com o pai removido.
+            // Cascade: apagar a sessão apaga o detalhe. É a única FK real que sai da sessão
+            // além da de Redes — os ponteiros para as três fases (CargaStageId, TreinoJobId,
+            // ComparacaoPbsId) são FKs lógicas, sem constraint, no mesmo padrão de
+            // SimulacoesCompra e ComparacoesPbs: o histórico da sessão sobrevive à remoção
+            // do job que a produziu.
             b.HasOne<ComparacaoSessao>().WithMany().HasForeignKey(x => x.SessaoId)
              .OnDelete(DeleteBehavior.Cascade);
         });

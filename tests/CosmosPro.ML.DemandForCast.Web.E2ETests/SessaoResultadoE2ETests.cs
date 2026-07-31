@@ -286,8 +286,7 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             ItensAvaliados: 2,
             VendidoNaJanelaUnidades: 60m,
             Pbs: new BracoDaSessao(
-                CompraUnidades: 120m, CompraValor: 350m,
-                SobraUnidades: 75m, SobraValor: 192.5m),
+                CompraUnidades: 120m, SobraUnidades: 75m, SobraValor: 192.5m),
             // Nulo é o desfecho esperado hoje: a cobertura de 30 dias excede o horizonte de 7.
             Confronto: null,
             MotivoMlIndisponivel: MotivoSemeado,
@@ -302,11 +301,6 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             ItensComJanelaAlemDoHistorico: 1,
             ItensSemPrecoCompra: 1,
             SkusSemCadastro: SkusSemCadastro,
-            PorCurva:
-            [
-                new CurvaDaSessao("A", 1, 0, 55m, 192.5m),
-                new CurvaDaSessao("C", 1, 0, 20m, 0m),
-            ],
             RessalvaTreinoServe: ComparacaoOutput.RessalvaPadraoTreinoServe);
 
         return JsonSerializer.Serialize(resultado, Json);

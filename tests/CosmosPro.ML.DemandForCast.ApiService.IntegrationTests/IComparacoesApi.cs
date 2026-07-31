@@ -72,13 +72,9 @@ public sealed record SessaoItemResposta(
     decimal CompraSugeridaPbs,
     decimal? CompraSugeridaMl,
     decimal VendidoNaJanela,
-    decimal DemandaDiaPbs,
-    decimal? DemandaDiaMl,
-    decimal? DemandaDiaReal,
     decimal SobraPbsUnidades,
     decimal? SobraMlUnidades,
     decimal? SobraPbsValor,
-    decimal? SobraMlValor,
     bool JanelaAlemDoHistorico);
 
 public sealed record SessaoAnaliseResposta(
@@ -106,11 +102,8 @@ public sealed record ItemPiorResposta(
     int LojaId,
     string Sku,
     string? NomeProduto,
-    string? Curva,
     decimal? SobraPbsUnidades,
     decimal? SobraMlUnidades,
-    decimal? SobraPbsValor,
-    decimal? SobraMlValor,
     decimal? ErroPbs,
     decimal? ErroMl,
     bool JanelaAlemDoHistorico);

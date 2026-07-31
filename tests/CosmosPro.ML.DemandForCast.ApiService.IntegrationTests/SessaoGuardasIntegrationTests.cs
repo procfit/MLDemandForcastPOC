@@ -1,6 +1,8 @@
 using System.Net;
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
+using CosmosPro.ML.DemandForCast.Tests.Shared.Csv;
+using CosmosPro.ML.DemandForCast.Tests.Shared.Fakers;
 using Microsoft.EntityFrameworkCore;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
@@ -238,7 +240,133 @@ public sealed class SessaoGuardasIntegrationTests(AppHostFixture fixture)
         }
     }
 
+    /// <summary>
+    /// Método de cálculo que o ERP não tem. É o gatilho mais barato para uma falha
+    /// <b>permanente</b> na criação do job da fase seguinte: a fila da comparação carrega
+    /// <c>CK_ComparacoesPbs_TipoCalculo</c>, então o <c>INSERT</c> estoura igual em toda
+    /// tentativa. A fronteira do ZIP passou a recusar isto (<c>ManifestoLeitor</c>), e é por
+    /// isso que o arranjo aqui é escrito direto no banco: o que se está afirmando não é este
+    /// valor, é que <b>nenhuma</b> falha permanente de avanço gira.
+    /// </summary>
+    private const byte MetodoInexistente = 3;
+
+    /// <summary>
+    /// O modo de falha que esta guarda fecha, e ele é pior que um spinner eterno. A inserção do
+    /// job da fase seguinte falhava fora de qualquer <c>try</c>, então a exceção caía no handler
+    /// genérico do laço, que dorme 5 segundos e reclama a mesma sessão de novo — para sempre,
+    /// numa falha que não passa. E cada reclamação toca <c>AtualizadoEm</c>, que é exatamente o
+    /// campo que <c>SessaoConcorrenteAsync</c> lê para decidir se a rede tem sessão viva: a rede
+    /// ficava <b>trancada para todo envio futuro</b>, sem cicatrizar nunca.
+    ///
+    /// <para>
+    /// O relógio de fase abandonada não resgata este caso — ele só é alcançado enquanto o job da
+    /// fase ainda não terminou, e aqui o treino está <c>Concluido</c>. Quem tem de intervir é o
+    /// limite de tentativas do avanço, e as duas asserções abaixo são o par que importa: a
+    /// sessão chega a estado terminal, e a rede volta a aceitar envio <b>logo depois</b>, com o
+    /// <c>AtualizadoEm</c> da sessão morta ainda recente.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Falha_permanente_ao_criar_o_job_da_proxima_fase_encerra_a_sessao_e_nao_tranca_a_rede()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var redeId = await EnsureRedeAsync("Rede Sessao Avanco Impossivel", "sessao-avanco-impossivel");
+        var agora = DateTimeOffset.UtcNow;
+
+        await using var db = await AbrirEngineAsync(ct);
+
+        // Treino já concluído: é o que faz o avanço tentar criar a comparação nesta volta, e é
+        // o que põe a fase fora do alcance do relógio de abandono.
+        var treino = new TreinoJob
+        {
+            Id = Guid.CreateVersion7(),
+            RedeId = redeId,
+            Status = TreinoStatus.Concluido,
+            DataAgendamento = agora,
+            DataInicioProcessamento = agora,
+            DataConclusao = agora,
+            MaxSkus = 80,
+            TreinoAte = new DateOnly(2026, 7, 1),
+        };
+        db.TreinoJobs.Add(treino);
+
+        var travadaId = Guid.CreateVersion7();
+        db.ComparacaoSessoes.Add(new ComparacaoSessao
+        {
+            Id = travadaId,
+            RedeId = redeId,
+            Nome = "Avanco impossivel",
+            Status = SessaoStatus.Treinando,
+            CriadoEm = agora,
+            AtualizadoEm = agora,
+            SugestaoId = 7303,
+            SugestaoDataHora = new DateTime(2026, 7, 1, 9, 30, 0),
+            SugestaoTipoCalculo = MetodoInexistente,
+            TreinoJobId = treino.Id,
+        });
+
+        await db.SaveChangesAsync(ct);
+
+        var travada = await AguardarTerminoAsync(travadaId, redeId);
+
+        travada.Status.Should().Be("Falha",
+            "esgotado o limite de tentativas a sessão termina; girar deixaria o comprador sem desfecho e a " +
+            "rede sem saída");
+        travada.MensagemErro.Should().NotBeNullOrWhiteSpace();
+        travada.MensagemErro.Should().Contain("Envie os dados novamente",
+            "quem lê é comprador de farmácia: a mensagem tem de terminar numa próxima ação");
+
+        // A asserção que importa: o bloqueio de sessão concorrente é por rede e olha
+        // AtualizadoEm, que a sessão morta acabou de tocar. Estado terminal tem de bastar.
+        var outra = await fixture.ComparacoesApi.CreateAsync(
+            new CreateSessaoRequest("Depois da falha"), redeId, ct);
+        outra.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        using var zip = ZipMinimo();
+        var envio = await fixture.ComparacoesApi.UploadDadosAsync(
+            outra.Content!.Id,
+            new Refit.StreamPart(zip, "depois-da-falha.zip", "application/zip"), redeId, ct);
+
+        envio.StatusCode.Should().Be(HttpStatusCode.Accepted,
+            because: "a rede não pode ficar trancada por uma sessão que morreu: " +
+                     (envio.Error?.Content ?? "sem detalhe na resposta"));
+
+        var seguinte = await AguardarTerminoAsync(outra.Content.Id, redeId);
+        seguinte.Status.Should().Be("Inviavel",
+            "o envio andou de verdade — este ZIP não declara sugestão, então o desfecho correto é inviável");
+    }
+
     // --- Infra do teste ------------------------------------------------------
+
+    /// <summary>
+    /// ZIP com os sete CSVs que o validador do upload exige e nada além: sem declaração da
+    /// sugestão, de propósito. O que se afirma com ele é que o envio foi <b>aceito</b>; a
+    /// sessão terminar em <c>Inviavel</c> depois é o desfecho correto de um envio sem sugestão,
+    /// e mantém o caso em segundos — nenhum treino roda.
+    /// </summary>
+    private static MemoryStream ZipMinimo()
+    {
+        const int lojaId = 9801;
+        const string sku = "GRD-A";
+        var inicio = new DateOnly(2026, 6, 1);
+        var fim = new DateOnly(2026, 7, 10);
+
+        var vendas = new List<VendaRow>();
+        for (var d = inicio; d <= fim; d = d.AddDays(1))
+        {
+            vendas.Add(new VendaRow(d, lojaId, sku, 5m, 10.50m, 52.50m));
+        }
+
+        return new CsvZipBuilder()
+            .WithLojas([new(lojaId, "Loja Guarda", "SP", "São Paulo", "Sudeste", "rua", 7, new DateOnly(2020, 1, 1), true)])
+            .WithProdutos([new(sku, "Produto Guarda", "Similar", "Analgésico", "ACME", "Dipirona Sódica", "20cp 500mg", null, null, null, null, true)])
+            .WithVendas(vendas)
+            .WithEstoquesDiarios([new(inicio, lojaId, sku, 500m)])
+            .WithCompras(new CompraFaker([lojaId], [sku], inicio, fim, seed: 940).Generate(1))
+            .WithPromocoes(new PromocaoFaker([lojaId], [sku], inicio, fim, seed: 941).Generate(1))
+            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], inicio, fim, seed: 942).Generate(1))
+            .Build();
+    }
 
     private async Task<EngineDbContext> AbrirEngineAsync(CancellationToken ct)
     {

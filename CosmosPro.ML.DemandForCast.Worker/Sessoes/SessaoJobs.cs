@@ -25,7 +25,8 @@ internal sealed record SessaoEmAndamento(
 /// </summary>
 /// <param name="Cabecalhos">
 /// Sugestões de compra que o recorte seleciona. Tem de ser exatamente uma: a sessão é
-/// ancorada a UMA sugestão e a comparação agrega sem separar por sugestão.
+/// ancorada a UMA sugestão e a comparação agrega sem separar por sugestão. Zero e mais de uma
+/// são recusados antes do treino, cada um com o seu motivo — ver <see cref="SessaoJobs.Treino"/>.
 /// </param>
 /// <param name="SkusDistintos">SKUs distintos avaliados — dimensiona o orçamento do treino.</param>
 internal readonly record struct SugestaoNoStage(int Cabecalhos, int SkusDistintos);
@@ -104,13 +105,15 @@ internal static class SessaoJobs
     /// número fixo pequeno deixa quase toda a sugestão real fora da população da comparação
     /// (<c>ComparacaoOutput.ItensForaOrcamentoSkus</c>) por um motivo que não tem nada a ver com
     /// o método sob teste — ver <see cref="PisoDeSkusDoTreino"/> e
-    /// <see cref="TetoDeSkusDoTreino"/>. <c>Cabecalhos</c> é a invariante de "uma sugestão por
-    /// sessão", checada aqui e não na comparação; ver <see cref="MaisDeUmaSugestao"/>.
+    /// <see cref="TetoDeSkusDoTreino"/>. <c>Cabecalhos</c> é a invariante de "<b>exatamente</b>
+    /// uma sugestão por sessão", checada aqui e não na comparação, nas duas pontas: ver
+    /// <see cref="SugestaoAusenteNoEnvio"/> e <see cref="MaisDeUmaSugestao"/>.
     /// </param>
     public static (TreinoJob? Job, string? MotivoInviabilidade) Treino(
         SessaoEmAndamento sessao, SugestaoNoStage stage, DateTimeOffset agora)
     {
         if (SemDeclaracao(sessao)) return (null, SugestaoNaoDeclarada);
+        if (stage.Cabecalhos == 0) return (null, SugestaoAusenteNoEnvio);
         if (stage.Cabecalhos > 1) return (null, MaisDeUmaSugestao(stage.Cabecalhos));
 
         return (new TreinoJob
@@ -209,6 +212,19 @@ internal static class SessaoJobs
         "Não sabemos qual sugestão de compra do seu ERP esta comparação deveria avaliar, então não há o que " +
         "comparar. Baixe o extrator, escolha novamente a sugestão que você quer comparar e envie o arquivo que " +
         "ele gerar, sem alterar o conteúdo.";
+
+    /// <summary>
+    /// Nenhum cabeçalho no recorte da sessão: ou o envio não trouxe a sugestão de compra, ou
+    /// trouxe uma que não é a declarada. Recusar aqui é a mesma economia de
+    /// <see cref="MaisDeUmaSugestao"/> e vale ainda mais neste caso — <c>sugestoes_compra.csv</c>
+    /// é opcional no ZIP (o fluxo sintético não tem sugestão) e o validador do upload não olha
+    /// para ela, então sem esta checagem um envio sem sugestão pagaria o treino inteiro para
+    /// morrer em <c>Falha</c> na comparação, com texto técnico em vez de próxima ação.
+    /// </summary>
+    private const string SugestaoAusenteNoEnvio =
+        "Não encontramos nos dados enviados a sugestão de compra que este envio diz avaliar, então não há o que " +
+        "comparar. Gere os dados novamente pelo extrator, escolhendo a sugestão que você quer comparar, e envie o " +
+        "arquivo que ele produzir sem abrir nem editar o conteúdo.";
 
     /// <summary>
     /// Uma sessão está ancorada a UMA sugestão, e a comparação agrega os itens sem separar por

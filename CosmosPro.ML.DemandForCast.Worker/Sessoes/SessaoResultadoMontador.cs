@@ -41,10 +41,19 @@ internal sealed record Materializacao(
     IReadOnlyList<ComparacaoSessaoItem> Itens,
     SessaoResultado Resultado);
 
-/// <summary>Desfecho de um braço sobre um conjunto de itens. Unidades e R$ na mesma janela.</summary>
+/// <summary>
+/// Desfecho de um braço sobre um conjunto de itens: o que ele mandou comprar, em unidades, e
+/// o que sobrou na prateleira em unidades e em R$.
+///
+/// <para>
+/// Não há compra em R$. A manchete confronta os dois braços pela <b>sobra</b> — é ela que
+/// responde quanto capital ficou parado —, e o valor da compra não aparece em lugar nenhum da
+/// tela. Persistir um número que ninguém lê o deixaria envelhecendo sem que qualquer teste ou
+/// tela denunciasse um erro nele.
+/// </para>
+/// </summary>
 internal sealed record BracoDaSessao(
     decimal CompraUnidades,
-    decimal CompraValor,
     decimal SobraUnidades,
     decimal SobraValor);
 
@@ -80,24 +89,6 @@ internal sealed record RupturaObservada(
     int DiasSemEstoque,
     int DiasComSnapshot,
     int DiasNaJanela);
-
-/// <summary>
-/// Recorte por curva de giro do ERP. Média global esconde regressão local (CLAUDE.md §6), e
-/// a curva é o eixo que o comprador reconhece.
-///
-/// <para>
-/// Traz só o braço do ERP e a contagem de itens com decisão de ML: o confronto braço a braço
-/// por curva já existe, com o cuidado estatístico das camadas, em
-/// <c>ComparacaoPbs.ResultadoJson</c> — que fica no banco <c>engine</c> e não é apagado por
-/// import nenhum. Duplicá-lo aqui criaria duas versões do mesmo número.
-/// </para>
-/// </summary>
-internal sealed record CurvaDaSessao(
-    string Curva,
-    int Itens,
-    int ItensComDecisaoMl,
-    decimal SobraPbsUnidades,
-    decimal SobraPbsValor);
 
 /// <summary>
 /// Agregados da manchete da sessão, gravados em <c>ComparacaoSessao.ResultadoJson</c>.
@@ -143,6 +134,15 @@ internal sealed record CurvaDaSessao(
 /// Ressalva metodológica copiada do resultado da comparação. Viaja com os números de
 /// propósito: quem lê o número precisa ler a ressalva.
 /// </param>
+/// <remarks>
+/// <b>Não há recorte por curva aqui.</b> Média global esconde regressão local (CLAUDE.md §6) e
+/// a curva é o eixo que o comprador reconhece, mas o recorte que a tela renderiza é o de
+/// <c>GET /api/comparacoes/{id}/analise</c>, agregado no servidor a partir das linhas de
+/// <c>ComparacaoSessaoItens</c> que esta materialização grava. Ele cobre os <b>dois</b> braços
+/// com erro por curva; um recorte gravado aqui traria só a sobra do ERP e seria uma segunda
+/// versão do mesmo corte, envelhecendo em paralelo — exatamente o que o cuidado desta camada
+/// existe para evitar.
+/// </remarks>
 internal sealed record SessaoResultado(
     DateTimeOffset GeradoEm,
     Guid ComparacaoPbsId,
@@ -160,7 +160,6 @@ internal sealed record SessaoResultado(
     int ItensComJanelaAlemDoHistorico,
     int ItensSemPrecoCompra,
     int? SkusSemCadastro,
-    IReadOnlyList<CurvaDaSessao> PorCurva,
     string RessalvaTreinoServe);
 
 /// <summary>
@@ -195,7 +194,6 @@ internal static class SessaoResultadoMontador
         var decisaoPorItem = comparacao.Decisao.Detalhe.ToDictionary(d => (d.LojaId, d.Sku));
 
         var itens = new List<ComparacaoSessaoItem>(populacao.Count);
-        var porCurva = new Dictionary<string, AcumuladorDeCurva>(StringComparer.OrdinalIgnoreCase);
 
         var pbs = new Acumulador();
         var pbsComparavel = new Acumulador();
@@ -250,7 +248,7 @@ internal static class SessaoResultadoMontador
             });
 
             vendidoTotal += linha.VendidoNaJanela;
-            pbs.Somar(item.CompraSugerida, item.PrecoCompra, sobraPbs);
+            pbs.Somar(item.CompraSugerida, sobraPbs);
 
             if (camadaA is not null) comPrevisaoMl++;
             if (linha.JanelaAlemDoHistorico) alemDoHistorico++;
@@ -259,22 +257,14 @@ internal static class SessaoResultadoMontador
             if (ml is { } bracoMl)
             {
                 comDecisaoMl++;
-                pbsComparavel.Somar(item.CompraSugerida, item.PrecoCompra, sobraPbs);
-                mlComparavel.Somar(bracoMl.Compra, item.PrecoCompra, bracoMl.Sobra);
+                pbsComparavel.Somar(item.CompraSugerida, sobraPbs);
+                mlComparavel.Somar(bracoMl.Compra, bracoMl.Sobra);
             }
 
             diasNaJanela += Math.Max(0, (int)item.DiasEstoque);
             diasComSnapshot += linha.DiasComSnapshot;
             diasSemEstoque += linha.DiasSemEstoque;
             if (linha.DiasSemEstoque > 0) itensComDiaSemEstoque++;
-
-            var curva = string.IsNullOrWhiteSpace(item.Curva) ? "sem curva" : item.Curva;
-            if (!porCurva.TryGetValue(curva, out var acumulador))
-            {
-                acumulador = new AcumuladorDeCurva();
-                porCurva[curva] = acumulador;
-            }
-            acumulador.Somar(sobraPbs, temDecisaoMl: ml is not null);
         }
 
         var confronto = comDecisaoMl == 0
@@ -303,10 +293,6 @@ internal static class SessaoResultadoMontador
                 ItensComJanelaAlemDoHistorico: alemDoHistorico,
                 ItensSemPrecoCompra: semPrecoCompra,
                 SkusSemCadastro: skusSemCadastro,
-                PorCurva: porCurva
-                    .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
-                    .Select(p => p.Value.Fechar(p.Key))
-                    .ToList(),
                 RessalvaTreinoServe: comparacao.RessalvaTreinoServe));
     }
 
@@ -363,55 +349,26 @@ internal static class SessaoResultadoMontador
         Math.Round((decimal)valor, 4, MidpointRounding.AwayFromZero);
 
     /// <summary>
-    /// Valor de compra em R$: <c>PrecoCompra</c> nulo contribui zero, a mesma regra do
-    /// <see cref="SobraCalculator"/> e dos agregados monetários da camada B.
-    ///
-    /// <para>
-    /// Nos <b>agregados</b> o zero é mantido de propósito — uma soma nula por causa de um item
-    /// sem preço apagaria a manchete inteira —, e o preço que se paga por isso é a
+    /// Somatório de um braço. A sobra em R$ vem do <see cref="SobraCalculator"/>, onde item sem
+    /// <c>PrecoCompra</c> contribui <b>zero</b> — de propósito: uma soma nula por causa de um
+    /// item sem preço apagaria a manchete inteira, e o preço que se paga por isso é a
     /// subestimação declarada em <see cref="SessaoResultado.ItensSemPrecoCompra"/>. Na
     /// <b>linha</b> a escolha é a oposta, nulo, porque lá não há nada a preservar: ver
     /// <see cref="ComparacaoSessaoItem.SobraPbsValor"/>.
-    /// </para>
     /// </summary>
-    private static decimal Valor(decimal unidades, decimal? precoCompra) =>
-        precoCompra is null ? 0m : Math.Round(unidades * precoCompra.Value, 2, MidpointRounding.AwayFromZero);
-
     private sealed class Acumulador
     {
         private decimal _compraUnidades;
-        private decimal _compraValor;
         private decimal _sobraUnidades;
         private decimal _sobraValor;
 
-        public void Somar(decimal comprado, decimal? precoCompra, Sobra sobra)
+        public void Somar(decimal comprado, Sobra sobra)
         {
             _compraUnidades += comprado;
-            _compraValor += Valor(comprado, precoCompra);
             _sobraUnidades += sobra.Unidades;
             _sobraValor += sobra.Valor;
         }
 
-        public BracoDaSessao Fechar() =>
-            new(_compraUnidades, _compraValor, _sobraUnidades, _sobraValor);
-    }
-
-    private sealed class AcumuladorDeCurva
-    {
-        private int _itens;
-        private int _comDecisaoMl;
-        private decimal _sobraUnidades;
-        private decimal _sobraValor;
-
-        public void Somar(Sobra sobraPbs, bool temDecisaoMl)
-        {
-            _itens++;
-            if (temDecisaoMl) _comDecisaoMl++;
-            _sobraUnidades += sobraPbs.Unidades;
-            _sobraValor += sobraPbs.Valor;
-        }
-
-        public CurvaDaSessao Fechar(string curva) =>
-            new(curva, _itens, _comDecisaoMl, _sobraUnidades, _sobraValor);
+        public BracoDaSessao Fechar() => new(_compraUnidades, _sobraUnidades, _sobraValor);
     }
 }
