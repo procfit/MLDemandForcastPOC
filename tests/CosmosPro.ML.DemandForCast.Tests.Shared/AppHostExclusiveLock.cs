@@ -4,7 +4,7 @@ namespace CosmosPro.ML.DemandForCast.Tests.Shared;
 /// Exclusão mútua <b>entre processos</b> para quem sobe o AppHost de teste.
 /// <para>
 /// Os containers do Aspire são <c>ContainerLifetime.Persistent</c>: os bancos
-/// <c>Stage</c> e <c>engine</c>, o MinIO e o ClickHouse são os <b>mesmos</b> para
+/// <c>Stage</c> e <c>engine</c> e o MinIO são os <b>mesmos</b> para
 /// qualquer AppHost que suba a partir deste repositório. Dois AppHosts vivos ao
 /// mesmo tempo publicam o mesmo DACPAC, rodam as mesmas migrations, semeiam
 /// Identity no mesmo banco e colocam dois Workers (que fazem polling cross-rede)

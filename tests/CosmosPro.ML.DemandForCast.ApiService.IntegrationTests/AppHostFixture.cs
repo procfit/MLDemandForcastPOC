@@ -10,7 +10,7 @@ using Refit;
 namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 
 /// <summary>
-/// Sobe o AppHost real (com SQL Server, ClickHouse, MinIO, Worker) uma vez
+/// Sobe o AppHost real (com SQL Server, MinIO, Worker) uma vez
 /// por classe de teste via <c>IClassFixture</c>. Subir leva ~60-90s por causa
 /// dos containers persistentes — não use por método (`IAsyncLifetime` direto).
 /// </summary>

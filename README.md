@@ -1,6 +1,6 @@
 # CosmosPro.ML.DemandForCast (POC)
 
-POC de um **engine de previsão de demanda** para apoiar o processo de **sugestão de compra** no varejo farmacêutico. Construído sobre .NET 10 + .NET Aspire, com os dados em **SQL Server** (há um ClickHouse provisionado, mas hoje nenhum caminho de código o consulta — ver §3).
+POC de um **engine de previsão de demanda** para apoiar o processo de **sugestão de compra** no varejo farmacêutico. Construído sobre .NET 10 + .NET Aspire, com os dados em **SQL Server** (há um ClickHouse provisionado no código, mas **desativado no AppHost** — não roda nem no `F5` nem no compose publicado, e nenhum caminho de código o consulta — ver §3).
 
 > Status: **bootstrap**. Solução Aspire em branco com os 4 projetos do template (AppHost, ApiService, ServiceDefaults, Web). Próximos passos abaixo.
 
@@ -48,28 +48,24 @@ Avaliação direta para este caso de uso:
 
 ## 3. Arquitetura
 
-A cada `F5` o AppHost sobe **todos** os recursos lado a lado:
+A cada `F5` o AppHost sobe os recursos abaixo lado a lado:
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
 │ CosmosPro.ML.DemandForCast.AppHost (Aspire 13.3.1)                │
 │                                                                   │
 │  sql (SQL Server 2022 container, persistent volume)               │
-│   ├─ vendas       ← schema deployado via DACPAC (SQL Project)     │
+│   ├─ Stage        ← schema deployado via DACPAC (SQL Project)     │
 │   └─ engine       ← schema gerenciado via EF Core migrations (F2) │
 │                                                                   │
-│  clickhouse (ClickHouse server container, persistent volume)      │
-│   └─ vendas-olap  ← SÓ EM DESENVOLVIMENTO LOCAL (ver abaixo)      │
-│                                                                   │
 │  dbgate (UI web de inspeção, volume persistente)                  │
-│   ├─ conexão "sql"        ← auto-wire (SqlServer.Extensions)      │
-│   └─ conexão "clickhouse" ← auto-wire (helper local, ver §abaixo) │
+│   └─ conexão "sql" ← auto-wire (SqlServer.Extensions)             │
 │                                                                   │
-│  vendas-schema (one-shot)                                         │
-│   └─ publica DACPAC do projeto Database no banco "vendas"         │
+│  stage-schema (one-shot)                                          │
+│   └─ publica DACPAC do projeto Database no banco "Stage"          │
 │                                                                   │
-│  apiservice  ← .WaitFor(vendas, engine, vendas-olap)              │
-│              ← .WaitForCompletion(vendas-schema)                  │
+│  apiservice  ← .WaitFor(Stage, engine)                            │
+│              ← .WaitForCompletion(stage-schema)                   │
 │                                                                   │
 │  webfrontend ← .WaitFor(apiservice)                               │
 │                                                                   │
@@ -77,23 +73,30 @@ A cada `F5` o AppHost sobe **todos** os recursos lado a lado:
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-Persistência: `WithLifetime(ContainerLifetime.Persistent)` + `WithDataVolume()` em SQL Server e ClickHouse. Os containers sobrevivem ao encerramento do AppHost; os volumes nomeados sobrevivem à recriação dos containers. Reset completo de dados exige `docker volume rm` explícito.
+Persistência: `WithLifetime(ContainerLifetime.Persistent)` + `WithDataVolume()` em SQL Server. Os containers sobrevivem ao encerramento do AppHost; os volumes nomeados sobrevivem à recriação dos containers. Reset completo de dados exige `docker volume rm` explícito.
 
-### ClickHouse: provisionado, sem uso, e fora do deploy
+### ClickHouse: provisionado, desativado, código preservado
 
 O ClickHouse entrou em F1, quando a escolha do armazenamento analítico ainda estava aberta.
 A implementação inteira acabou em SQL Server — importação → `Stage` → features → treino →
-comparação → materialização. Hoje, **nenhum código do produto consulta `vendas-olap`**: o
+comparação → materialização. **Nenhum código do produto jamais consultou `vendas-olap`**: o
 `apiservice` recebia a connection string e nunca a abriu, e o diretório `Scripts/` do runner
-de schema está vazio, então ele aplica zero scripts e encerra com sucesso a cada start.
+de schema está vazio, então ele sempre aplicou zero scripts.
 
-Ele continua no `F5` de propósito, como banco de experimentação analítica já ligado ao DbGate.
-Mas os três recursos (`clickhouse`, `vendas-olap` e `vendas-olap-schema`) são declarados dentro
-de um `if (builder.ExecutionContext.IsRunMode)` no [AppHost.cs](CosmosPro.ML.DemandForCast.AppHost/AppHost.cs)
-e por isso **não aparecem no `docker-compose.yaml` gerado**: o destino de deploy é uma VPS
-pequena, e embarcar um banco que ninguém consulta custa 1-2 GB de RAM mais um gate de startup
-para um migrador que não migra nada. Os fixtures de teste sobem o AppHost em modo `run`, então
-continuam enxergando tudo.
+Por isso os três recursos (`clickhouse`, `vendas-olap` e `vendas-olap-schema`) estão **comentados**
+no [AppHost.cs](CosmosPro.ML.DemandForCast.AppHost/AppHost.cs), junto com o trecho de wiring do
+`apiservice` que os referenciava — ele nem carrega no `F5` nem aparece no `docker-compose.yaml`
+gerado pelo `aspire publish`. Antes disso o ClickHouse rodava condicionalmente em modo `run`
+(`if (builder.ExecutionContext.IsRunMode)`); a decisão evoluiu de "fora só do deploy" para
+"fora de tudo", porque custava um container e um gate de startup para nada.
+
+**O código não foi removido, só desligado.** O projeto `CosmosPro.ML.DemandForCast.OlapSchema`,
+o helper `ClickHouseDbGateExtensions.cs` e os pacotes ClickHouse continuam no repositório —
+a necessidade analítica é esperada mais adiante. **Para reativar:** descomente o bloco de
+recursos ClickHouse em `AppHost.cs` (seção "ClickHouse: desativado, código preservado") e o
+trecho de wiring logo após a definição do `apiService` (`apiService.WithReference(vendasOlapDb)...`).
+Os fixtures de teste sobem o AppHost real via `Aspire.Hosting.Testing`, então também deixaram de
+ver o ClickHouse.
 
 Projetos da solução (`MLDemandForCastPOC.slnx`):
 
@@ -102,15 +105,15 @@ Projetos da solução (`MLDemandForCastPOC.slnx`):
 | [CosmosPro.ML.DemandForCast.AppHost](CosmosPro.ML.DemandForCast.AppHost/) | Orquestração Aspire. Declara recursos (DBs, serviços) e dependências. |
 | [CosmosPro.ML.DemandForCast.ApiService](CosmosPro.ML.DemandForCast.ApiService/) | HTTP API que expõe treino, forecast e métricas. Hospeda o engine ML.NET. |
 | [CosmosPro.ML.DemandForCast.Web](CosmosPro.ML.DemandForCast.Web/) | Blazor — UI de cockpit: disparar experimentos, inspecionar backtests, comparar modelos. |
-| [CosmosPro.ML.DemandForCast.Database](CosmosPro.ML.DemandForCast.Database/) | SQL Server Project (`MSBuild.Sdk.SqlProj/4.2.0`). Schema declarativo do banco `vendas`, deployado via DACPAC a cada F5. |
-| [CosmosPro.ML.DemandForCast.OlapSchema](CosmosPro.ML.DemandForCast.OlapSchema/) | Console .NET one-shot. Aplicaria scripts SQL versionados (embedded em `Scripts/*.sql`) ao banco `vendas-olap` no ClickHouse, com controle de versão via tabela `__schema_migrations` — mas `Scripts/` está **vazio**, então hoje ele não aplica nenhum. Só roda no `F5` (ver §ClickHouse acima). |
+| [CosmosPro.ML.DemandForCast.Database](CosmosPro.ML.DemandForCast.Database/) | SQL Server Project (`MSBuild.Sdk.SqlProj/4.2.0`). Schema declarativo do banco `Stage`, deployado via DACPAC a cada F5. |
+| [CosmosPro.ML.DemandForCast.OlapSchema](CosmosPro.ML.DemandForCast.OlapSchema/) | Console .NET one-shot. Aplicaria scripts SQL versionados (embedded em `Scripts/*.sql`) ao banco `vendas-olap` no ClickHouse, com controle de versão via tabela `__schema_migrations` — mas `Scripts/` está **vazio**, então nunca aplicou nenhum. **Dormente**: o recurso `vendas-olap-schema` que o executava está comentado em `AppHost.cs`, então hoje o projeto não roda em lugar nenhum (ver §ClickHouse acima). |
 | [CosmosPro.ML.DemandForCast.ServiceDefaults](CosmosPro.ML.DemandForCast.ServiceDefaults/) | OpenTelemetry, health checks, resilience. |
 
 ### Por que duas trilhas de migração de schema
 
-- **DACPAC (`Microsoft.Build.Sql` / `MSBuild.Sdk.SqlProj`)** para o banco `vendas` — schema **declarativo**, ideal para representar a fonte transacional consumida pelo engine. SqlPackage faz o diff e aplica ALTERs; ganhamos histórico de schema versionável, refactoring com detecção de rename, e scripts pre/post-deployment. Aplicado pelo Aspire via `AddSqlProject<Projects.X>(...)` (pacote `CommunityToolkit.Aspire.Hosting.SqlDatabaseProjects`).
+- **DACPAC (`Microsoft.Build.Sql` / `MSBuild.Sdk.SqlProj`)** para o banco `Stage` — schema **declarativo**, ideal para representar a fonte transacional consumida pelo engine. SqlPackage faz o diff e aplica ALTERs; ganhamos histórico de schema versionável, refactoring com detecção de rename, e scripts pre/post-deployment. Aplicado pelo Aspire via `AddSqlProject<Projects.X>(...)` (pacote `CommunityToolkit.Aspire.Hosting.SqlDatabaseProjects`).
 - **EF Core migrations** para o banco `engine` — schema **imperativo**, ideal para tabelas próprias do engine (`Experimento`, `BacktestRun`, `ModelArtifactRegistry`). Aplicado pelo Aspire via `AddEFMigrations(...)` + `RunDatabaseUpdateOnStart()` (pacote `Aspire.Hosting.EntityFrameworkCore`, anunciado no changelog 13.3 do Aspire mas ainda não publicado no NuGet — placeholder marcado no `AppHost.cs`).
-- **Runner customizado (.NET console one-shot)** para `vendas-olap` no ClickHouse — ClickHouse não tem DACPAC equivalente. O projeto `CosmosPro.ML.DemandForCast.OlapSchema` carrega scripts `.sql` versionados (embedded em `Scripts/`), mantém tabela `__schema_migrations` no próprio ClickHouse, e skipa scripts já aplicados. Convenção de nomes: `NNN_descricao.sql` (versão = nome sem extensão). **O mecanismo está pronto e sem uso: `Scripts/` não tem nenhum arquivo, então cada execução aplica zero scripts.** Declarado pelo Aspire só em modo `run` — apiservice usa `WaitForCompletion(olapSchema)` apenas no `F5`. **Detalhes completos: [Docs/olap-schema-migrations.md](Docs/olap-schema-migrations.md)**.
+- **Runner customizado (.NET console one-shot)** para `vendas-olap` no ClickHouse — ClickHouse não tem DACPAC equivalente. O projeto `CosmosPro.ML.DemandForCast.OlapSchema` carrega scripts `.sql` versionados (embedded em `Scripts/`), mantém tabela `__schema_migrations` no próprio ClickHouse, e skipa scripts já aplicados. Convenção de nomes: `NNN_descricao.sql` (versão = nome sem extensão). **O mecanismo está pronto e sem uso: `Scripts/` não tem nenhum arquivo, então cada execução aplicaria zero scripts.** Hoje nem chega a executar — o recurso (`olapSchema`/`vendas-olap-schema`) e o `WaitForCompletion(olapSchema)` no `apiservice` estão comentados em `AppHost.cs`, desativados junto com o resto do ClickHouse (ver §3). **Detalhes completos: [Docs/olap-schema-migrations.md](Docs/olap-schema-migrations.md)**.
 
 ### Projetos previstos (próximas fases)
 
@@ -128,7 +131,7 @@ Projetos da solução (`MLDemandForCastPOC.slnx`):
 
 ### Fontes
 - **SQL Server** — transacional (mestres de produto/loja, vendas recentes, promoções vigentes, ruptura).
-- **ClickHouse** — analítico (histórico denso de vendas, ideal para varrer milhões de séries SKU×loja). Previsto em F1, **nunca usado**: o pipeline inteiro ficou em SQL Server. Sobrevive só como ambiente de experimentação local (§3).
+- **ClickHouse** — analítico (histórico denso de vendas, ideal para varrer milhões de séries SKU×loja). Previsto em F1, **nunca usado**: o pipeline inteiro ficou em SQL Server. Desativado no AppHost — não sobrevive nem como ambiente de experimentação local (§3).
 
 ### Granularidade alvo (a confirmar com o negócio)
 - Diária por SKU × loja para o pipeline.
@@ -152,7 +155,7 @@ Projetos da solução (`MLDemandForCastPOC.slnx`):
 
 ### Pré-requisitos
 - .NET 10 SDK
-- Docker Desktop (para recursos do Aspire — SQL Server, ClickHouse)
+- Docker Desktop (para recursos do Aspire — SQL Server, MinIO)
 - Aspire workload: `dotnet workload install aspire`
 
 ### Executar
@@ -164,10 +167,13 @@ Aspire Dashboard abre automaticamente; webfrontend, apiservice e DbGate ficam ac
 
 ### Inspecionar bancos com DbGate
 
-DbGate aparece como recurso `dbgate` no dashboard. Abra o endpoint — **as duas conexões já vêm prontas**:
+DbGate aparece como recurso `dbgate` no dashboard. Abra o endpoint — a conexão **SQL Server (`sql`)** já vem pronta, auto-wirada pelo `WithDbGate()` do `CommunityToolkit.Aspire.Hosting.SqlServer.Extensions`.
 
-- **SQL Server (`sql`)** — auto-wirada pelo `WithDbGate()` do `CommunityToolkit.Aspire.Hosting.SqlServer.Extensions`.
-- **ClickHouse (`clickhouse`)** — só existe no `F5` (§3) — auto-wirada por um helper local em [ClickHouseDbGateExtensions.cs](CosmosPro.ML.DemandForCast.AppHost/ClickHouseDbGateExtensions.cs), que cobre a lacuna do `Aspire.Hosting.ClickHouse` (que ainda não traz `WithDbGate()` nativamente — candidato a PR upstream em `ClickHouse/ClickHouse.Aspire`).
+Com o ClickHouse desativado (§3), a segunda conexão que o DbGate chegou a ter — auto-wirada por um
+helper local em [ClickHouseDbGateExtensions.cs](CosmosPro.ML.DemandForCast.AppHost/ClickHouseDbGateExtensions.cs),
+que cobre a lacuna do `Aspire.Hosting.ClickHouse` (ainda sem `WithDbGate()` nativo — candidato a PR
+upstream em `ClickHouse/ClickHouse.Aspire`) — não é mais wirada. O helper continua no repositório;
+reativar o ClickHouse em `AppHost.cs` (§3) a traz de volta.
 
 O DbGate roda com `WithDataVolume() + WithLifetime(Persistent)`, então qualquer favorito/aba salvo na UI sobrevive entre F5s.
 
@@ -256,7 +262,7 @@ onde começar.
 | Job | Runner | O que faz |
 |---|---|---|
 | `windows-tests` | `windows-latest` | Só os testes do extrator. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele. Por isso a suíte é dividida por sistema operacional, e não por capricho de paralelismo. |
-| `linux-tests` | `ubuntu-latest` | Compila em **Debug** (os fixtures procuram o DACPAC em `bin/Debug/net10.0`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server, ClickHouse e MinIO em container. |
+| `linux-tests` | `ubuntu-latest` | Compila em **Debug** (os fixtures procuram o DACPAC em `bin/Debug/net10.0`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
 | `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as três imagens) e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
 
 Os testes de integração e E2E ficam em **passos separados e sequenciais** do mesmo job de
@@ -317,7 +323,7 @@ AppHost — trabalho que ainda não foi feito, e que não deve ser improvisado n
 ## 6. Roadmap do POC
 
 - [x] **F0 — Fundação**: README, CLAUDE.md, decisão arquitetural.
-- [x] **F1 — Orquestração**: AppHost sobe SQL Server (persistente) + ClickHouse (persistente) + SQL Project DACPAC a cada F5. Bancos `vendas`, `engine`, `vendas-olap` declarados. Schema bootstrap funcional.
+- [x] **F1 — Orquestração**: AppHost sobe SQL Server (persistente) + ClickHouse (persistente) + SQL Project DACPAC a cada F5. Bancos `vendas`, `engine`, `vendas-olap` declarados. Schema bootstrap funcional. **ClickHouse desativado depois** (código preservado, resources comentados em `AppHost.cs`) — ver §3.
 - [ ] **F2 — Dados & schema**:
   - [x] **F2.1** — Schema do banco `Stage` (renomeado de `vendas`) no SQL Project: `Lojas`, `Produtos`, `Vendas`, `EstoquesDiarios`, `Compras`, `Promocoes`, `MercadoIqvia` (todos sob `dbo`, plural, com FKs/IXs/CKs; aplicado via DACPAC ~28s, validado via MCP). MinIO adicionado ao AppHost para armazenar ZIPs de import.
   - [ ] **F2.2** — Templates de planilha + UI de importação no Blazor.

@@ -5,7 +5,7 @@ namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 /// <para>
 /// Motivo: o xUnit paraleliza classes de teste, e cada <c>IClassFixture</c> subiria
 /// um AppHost próprio. Como os containers do Aspire são <b>persistentes e
-/// compartilhados</b> (mesmo SQL Server, MinIO e ClickHouse), dois AppHosts
+/// compartilhados</b> (mesmo SQL Server e MinIO), dois AppHosts
 /// simultâneos disputam publicação de DACPAC, migrations e portas — e os testes
 /// falham por contenção, não por defeito no código.
 /// </para>
