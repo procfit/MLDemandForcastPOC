@@ -6,7 +6,7 @@ Este arquivo é o **contrato de trabalho** entre Claude (Claude Code) e o desenv
 
 ## 1. Contexto do projeto
 
-POC de **engine de previsão de demanda** para varejo farmacêutico, alimentando um processo de **sugestão de compra**. Arquitetura: .NET 10 + .NET Aspire, fontes em **SQL Server** e **ClickHouse**. Detalhes em [README.md](README.md).
+POC de **engine de previsão de demanda** para varejo farmacêutico, alimentando um processo de **sugestão de compra**. Arquitetura: .NET 10 + .NET Aspire, dados em **SQL Server** (o ClickHouse está provisionado mas nenhum caminho de código o consulta — ver §4). Detalhes em [README.md](README.md).
 
 **Estágio atual (F1 concluído):** AppHost orquestra SQL Server (persistente, com volume) + ClickHouse (persistente, com volume) + SQL Server Project (DACPAC). Cada `F5` sobe tudo lado a lado. Bancos declarados: `vendas` (SQL Server, schema via DACPAC), `engine` (SQL Server, schema futuro via EF Core migrations), `vendas-olap` (ClickHouse). Ainda não há código de domínio.
 
@@ -70,7 +70,7 @@ POC de **engine de previsão de demanda** para varejo farmacêutico, alimentando
 |---|---|---|---|
 | `Stage` | SQL Server | **DACPAC** — SQL Server Project `CosmosPro.ML.DemandForCast.Database`, publicado pelo Aspire via `AddSqlProject` (`stage-schema` resource, one-shot, `WaitForCompletion`). | Staging area dos dados importados pelo usuário via UI (CSV/ZIP). Tabelas plural: `Redes`, `Lojas`, `Produtos`, `Vendas`, `EstoquesDiarios`, `Compras`, `Promocoes`, `MercadoIqvia`, `SinaisExternos`, `SugestoesCompra`, `SugestoesCompraItens`. Engine só lê, nunca escreve — o **Worker** é o único que escreve. |
 | `engine` | SQL Server | **EF Core migrations** via `Aspire.Hosting.EntityFrameworkCore.AddEFMigrations` + `RunDatabaseUpdateOnStart` (pacote prerelease 13.3.4-preview). Source-of-truth no projeto `CosmosPro.ML.DemandForCast.Engine`. | Metadados do engine: `Redes` (registro dos inquilinos, fonte de verdade do `RedeId`), `CargasStage`, `TreinoJobs`, `SimulacoesCompra`, `ComparacoesPbs`, **`ComparacaoSessoes`** e **`ComparacaoSessaoItens`** (F14, ver abaixo), e as 7 tabelas do ASP.NET Core Identity (`AspNetUsers` com `RedeId` + FK para `Redes`, `AspNetRoles`, etc). |
-| `vendas-olap` | ClickHouse | Runner one-shot `CosmosPro.ML.DemandForCast.OlapSchema` (console .NET) que aplica scripts `Scripts/*.sql` embarcados, controlando versão via tabela `__schema_migrations`. AppHost wires com `AddProject(...).WithReference(vendasOlapDb)`; apiservice usa `WaitForCompletion(olapSchema)`. | Histórico denso para varredura analítica e feature extraction em massa. |
+| `vendas-olap` | ClickHouse | Runner one-shot `CosmosPro.ML.DemandForCast.OlapSchema` (console .NET) que aplicaria scripts `Scripts/*.sql` embarcados, controlando versão via tabela `__schema_migrations` — mas `Scripts/` está vazio, então ele aplica zero scripts. Declarado no AppHost **só em run mode** (ver abaixo). | Era para ser o histórico denso para varredura analítica. **Vazio e sem consumidor**: nenhum código lê este banco. |
 
 **Regra:** schema do `Stage` **só** muda via SQL Project (não por script ad-hoc). Schema do `engine` **só** muda via EF Core migration. Sem migrations imperativas no banco `Stage`; sem CREATE TABLE manual em código consumidor. Esta separação é deliberada para manter `Stage` como contrato declarativo das fontes que o engine consome.
 
@@ -98,6 +98,8 @@ POC de **engine de previsão de demanda** para varejo farmacêutico, alimentando
 **Object storage (MinIO):** recursos do tipo Container com `WithLifetime(Persistent) + WithDataVolume()`. Acesso via `CommunityToolkit.Aspire.Hosting.Minio` 13.3.0. Credenciais (access key + secret key) injetadas como `ParameterResource` Aspire (user-secrets para o secret). Usado para armazenar ZIPs de import.
 
 **Persistência:** containers `sql` e `clickhouse` usam `WithLifetime(ContainerLifetime.Persistent) + WithDataVolume()`. Dados sobrevivem entre F5s. Reset completo exige `docker volume rm` explícito — alerte o usuário antes de sugerir reset.
+
+**ClickHouse é só de desenvolvimento local.** `clickhouse`, `vendas-olap` e `vendas-olap-schema` ficam dentro de um `if (builder.ExecutionContext.IsRunMode)` no `AppHost.cs`, e por isso **não entram no `docker-compose.yaml` do `aspire publish`** nem nas imagens do `aspire do push`. Provisionado em F1 quando a escolha de armazenamento analítico ainda estava aberta, acabou sem nenhum consumidor: todo o caminho real (import → `Stage` → features → treino → comparação → materialização) é SQL Server. Mantido no `F5` para experimentação; fora do deploy porque o destino é uma VPS pequena e um banco que ninguém consulta custa 1-2 GB de RAM mais um gate de startup para um migrador que não migra nada. Os fixtures de teste sobem o AppHost em modo `run`, então continuam enxergando tudo — se for reaproveitar o ClickHouse de verdade, o wiring do `apiservice` volta a ser incondicional.
 
 ## 5. Operações de risco — peça confirmação
 

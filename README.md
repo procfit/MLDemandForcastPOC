@@ -1,6 +1,6 @@
 # CosmosPro.ML.DemandForCast (POC)
 
-POC de um **engine de previsão de demanda** para apoiar o processo de **sugestão de compra** no varejo farmacêutico. Construído sobre .NET 10 + .NET Aspire, com fontes de dados em **SQL Server** e/ou **ClickHouse**.
+POC de um **engine de previsão de demanda** para apoiar o processo de **sugestão de compra** no varejo farmacêutico. Construído sobre .NET 10 + .NET Aspire, com os dados em **SQL Server** (há um ClickHouse provisionado, mas hoje nenhum caminho de código o consulta — ver §3).
 
 > Status: **bootstrap**. Solução Aspire em branco com os 4 projetos do template (AppHost, ApiService, ServiceDefaults, Web). Próximos passos abaixo.
 
@@ -59,7 +59,7 @@ A cada `F5` o AppHost sobe **todos** os recursos lado a lado:
 │   └─ engine       ← schema gerenciado via EF Core migrations (F2) │
 │                                                                   │
 │  clickhouse (ClickHouse server container, persistent volume)      │
-│   └─ vendas-olap  ← histórico denso para varredura analítica      │
+│   └─ vendas-olap  ← SÓ EM DESENVOLVIMENTO LOCAL (ver abaixo)      │
 │                                                                   │
 │  dbgate (UI web de inspeção, volume persistente)                  │
 │   ├─ conexão "sql"        ← auto-wire (SqlServer.Extensions)      │
@@ -79,6 +79,22 @@ A cada `F5` o AppHost sobe **todos** os recursos lado a lado:
 
 Persistência: `WithLifetime(ContainerLifetime.Persistent)` + `WithDataVolume()` em SQL Server e ClickHouse. Os containers sobrevivem ao encerramento do AppHost; os volumes nomeados sobrevivem à recriação dos containers. Reset completo de dados exige `docker volume rm` explícito.
 
+### ClickHouse: provisionado, sem uso, e fora do deploy
+
+O ClickHouse entrou em F1, quando a escolha do armazenamento analítico ainda estava aberta.
+A implementação inteira acabou em SQL Server — importação → `Stage` → features → treino →
+comparação → materialização. Hoje, **nenhum código do produto consulta `vendas-olap`**: o
+`apiservice` recebia a connection string e nunca a abriu, e o diretório `Scripts/` do runner
+de schema está vazio, então ele aplica zero scripts e encerra com sucesso a cada start.
+
+Ele continua no `F5` de propósito, como banco de experimentação analítica já ligado ao DbGate.
+Mas os três recursos (`clickhouse`, `vendas-olap` e `vendas-olap-schema`) são declarados dentro
+de um `if (builder.ExecutionContext.IsRunMode)` no [AppHost.cs](CosmosPro.ML.DemandForCast.AppHost/AppHost.cs)
+e por isso **não aparecem no `docker-compose.yaml` gerado**: o destino de deploy é uma VPS
+pequena, e embarcar um banco que ninguém consulta custa 1-2 GB de RAM mais um gate de startup
+para um migrador que não migra nada. Os fixtures de teste sobem o AppHost em modo `run`, então
+continuam enxergando tudo.
+
 Projetos da solução (`MLDemandForCastPOC.slnx`):
 
 | Projeto | Papel |
@@ -87,14 +103,14 @@ Projetos da solução (`MLDemandForCastPOC.slnx`):
 | [CosmosPro.ML.DemandForCast.ApiService](CosmosPro.ML.DemandForCast.ApiService/) | HTTP API que expõe treino, forecast e métricas. Hospeda o engine ML.NET. |
 | [CosmosPro.ML.DemandForCast.Web](CosmosPro.ML.DemandForCast.Web/) | Blazor — UI de cockpit: disparar experimentos, inspecionar backtests, comparar modelos. |
 | [CosmosPro.ML.DemandForCast.Database](CosmosPro.ML.DemandForCast.Database/) | SQL Server Project (`MSBuild.Sdk.SqlProj/4.2.0`). Schema declarativo do banco `vendas`, deployado via DACPAC a cada F5. |
-| [CosmosPro.ML.DemandForCast.OlapSchema](CosmosPro.ML.DemandForCast.OlapSchema/) | Console .NET one-shot. Aplica scripts SQL versionados (embedded em `Scripts/*.sql`) ao banco `vendas-olap` no ClickHouse. Controle de versão via tabela `__schema_migrations`. |
+| [CosmosPro.ML.DemandForCast.OlapSchema](CosmosPro.ML.DemandForCast.OlapSchema/) | Console .NET one-shot. Aplicaria scripts SQL versionados (embedded em `Scripts/*.sql`) ao banco `vendas-olap` no ClickHouse, com controle de versão via tabela `__schema_migrations` — mas `Scripts/` está **vazio**, então hoje ele não aplica nenhum. Só roda no `F5` (ver §ClickHouse acima). |
 | [CosmosPro.ML.DemandForCast.ServiceDefaults](CosmosPro.ML.DemandForCast.ServiceDefaults/) | OpenTelemetry, health checks, resilience. |
 
 ### Por que duas trilhas de migração de schema
 
 - **DACPAC (`Microsoft.Build.Sql` / `MSBuild.Sdk.SqlProj`)** para o banco `vendas` — schema **declarativo**, ideal para representar a fonte transacional consumida pelo engine. SqlPackage faz o diff e aplica ALTERs; ganhamos histórico de schema versionável, refactoring com detecção de rename, e scripts pre/post-deployment. Aplicado pelo Aspire via `AddSqlProject<Projects.X>(...)` (pacote `CommunityToolkit.Aspire.Hosting.SqlDatabaseProjects`).
 - **EF Core migrations** para o banco `engine` — schema **imperativo**, ideal para tabelas próprias do engine (`Experimento`, `BacktestRun`, `ModelArtifactRegistry`). Aplicado pelo Aspire via `AddEFMigrations(...)` + `RunDatabaseUpdateOnStart()` (pacote `Aspire.Hosting.EntityFrameworkCore`, anunciado no changelog 13.3 do Aspire mas ainda não publicado no NuGet — placeholder marcado no `AppHost.cs`).
-- **Runner customizado (.NET console one-shot)** para `vendas-olap` no ClickHouse — ClickHouse não tem DACPAC equivalente. O projeto `CosmosPro.ML.DemandForCast.OlapSchema` carrega scripts `.sql` versionados (embedded em `Scripts/`), mantém tabela `__schema_migrations` no próprio ClickHouse, e skipa scripts já aplicados. Aplicado pelo Aspire como um `AddProject<...>(...)` regular com `WithReference(vendasOlapDb)` — apiservice usa `WaitForCompletion(olapSchema)`. Convenção de nomes: `NNN_descricao.sql` (versão = nome sem extensão). **Detalhes completos: [Docs/olap-schema-migrations.md](Docs/olap-schema-migrations.md)**.
+- **Runner customizado (.NET console one-shot)** para `vendas-olap` no ClickHouse — ClickHouse não tem DACPAC equivalente. O projeto `CosmosPro.ML.DemandForCast.OlapSchema` carrega scripts `.sql` versionados (embedded em `Scripts/`), mantém tabela `__schema_migrations` no próprio ClickHouse, e skipa scripts já aplicados. Convenção de nomes: `NNN_descricao.sql` (versão = nome sem extensão). **O mecanismo está pronto e sem uso: `Scripts/` não tem nenhum arquivo, então cada execução aplica zero scripts.** Declarado pelo Aspire só em modo `run` — apiservice usa `WaitForCompletion(olapSchema)` apenas no `F5`. **Detalhes completos: [Docs/olap-schema-migrations.md](Docs/olap-schema-migrations.md)**.
 
 ### Projetos previstos (próximas fases)
 
@@ -112,7 +128,7 @@ Projetos da solução (`MLDemandForCastPOC.slnx`):
 
 ### Fontes
 - **SQL Server** — transacional (mestres de produto/loja, vendas recentes, promoções vigentes, ruptura).
-- **ClickHouse** — analítico (histórico denso de vendas, ideal para varrer milhões de séries SKU×loja).
+- **ClickHouse** — analítico (histórico denso de vendas, ideal para varrer milhões de séries SKU×loja). Previsto em F1, **nunca usado**: o pipeline inteiro ficou em SQL Server. Sobrevive só como ambiente de experimentação local (§3).
 
 ### Granularidade alvo (a confirmar com o negócio)
 - Diária por SKU × loja para o pipeline.
@@ -151,7 +167,7 @@ Aspire Dashboard abre automaticamente; webfrontend, apiservice e DbGate ficam ac
 DbGate aparece como recurso `dbgate` no dashboard. Abra o endpoint — **as duas conexões já vêm prontas**:
 
 - **SQL Server (`sql`)** — auto-wirada pelo `WithDbGate()` do `CommunityToolkit.Aspire.Hosting.SqlServer.Extensions`.
-- **ClickHouse (`clickhouse`)** — auto-wirada por um helper local em [ClickHouseDbGateExtensions.cs](CosmosPro.ML.DemandForCast.AppHost/ClickHouseDbGateExtensions.cs), que cobre a lacuna do `Aspire.Hosting.ClickHouse` (que ainda não traz `WithDbGate()` nativamente — candidato a PR upstream em `ClickHouse/ClickHouse.Aspire`).
+- **ClickHouse (`clickhouse`)** — só existe no `F5` (§3) — auto-wirada por um helper local em [ClickHouseDbGateExtensions.cs](CosmosPro.ML.DemandForCast.AppHost/ClickHouseDbGateExtensions.cs), que cobre a lacuna do `Aspire.Hosting.ClickHouse` (que ainda não traz `WithDbGate()` nativamente — candidato a PR upstream em `ClickHouse/ClickHouse.Aspire`).
 
 O DbGate roda com `WithDataVolume() + WithLifetime(Persistent)`, então qualquer favorito/aba salvo na UI sobrevive entre F5s.
 
@@ -241,7 +257,7 @@ onde começar.
 |---|---|---|
 | `windows-tests` | `windows-latest` | Só os testes do extrator. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele. Por isso a suíte é dividida por sistema operacional, e não por capricho de paralelismo. |
 | `linux-tests` | `ubuntu-latest` | Compila em **Debug** (os fixtures procuram o DACPAC em `bin/Debug/net10.0`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server, ClickHouse e MinIO em container. |
-| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as quatro imagens) e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
+| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as três imagens) e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
 
 Os testes de integração e E2E ficam em **passos separados e sequenciais** do mesmo job de
 propósito: eles se excluem mutuamente por um lock de arquivo entre processos
@@ -251,20 +267,20 @@ os 30 minutos de tolerância do lock.
 
 **Onde as imagens aparecem.** No GHCR, sob o próprio repositório —
 `ghcr.io/<organização>/<repositório>/…`, tudo **em minúsculas** (o GHCR rejeita maiúsculas
-no push, e o nome do repositório tem algumas; o workflow converte). São quatro:
-`apiservice`, `webfrontend`, `worker` e `vendas-olap-schema`. A referência exata, com a
-tag, sai no log dos passos `push-*` da execução — é de lá que se copia para o `.env`.
-A infraestrutura (SQL Server, ClickHouse, MinIO, dashboard) **não** é construída aqui: vem
-de imagem pública, já referenciada no compose gerado.
+no push, e o nome do repositório tem algumas; o workflow converte). São três:
+`apiservice`, `webfrontend` e `worker` (`vendas-olap-schema` saiu junto com o ClickHouse —
+§3). A referência exata, com a tag, sai no log dos passos `push-*` da execução — é de lá que
+se copia para o `.env`. A infraestrutura (SQL Server, MinIO, dashboard) **não** é construída
+aqui: vem de imagem pública, já referenciada no compose gerado.
 
 **O que o operador precisa preencher no `.env`.** O arquivo é enviado **em branco**, do
 jeito que o `aspire publish` gera — nenhuma credencial trafega pelo pipeline:
 
-- `APISERVICE_IMAGE`, `WEBFRONTEND_IMAGE`, `WORKER_IMAGE`, `VENDAS_OLAP_SCHEMA_IMAGE` — as
+- `APISERVICE_IMAGE`, `WEBFRONTEND_IMAGE`, `WORKER_IMAGE` — as
   referências completas do parágrafo acima. Saem **vazias**: configurar o registry no
   AppHost afeta o `aspire do push`, não o `aspire publish`.
 - `APISERVICE_PORT`, `WEBFRONTEND_PORT` — as portas publicadas no host.
-- `SQL_PASSWORD`, `CLICKHOUSE_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` — as
+- `SQL_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` — as
   credenciais da infraestrutura no destino. Não são as do ambiente local: `minioadmin`
   existe para o `F5` subir em qualquer máquina, e repeti-lo fora dali é entregar o object
   storage.
@@ -281,8 +297,9 @@ aqui do que descobri-lo no destino. **Dois recursos do AppHost simplesmente não
 - **`engine-migrations`**, o runner de EF Core migrations do banco `engine`.
 
 Os dois são recursos one-shot que o Aspire só sabe executar em modo `run`; o publisher de
-compose não tem para onde traduzi-los. O resultado concreto: `docker compose up` sobe SQL
-Server, ClickHouse, MinIO, apiservice, webfrontend e worker **com os dois bancos vazios** —
+compose não tem para onde traduzi-los. (`vendas-olap-schema` também não aparece, mas por
+decisão explícita e sem consequência — §3.) O resultado concreto: `docker compose up` sobe SQL
+Server, MinIO, apiservice, webfrontend e worker **com os dois bancos vazios** —
 sem tabela nenhuma. Na prática isso significa que **não existe tabela de Identity, logo não
 existe usuário, logo o login é impossível** e nenhuma tela passa da porta de autenticação;
 o worker não tem `CargasStage` para consultar e a importação não tem para onde escrever.

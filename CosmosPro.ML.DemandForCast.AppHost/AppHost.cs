@@ -42,7 +42,8 @@ var minioSecretKey = builder.AddParameter("minio-secret-key", secret: false, val
 // DbGate (UI web de inspeção) é compartilhado entre SQL Server e ClickHouse.
 // O volume/lifetime do container DbGate é configurado aqui (na primeira
 // chamada `.WithDbGate`); a chamada subsequente no ClickHouse reusa o mesmo
-// recurso DbGate (AddDbGate é idempotente).
+// recurso DbGate (AddDbGate é idempotente) — e só acontece em run mode, então
+// no compose publicado o DbGate fica só com a conexão do SQL Server.
 var sqlServer = builder.AddSqlServer("sql")
                        .WithLifetime(ContainerLifetime.Persistent)
                        .WithDataVolume()
@@ -58,16 +59,46 @@ var stageDb = sqlServer.AddDatabase("Stage");
 // Engine for criado.
 var engineDb = sqlServer.AddDatabase("engine");
 
-// `.WithDbGate()` aqui é um helper local (ver ClickHouseDbGateExtensions.cs)
-// que cobre a lacuna do Aspire.Hosting.ClickHouse, ainda sem suporte nativo.
-var clickhouse = builder.AddClickHouse("clickhouse")
-                        .WithLifetime(ContainerLifetime.Persistent)
-                        .WithDataVolume()
-                        .WithDbGate();
+// --- Somente desenvolvimento local -------------------------------------------
 
-// vendas-olap: histórico denso de vendas para varredura analítica.
-// Nome do recurso Aspire usa hífen; nome do schema no ClickHouse é "vendas_olap".
-var vendasOlapDb = clickhouse.AddDatabase("vendas-olap", "vendas_olap");
+// ClickHouse foi provisionado em F1, quando a escolha do armazenamento analítico
+// ainda estava aberta. A implementação inteira acabou em SQL Server: hoje nenhum
+// código do produto lê `vendas-olap` — o apiservice recebia a connection string e
+// nunca a abriu — e `OlapSchema/Scripts/` está vazio, então o runner de schema
+// aplica zero scripts e encerra com sucesso a cada start.
+//
+// Fica de pé no `F5`, para experimentação analítica, e fora do compose publicado:
+// o destino de deploy é uma VPS pequena, e embarcar um banco que ninguém consulta
+// custa 1-2 GB de RAM mais um gate de startup para um migrador que não migra nada.
+//
+// `IsRunMode` é o que separa os dois mundos: verdadeiro no F5 e nos fixtures de
+// teste (que sobem o AppHost normalmente), falso em `aspire publish` / `aspire do
+// push`. Daí as variáveis anuláveis — em publish estes recursos não existem, e o
+// wiring do apiservice mais abaixo precisa enxergar isso.
+IResourceBuilder<ClickHouseDatabaseResource>? vendasOlapDb = null;
+IResourceBuilder<ProjectResource>? olapSchema = null;
+
+if (builder.ExecutionContext.IsRunMode)
+{
+    // `.WithDbGate()` aqui é um helper local (ver ClickHouseDbGateExtensions.cs)
+    // que cobre a lacuna do Aspire.Hosting.ClickHouse, ainda sem suporte nativo.
+    var clickhouse = builder.AddClickHouse("clickhouse")
+                            .WithLifetime(ContainerLifetime.Persistent)
+                            .WithDataVolume()
+                            .WithDbGate();
+
+    // vendas-olap: histórico denso de vendas para varredura analítica.
+    // Nome do recurso Aspire usa hífen; nome do schema no ClickHouse é "vendas_olap".
+    vendasOlapDb = clickhouse.AddDatabase("vendas-olap", "vendas_olap");
+
+    // ClickHouse não tem DACPAC. O projeto OlapSchema aplica scripts versionados
+    // idempotentes ao banco vendas-olap (controle via tabela __schema_migrations).
+    olapSchema = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_OlapSchema>("vendas-olap-schema")
+                        .WithReference(vendasOlapDb)
+                        .WaitFor(vendasOlapDb)
+                        .WithParentRelationship(vendasOlapDb.Resource)
+                        .WithContainerRegistry(registry);
+}
 
 // MinIO: object storage S3-compatible para armazenar ZIPs de import (CSVs
 // de vendas, estoque, etc.). Persistido em volume; credenciais fixas via
@@ -84,13 +115,8 @@ var minio = builder.AddMinioContainer("minio", minioAccessKey, minioSecretKey)
 var stageSchema = builder.AddSqlProject<Projects.CosmosPro_ML_DemandForCast_Database>("stage-schema")
                          .WithReference(stageDb);
 
-// ClickHouse não tem DACPAC. O projeto OlapSchema aplica scripts versionados
-// idempotentes ao banco vendas-olap (controle via tabela __schema_migrations).
-var olapSchema = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_OlapSchema>("vendas-olap-schema")
-                        .WithReference(vendasOlapDb)
-                        .WaitFor(vendasOlapDb)
-                        .WithParentRelationship(vendasOlapDb.Resource)
-                        .WithContainerRegistry(registry);
+// O runner de schema do ClickHouse (`vendas-olap-schema`) fica no bloco de
+// recursos locais acima, junto do banco que ele migra.
 
 // --- Services ----------------------------------------------------------------
 
@@ -98,15 +124,22 @@ var apiService = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_ApiServi
     .WithHttpHealthCheck("/health")
     .WithReference(stageDb)
     .WithReference(engineDb)
-    .WithReference(vendasOlapDb)
     .WithReference(minio)
     .WaitFor(stageDb)
     .WaitFor(engineDb)
-    .WaitFor(vendasOlapDb)
     .WaitFor(minio)
     .WaitForCompletion(stageSchema)
-    .WaitForCompletion(olapSchema)
     .WithContainerRegistry(registry);
+
+// Único ponto do modelo que amarra o apiservice ao ClickHouse, e por isso
+// condicional: em publish os dois recursos não existem (ver bloco "Somente
+// desenvolvimento local"). Em run mode o wiring é exatamente o de antes.
+if (vendasOlapDb is not null && olapSchema is not null)
+{
+    apiService.WithReference(vendasOlapDb)
+              .WaitFor(vendasOlapDb)
+              .WaitForCompletion(olapSchema);
+}
 
 // EF Core migrations para o banco "engine" — runner one-shot orquestrado pelo
 // Aspire. Usa o DbContext registrado no apiservice (`AddSqlServerDbContext<EngineDbContext>`).
