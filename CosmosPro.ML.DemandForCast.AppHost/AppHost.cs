@@ -1,5 +1,34 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
+// --- Destino de publicação ---------------------------------------------------
+
+// Alvo de deploy: Docker Compose. Com este recurso presente, todo resource do
+// modelo é publicado como serviço de compose — `aspire publish` gera
+// docker-compose.yaml + .env, e `aspire do push` constrói e empurra as imagens.
+//
+// Existe para o compose sair do MESMO modelo que roda no F5, em vez de um YAML
+// paralelo mantido à mão: um arquivo separado desatualizaria na primeira vez que
+// alguém acrescentasse um recurso aqui e esquecesse de espelhar lá.
+builder.AddDockerComposeEnvironment("compose");
+
+// Registry onde as imagens deste repositório são publicadas por `aspire do push`.
+// Endpoint e repositório vêm de configuração (`REGISTRY_ENDPOINT` /
+// `REGISTRY_REPOSITORY`) em vez de literais: o pipeline do GitHub Actions preenche
+// com ghcr.io + o próprio repositório, e um valor cravado aqui obrigaria um fork a
+// editar código para publicar no registry dele.
+var registryEndpoint = builder.AddParameterFromConfiguration("registryEndpoint", "REGISTRY_ENDPOINT");
+var registryRepository = builder.AddParameterFromConfiguration("registryRepository", "REGISTRY_REPOSITORY");
+
+// ASPIRECOMPUTE003: `AddContainerRegistry` e `WithContainerRegistry` são
+// experimentais no Aspire 13.4 e o compilador trata o uso como **erro**, não aviso.
+// Suprimido porque são as únicas APIs que associam imagem a registry para o
+// `aspire do push`. A supressão vale daqui até o fim do modelo, porque as quatro
+// chamadas de `WithContainerRegistry` ficam espalhadas pelos recursos abaixo.
+// Revisar a cada bump do Aspire — é quando elas devem sair de experimental (ou
+// mudar de forma).
+#pragma warning disable ASPIRECOMPUTE003
+var registry = builder.AddContainerRegistry("ghcr", registryEndpoint, registryRepository);
+
 // --- Parameters --------------------------------------------------------------
 
 // MinIO de debug do POC: credenciais fixas e não-secretas de propósito, para o
@@ -60,7 +89,8 @@ var stageSchema = builder.AddSqlProject<Projects.CosmosPro_ML_DemandForCast_Data
 var olapSchema = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_OlapSchema>("vendas-olap-schema")
                         .WithReference(vendasOlapDb)
                         .WaitFor(vendasOlapDb)
-                        .WithParentRelationship(vendasOlapDb.Resource);
+                        .WithParentRelationship(vendasOlapDb.Resource)
+                        .WithContainerRegistry(registry);
 
 // --- Services ----------------------------------------------------------------
 
@@ -75,7 +105,8 @@ var apiService = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_ApiServi
     .WaitFor(vendasOlapDb)
     .WaitFor(minio)
     .WaitForCompletion(stageSchema)
-    .WaitForCompletion(olapSchema);
+    .WaitForCompletion(olapSchema)
+    .WithContainerRegistry(registry);
 
 // EF Core migrations para o banco "engine" — runner one-shot orquestrado pelo
 // Aspire. Usa o DbContext registrado no apiservice (`AddSqlServerDbContext<EngineDbContext>`).
@@ -105,7 +136,8 @@ builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Web>("webfrontend")
     .WithEnvironment("PowerUser__Email", powerUserEmail)
     .WithEnvironment("PowerUser__Password", powerUserPassword)
     .WaitFor(engineDb)
-    .WaitFor(apiService);
+    .WaitFor(apiService)
+    .WithContainerRegistry(registry);
 
 // Worker que consome a fila engine.CargasStage e processa os ZIPs do MinIO
 // para o banco Stage (BULK INSERT por tabela em transação única).
@@ -116,6 +148,8 @@ builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Worker>("worker")
     .WaitFor(stageDb)
     .WaitFor(engineDb)
     .WaitFor(minio)
-    .WaitForCompletion(stageSchema);
+    .WaitForCompletion(stageSchema)
+    .WithContainerRegistry(registry);
+#pragma warning restore ASPIRECOMPUTE003
 
 builder.Build().Run();

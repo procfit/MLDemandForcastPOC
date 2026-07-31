@@ -1,0 +1,204 @@
+name: CI e imagens de container
+
+# Roda a suíte inteira e, só se ela passar, constrói e empurra as imagens dos quatro
+# projetos deste repositório para o GHCR, publicando o docker-compose gerado pelo
+# próprio AppHost como artefato da execução.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: "10.0.x"
+
+jobs:
+  # O extrator é WinForms (`net10.0-windows`, `WinExe`) e não compila em Linux — nem ele
+  # nem o projeto de teste dele. Por isso a suíte é dividida por sistema operacional em
+  # vez de rodar inteira num runner só: um `dotnet build` da solução em ubuntu falharia
+  # nesses dois projetos. Os demais projetos de produção só têm `InternalsVisibleTo` para
+  # o teste do extrator (não ProjectReference), então nada mais é arrastado para Windows.
+  windows-tests:
+    name: Testes do extrator (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Testes do extrator
+        run: dotnet test tests/CosmosPro.ML.DemandForCast.Extractor.Tests/CosmosPro.ML.DemandForCast.Extractor.Tests.csproj --configuration Debug
+
+  linux-tests:
+    name: Testes (Linux)
+    runs-on: ubuntu-latest
+    # Teto do job acima da soma dos passos: os dois projetos que sobem o AppHost real
+    # baixam SQL Server, ClickHouse e MinIO e esperam os bancos ficarem saudáveis, e num
+    # runner frio isso é medido em minutos, não em segundos.
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # Debug, não Release, de propósito: os fixtures de integração e E2E procuram o
+      # DACPAC em `CosmosPro.ML.DemandForCast.Database/bin/Debug/net10.0` e lançam
+      # `FileNotFoundException` na hora se ele não estiver lá (eles substituem o
+      # SqlProject por um DACPAC já compilado, porque o MSBuild não resolve o .sqlproj
+      # em runtime sob `dotnet test`). Compilar os dois projetos de teste que sobem o
+      # AppHost já gera o DACPAC, porque o .sqlproj é ProjectReference da AppHost — e
+      # cobre, transitivamente, todos os projetos de produção multiplataforma.
+      - name: Compilar (Debug)
+        timeout-minutes: 20
+        run: |
+          dotnet build tests/CosmosPro.ML.DemandForCast.ApiService.IntegrationTests/CosmosPro.ML.DemandForCast.ApiService.IntegrationTests.csproj --configuration Debug
+          dotnet build tests/CosmosPro.ML.DemandForCast.Web.E2ETests/CosmosPro.ML.DemandForCast.Web.E2ETests.csproj --configuration Debug
+
+      # Os fixtures conversam com apiservice e webfrontend pelos endpoints HTTPS do
+      # Aspire, então o Kestrel precisa de um certificado de desenvolvimento para
+      # sequer abrir a porta, e o HttpClient do teste precisa confiar nele. `--trust`
+      # em Linux depende do `certutil` do libnss3-tools.
+      - name: Certificado de desenvolvimento HTTPS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnss3-tools
+          dotnet dev-certs https --trust
+
+      # Primeiro os testes puros: são minutos, não dezenas de minutos, e falham por
+      # motivos que não têm nada a ver com infraestrutura. Rodá-los antes evita pagar o
+      # download do SQL Server para descobrir um erro de lógica. O `bash -e` do runner
+      # aborta no primeiro projeto vermelho.
+      - name: Testes rápidos
+        timeout-minutes: 25
+        run: |
+          for projeto in \
+            tests/CosmosPro.ML.DemandForCast.Engine.Tests \
+            tests/CosmosPro.ML.DemandForCast.OlapSchema.Tests \
+            tests/CosmosPro.ML.DemandForCast.ApiService.Tests \
+            tests/CosmosPro.ML.DemandForCast.Worker.Tests \
+            tests/CosmosPro.ML.DemandForCast.Web.Tests \
+            tests/CosmosPro.ML.DemandForCast.SyntheticData.Tests \
+            tests/CosmosPro.ML.DemandForCast.Features.Tests \
+            tests/CosmosPro.ML.DemandForCast.Forecasting.Tests \
+            tests/CosmosPro.ML.DemandForCast.Purchasing.Tests
+          do
+            nome=$(basename "$projeto")
+            echo "::group::$nome"
+            dotnet test "$projeto/$nome.csproj" --configuration Debug
+            echo "::endgroup::"
+          done
+
+      # Baixa as imagens de infraestrutura antes dos testes que sobem o AppHost. Não é
+      # cosmético: o fixture de integração espera no máximo 5 minutos a apiservice ficar
+      # saudável, e num runner frio esse orçamento é disputado com o download de ~2 GB de
+      # imagem. As tags espelham os padrões das integrações do Aspire — se um bump do
+      # Aspire mudar alguma, o `|| true` deixa o download acontecer depois, dentro do
+      # teste: custa tempo, não quebra o build.
+      - name: Pré-baixar imagens de infraestrutura
+        timeout-minutes: 15
+        run: |
+          for imagem in \
+            mcr.microsoft.com/mssql/server:2022-latest \
+            docker.io/clickhouse/clickhouse-server:latest \
+            docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+          do
+            docker pull "$imagem" || true
+          done
+
+      # Os dois projetos abaixo sobem o AppHost real e se excluem mutuamente por um lock
+      # de arquivo entre processos (AppHostExclusiveLock) — os containers do Aspire são
+      # persistentes e compartilhados, então dois AppHosts vivos são um só ambiente com
+      # dois donos. Ficam em passos separados e sequenciais justamente para o lock nunca
+      # entrar em disputa: quem chega segundo já encontra o primeiro encerrado, em vez de
+      # esperar os 30 minutos de tolerância dele.
+      - name: Testes de integração
+        timeout-minutes: 45
+        run: dotnet test tests/CosmosPro.ML.DemandForCast.ApiService.IntegrationTests/CosmosPro.ML.DemandForCast.ApiService.IntegrationTests.csproj --configuration Debug --no-build
+
+      # O fixture E2E já chama `playwright install chromium` sozinho, e isso baixa o
+      # navegador — mas não as bibliotecas de sistema que ele carrega (libnss3, libatk,
+      # libgbm e companhia). `--with-deps` é o que cobre essa parte, e é a razão de o
+      # passo continuar existindo mesmo com a instalação feita pelo teste.
+      - name: Dependências de sistema do Playwright
+        timeout-minutes: 10
+        run: pwsh tests/CosmosPro.ML.DemandForCast.Web.E2ETests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
+
+      - name: Testes E2E
+        timeout-minutes: 45
+        run: dotnet test tests/CosmosPro.ML.DemandForCast.Web.E2ETests/CosmosPro.ML.DemandForCast.Web.E2ETests.csproj --configuration Debug --no-build
+
+  images:
+    name: Imagens e artefatos de compose
+    runs-on: ubuntu-latest
+    needs: [linux-tests, windows-tests]
+    timeout-minutes: 45
+
+    permissions:
+      contents: read
+      # Necessário para o GITHUB_TOKEN embutido conseguir escrever no GHCR.
+      packages: write
+
+    env:
+      REGISTRY_ENDPOINT: ghcr.io
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Instalar a CLI do Aspire
+        run: |
+          curl -sSL https://aspire.dev/install.sh | bash
+          echo "$HOME/.aspire/bin" >> "$GITHUB_PATH"
+
+      - name: Versão da CLI do Aspire
+        run: aspire --version
+
+      # `${{ github.repository }}` é `cosmos-pro/MLDemandForcastPOC`, com maiúsculas, e o
+      # GHCR só aceita nome de repositório em minúsculas — empurrar com maiúscula é
+      # rejeitado no push, não na configuração. `${VAR,,}` do bash faz a conversão.
+      - name: Repositório do registry em minúsculas
+        run: echo "REGISTRY_REPOSITORY=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Autenticar no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Constrói e empurra as quatro imagens do repositório (apiservice, webfrontend,
+      # worker, vendas-olap-schema). `REGISTRY_ENDPOINT`/`REGISTRY_REPOSITORY` são lidos
+      # pelos parâmetros `registryEndpoint`/`registryRepository` do AppHost.
+      # `--non-interactive` garante que um parâmetro sem valor vire erro em vez de um
+      # prompt que travaria o job até o timeout.
+      - name: Construir e empurrar as imagens
+        timeout-minutes: 30
+        run: aspire do push --apphost CosmosPro.ML.DemandForCast.AppHost/CosmosPro.ML.DemandForCast.AppHost.csproj --non-interactive
+
+      - name: Gerar docker-compose.yaml e .env
+        timeout-minutes: 10
+        run: aspire publish --project CosmosPro.ML.DemandForCast.AppHost/CosmosPro.ML.DemandForCast.AppHost.csproj --output-path ./aspire-output --non-interactive
+
+      # `include-hidden-files` porque o `.env` começa com ponto e sem isso ele fica fora
+      # do artefato — e sem o `.env` o compose não sobe. Ele é enviado **em branco**, do
+      # jeito que o `aspire publish` gera: preencher é trabalho do operador, no destino.
+      - name: Publicar os artefatos de deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: aspire-compose
+          path: ./aspire-output/
+          retention-days: 30
+          include-hidden-files: true

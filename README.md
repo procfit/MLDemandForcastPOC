@@ -232,6 +232,69 @@ o problema é outro: MinIO fora do ar ou inacessível, não falta de publicaçã
 situações têm respostas diferentes de propósito, para quem estiver de plantão saber por
 onde começar.
 
+### Pipeline de CI e imagens de container
+
+[`.github/workflows/ci-imagens.yml`](.github/workflows/ci-imagens.yml) roda a **push na
+`main`** e sob demanda (`workflow_dispatch`). São três jobs, nessa dependência:
+
+| Job | Runner | O que faz |
+|---|---|---|
+| `windows-tests` | `windows-latest` | Só os testes do extrator. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele. Por isso a suíte é dividida por sistema operacional, e não por capricho de paralelismo. |
+| `linux-tests` | `ubuntu-latest` | Compila em **Debug** (os fixtures procuram o DACPAC em `bin/Debug/net10.0`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server, ClickHouse e MinIO em container. |
+| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as quatro imagens) e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
+
+Os testes de integração e E2E ficam em **passos separados e sequenciais** do mesmo job de
+propósito: eles se excluem mutuamente por um lock de arquivo entre processos
+([`AppHostExclusiveLock`](tests/CosmosPro.ML.DemandForCast.Tests.Shared/AppHostExclusiveLock.cs)),
+e rodá-los em sequência faz o segundo já encontrar o primeiro encerrado em vez de esperar
+os 30 minutos de tolerância do lock.
+
+**Onde as imagens aparecem.** No GHCR, sob o próprio repositório —
+`ghcr.io/<organização>/<repositório>/…`, tudo **em minúsculas** (o GHCR rejeita maiúsculas
+no push, e o nome do repositório tem algumas; o workflow converte). São quatro:
+`apiservice`, `webfrontend`, `worker` e `vendas-olap-schema`. A referência exata, com a
+tag, sai no log dos passos `push-*` da execução — é de lá que se copia para o `.env`.
+A infraestrutura (SQL Server, ClickHouse, MinIO, dashboard) **não** é construída aqui: vem
+de imagem pública, já referenciada no compose gerado.
+
+**O que o operador precisa preencher no `.env`.** O arquivo é enviado **em branco**, do
+jeito que o `aspire publish` gera — nenhuma credencial trafega pelo pipeline:
+
+- `APISERVICE_IMAGE`, `WEBFRONTEND_IMAGE`, `WORKER_IMAGE`, `VENDAS_OLAP_SCHEMA_IMAGE` — as
+  referências completas do parágrafo acima. Saem **vazias**: configurar o registry no
+  AppHost afeta o `aspire do push`, não o `aspire publish`.
+- `APISERVICE_PORT`, `WEBFRONTEND_PORT` — as portas publicadas no host.
+- `SQL_PASSWORD`, `CLICKHOUSE_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` — as
+  credenciais da infraestrutura no destino. Não são as do ambiente local: `minioadmin`
+  existe para o `F5` subir em qualquer máquina, e repeti-lo fora dali é entregar o object
+  storage.
+- `POWERUSER_EMAIL`, `POWERUSER_PASSWORD` — o administrador global semeado no primeiro
+  start da Web. Sem eles a Web **falha no startup de propósito**.
+
+#### O compose não cria o schema de nenhum dos dois bancos
+
+Este é o buraco entre o `docker compose up` e uma aplicação utilizável, e é melhor lê-lo
+aqui do que descobri-lo no destino. **Dois recursos do AppHost simplesmente não aparecem no
+`docker-compose.yaml` gerado** — zero ocorrências, sem aviso do `aspire publish`:
+
+- **`stage-schema`**, o SQL Server Project que publica o DACPAC no banco `Stage`.
+- **`engine-migrations`**, o runner de EF Core migrations do banco `engine`.
+
+Os dois são recursos one-shot que o Aspire só sabe executar em modo `run`; o publisher de
+compose não tem para onde traduzi-los. O resultado concreto: `docker compose up` sobe SQL
+Server, ClickHouse, MinIO, apiservice, webfrontend e worker **com os dois bancos vazios** —
+sem tabela nenhuma. Na prática isso significa que **não existe tabela de Identity, logo não
+existe usuário, logo o login é impossível** e nenhuma tela passa da porta de autenticação;
+o worker não tem `CargasStage` para consultar e a importação não tem para onde escrever.
+Não é degradação parcial, é aplicação inutilizável.
+
+Enquanto isso não for resolvido, aplicar os dois schemas é **passo manual obrigatório**
+entre o `docker compose up` e o primeiro acesso: publicar o DACPAC do projeto
+`CosmosPro.ML.DemandForCast.Database` contra o banco `Stage` e rodar `dotnet ef database
+update` do `EngineDbContext` contra o banco `engine`, ambos apontando para o SQL Server do
+compose. Fechar o buraco de verdade exige um container de deploy de schema no modelo do
+AppHost — trabalho que ainda não foi feito, e que não deve ser improvisado no `.env`.
+
 ---
 
 ## 6. Roadmap do POC
