@@ -28,6 +28,15 @@ namespace CosmosPro.ML.DemandForCast.Purchasing.Comparison;
 /// </para>
 ///
 /// <para>
+/// <b>Reconciliar 100% não é comparar algo.</b> A reconciliação cobre a população inteira,
+/// inclusive itens que depois caem por horizonte ou por ruptura — então uma população que
+/// reconcilia por completo e some inteira nesses portões devolve <c>ItensComparados == 0</c>
+/// com <c>Reconciliacao.TaxaConcordancia</c> nula, e <c>DecisionComparisonResult.Utilidade</c>
+/// diz por qual dos portões. Sem isso o resultado sairia bem formado e leria como sucesso um
+/// caso em que nada foi de fato comparado.
+/// </para>
+///
+/// <para>
 /// <b>Aritmética modelada, por <c>TipoCalculo</c>:</b>
 /// <list type="bullet">
 /// <item><b>2 — "Dias de Reposição":</b> <c>necessidade = demanda/dia × DiasEstoque</c>.</item>
@@ -129,17 +138,19 @@ public sealed class DecisionComparer
         var decisoes = new List<Decisao>(populacao.Count);
         var descartadosPorRuptura = 0;
         var semPreco = 0;
+        var comFallbackEstoqueSeguranca = 0;
 
         foreach (var item in populacao)
         {
             ValidarItem(item);
 
             // Uma compra que cobre DiasEstoque dias precisa de previsão até o último deles.
-            // Fora do horizonte declarado, a janela não é sequer validável — os dias
-            // distantes violariam a regra de informação por construção — então a checagem
-            // vem antes dela e o item sai por capacidade, não por vazamento.
+            // Fora do horizonte declarado, o dia mais distante violaria a regra de
+            // informação por construção — é lacuna de capacidade do ML, não vazamento —
+            // então só essa checagem específica (não a janela inteira) é adiada para depois
+            // do portão de horizonte.
             var dentroDoHorizonte = item.DiasEstoque <= _opt.HorizonteMaximoMl;
-            if (dentroDoHorizonte) ValidarJanela(item);
+            ValidarJanela(item, validarRegraDeInformacao: dentroDoHorizonte);
 
             var recalculada = QuantidadeCompra(item, item.DemandaDiaErp);
             var diferenca = recalculada - item.CompraSugerida;
@@ -147,7 +158,7 @@ public sealed class DecisionComparer
             var status = Classificar(item, divergencia);
 
             reconciliacao.Add(new ItemReconciliado(
-                item.SugestaoId, item.LojaId, item.Sku, item.Curva, item.TipoCalculo, status,
+                item.SugestaoId, item.LojaId, item.Sku, item.Curva, status,
                 item.CompraSugerida, recalculada, divergencia, diferenca, item.FatorEmbalagem));
 
             if (status != StatusReconciliacao.Reconciliado) continue;
@@ -167,6 +178,7 @@ public sealed class DecisionComparer
             }
 
             if (item.PrecoCompra is null) semPreco++;
+            if (UsaFallbackEstoqueSeguranca(item)) comFallbackEstoqueSeguranca++;
 
             var vendaReal = dias.Sum(d => d.Features.Target);
             var demandaDiaMl = Math.Max(0m, (decimal)dias.Average(d => d.PrevisaoMl));
@@ -181,12 +193,18 @@ public sealed class DecisionComparer
             decisoes.Add(new Decisao(item, dias.Count, vendaReal, demandaDiaMl, erp, ml, Julgar(erp, ml)));
         }
 
+        var reconciliacaoResumo = Resumir(reconciliacao, decisoes.Count);
+
         return new DecisionComparisonResult(
             populacao.Count,
             decisoes.Count,
             descartadosPorRuptura,
             semPreco,
-            Resumir(reconciliacao),
+            DeterminarUtilidade(
+                populacao.Count, decisoes.Count, reconciliacaoResumo.Reconciliados,
+                foraDoHorizonte.Count, descartadosPorRuptura),
+            comFallbackEstoqueSeguranca,
+            reconciliacaoResumo,
             reconciliacao,
             foraDoHorizonte,
             Agregar(NomeErp, decisoes, d => d.Erp),
@@ -201,6 +219,39 @@ public sealed class DecisionComparer
                 d.Erp.Falta, d.Ml.Falta,
                 d.Resultado))]);
     }
+
+    // --- Utilidade do resultado ----------------------------------------------
+
+    /// <summary>
+    /// Prioridade dos motivos: população vazia antes de reconciliação, reconciliação antes
+    /// de horizonte, horizonte antes de ruptura — cada portão só é examinado depois do
+    /// anterior tê-lo poupado por inteiro. Sobra <see cref="UtilidadeComparacao.SemItensComparaveis"/>
+    /// quando nenhum motivo isolado explica os zero itens comparados.
+    /// </summary>
+    private static UtilidadeComparacao DeterminarUtilidade(
+        int itensNaPopulacao, int itensComparados, int reconciliados, int foraDoHorizonte,
+        int descartadosPorRuptura)
+    {
+        if (itensComparados > 0) return UtilidadeComparacao.Utilizavel;
+        if (itensNaPopulacao == 0) return UtilidadeComparacao.PopulacaoVazia;
+        if (reconciliados == 0) return UtilidadeComparacao.ReconciliacaoDivergente;
+        if (foraDoHorizonte == reconciliados) return UtilidadeComparacao.ForaDoHorizonteMl;
+        if (descartadosPorRuptura == reconciliados - foraDoHorizonte) return UtilidadeComparacao.DescartadoPorRuptura;
+        return UtilidadeComparacao.SemItensComparaveis;
+    }
+
+    /// <summary>
+    /// Verdadeiro quando <see cref="NecessidadeEmaxEseg"/>, para este item, degenera na
+    /// fórmula <see cref="ReescalaEstoqueMaximo.Proporcional"/> apesar de
+    /// <see cref="DecisionOptions.ReescalaTipo1"/> pedir <see cref="ReescalaEstoqueMaximo.SegurancaFixa"/>:
+    /// <c>EstoqueSeguranca</c> nulo ou não positivo zera a parcela fixa e a razão calculada
+    /// aqui é só para contagem — <c>NecessidadeEmaxEseg</c> já faz o clamp de verdade.
+    /// </summary>
+    private bool UsaFallbackEstoqueSeguranca(DecisionItem item) =>
+        _opt.ReescalaTipo1 == ReescalaEstoqueMaximo.SegurancaFixa &&
+        item.TipoCalculo == 1 &&
+        item.DemandaDiaErp > 0m &&
+        item.EstoqueSeguranca is null or <= 0m;
 
     // --- Aritmética do ERP ---------------------------------------------------
 
@@ -267,7 +318,7 @@ public sealed class DecisionComparer
             : StatusReconciliacao.Divergente;
     }
 
-    private static ReconciliacaoResumo Resumir(List<ItemReconciliado> itens)
+    private static ReconciliacaoResumo Resumir(List<ItemReconciliado> itens, int itensComparados)
     {
         var (media, maxima) = Divergencias(itens);
 
@@ -276,6 +327,7 @@ public sealed class DecisionComparer
             itens.Count(i => i.Status == StatusReconciliacao.Reconciliado),
             itens.Count(i => i.Status == StatusReconciliacao.Divergente),
             itens.Count(i => i.Status == StatusReconciliacao.BracoMlIndeterminado),
+            itensComparados,
             media,
             maxima,
             ResumirPorCurva(itens));
@@ -425,12 +477,23 @@ public sealed class DecisionComparer
     }
 
     /// <summary>
-    /// Regras de população e de informação sobre a janela. Só se aplicam a item dentro do
-    /// horizonte declarado do braço ML: além dele, os dias distantes violariam a regra de
-    /// informação por construção, e reportá-los como vazamento apontaria o leitor para o
-    /// problema errado.
+    /// Regras de população sobre a janela — contagem de dias, loja/sku, duplicidade,
+    /// pertencimento à janela e previsão finita — valem para qualquer item, dentro ou fora
+    /// do horizonte: nenhuma delas depende de quantos dias o lead time sustenta, e um item
+    /// que nunca vai virar braço ML ainda assim não deveria esconder um NaN ou um dia
+    /// duplicado até o dia em que o horizonte subir e a falha aparecer de uma vez, longe da
+    /// causa.
+    ///
+    /// <para>
+    /// Só a regra de informação por item — o dia-alvo tem de ser alimentado por observação
+    /// anterior ao corte — é que se aplica exclusivamente dentro do horizonte declarado
+    /// (<paramref name="validarRegraDeInformacao"/>): além dele, o dia mais distante viola
+    /// essa regra por construção (é exatamente a lacuna de capacidade que
+    /// <c>ForaDoHorizonteMl</c> já reporta), e cobrá-la aqui também apontaria o leitor para
+    /// vazamento de informação onde o problema real é capacidade de previsão.
+    /// </para>
     /// </summary>
-    private void ValidarJanela(DecisionItem item)
+    private void ValidarJanela(DecisionItem item, bool validarRegraDeInformacao)
     {
         if (item.Dias.Count != item.DiasEstoque)
             throw new ArgumentException(
@@ -475,6 +538,8 @@ public sealed class DecisionComparer
                     $"item (sugestão {item.SugestaoId}, loja {item.LojaId}, sku {item.Sku}). " +
                     "Uma quantidade calculada a partir de NaN viraria derrota silenciosa do ML.",
                     ParamPopulacao);
+
+            if (!validarRegraDeInformacao) continue;
 
             var observacaoAte = f.Data.AddDays(-_opt.LeadTimeDias);
             if (observacaoAte >= corte)

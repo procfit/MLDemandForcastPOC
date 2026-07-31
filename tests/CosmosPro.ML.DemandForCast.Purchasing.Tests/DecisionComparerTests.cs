@@ -160,7 +160,6 @@ public sealed class DecisionComparerTests
 
         var detalhe = result.DetalheReconciliacao.Single();
         detalhe.Curva.Should().Be("B");
-        detalhe.TipoCalculo.Should().Be(2);
         detalhe.FatorEmbalagem.Should().Be(5m);
         detalhe.CompraRecalculada.Should().Be(10m);
         detalhe.DiferencaAssinada.Should().Be(5m);
@@ -651,7 +650,122 @@ public sealed class DecisionComparerTests
 
         result.ItensNaPopulacao.Should().Be(0);
         result.ItensComparados.Should().Be(0);
-        result.Reconciliacao.TaxaConcordancia.Should().Be(0.0);
+        // Populacao vazia nao tem taxa de concordancia nenhuma para reportar - nula, nao
+        // zero: zero seria "tentamos e todo mundo divergiu", que e uma alegacao diferente
+        // de "nao havia nada para reconciliar".
+        result.Reconciliacao.TaxaConcordancia.Should().BeNull();
+        result.Utilidade.Should().Be(UtilidadeComparacao.PopulacaoVazia);
         result.VitoriaPorDimensao.Should().BeEmpty();
+    }
+
+    // --- Utilidade do resultado: comparacao que nao comparou nada ------------
+
+    [Fact]
+    public void Populacao_toda_alem_do_horizonte_nao_e_utilizavel_e_nao_finge_100_por_cento()
+    {
+        // Cenario real: horizonte 7 contra sugestoes PBS de 30 dias. A aritmetica do ERP
+        // reconcilia por inteiro - o portao de validade fez o trabalho dele -, mas nenhum
+        // item chega a ter um braco ML para disputar. Isso nao pode se ler como sucesso.
+        var result = new DecisionComparer().Compare(
+        [
+            Item(2m, compraSugerida: 56m, vendaDia: 2m, mlDia: 2.0, sku: "SKU1", diasEstoque: 30, diasNaJanela: 30),
+            Item(2m, compraSugerida: 56m, vendaDia: 2m, mlDia: 2.0, sku: "SKU2", diasEstoque: 30, diasNaJanela: 30),
+        ]);
+
+        result.ItensComparados.Should().Be(0);
+        result.Reconciliacao.Reconciliados.Should().Be(2);
+        result.ForaDoHorizonteMl.Should().HaveCount(2);
+
+        result.Utilidade.Should().Be(UtilidadeComparacao.ForaDoHorizonteMl);
+        result.Reconciliacao.TaxaConcordancia.Should().BeNull();
+    }
+
+    [Fact]
+    public void Populacao_toda_descartada_por_ruptura_nao_e_utilizavel_e_nao_finge_100_por_cento()
+    {
+        // Mesma armadilha, outro portao: tudo reconcilia e esta dentro do horizonte, mas
+        // toda janela teve ruptura e a politica default descarta o item inteiro.
+        var result = new DecisionComparer().Compare(
+        [
+            Item(2m, compraSugerida: 10m, vendaDia: 2m, mlDia: 2.0, sku: "SKU1", diaEmRuptura: 0),
+            Item(2m, compraSugerida: 10m, vendaDia: 2m, mlDia: 2.0, sku: "SKU2", diaEmRuptura: 0),
+        ]);
+
+        result.ItensComparados.Should().Be(0);
+        result.Reconciliacao.Reconciliados.Should().Be(2);
+        result.ItensDescartadosPorRuptura.Should().Be(2);
+        result.ForaDoHorizonteMl.Should().BeEmpty();
+
+        result.Utilidade.Should().Be(UtilidadeComparacao.DescartadoPorRuptura);
+        result.Reconciliacao.TaxaConcordancia.Should().BeNull();
+    }
+
+    [Fact]
+    public void Populacao_que_nao_reconcilia_nada_e_identificavel_sem_ficar_null_indevidamente()
+    {
+        // Aqui a taxa 0,0 e o proprio alarme - nao deve virar nula so porque nada foi
+        // comparado, senao o portao perderia o unico numero que hoje ja denuncia falha.
+        var result = new DecisionComparer().Compare(
+            [Item(2m, compraSugerida: 99m, vendaDia: 2m, mlDia: 2.0)]);
+
+        result.Utilidade.Should().Be(UtilidadeComparacao.ReconciliacaoDivergente);
+        result.Reconciliacao.TaxaConcordancia.Should().Be(0.0);
+    }
+
+    [Fact]
+    public void Item_comparavel_e_sempre_utilizavel()
+    {
+        var result = new DecisionComparer().Compare(
+            [Item(2m, compraSugerida: 10m, vendaDia: 2m, mlDia: 2.0)]);
+
+        result.Utilidade.Should().Be(UtilidadeComparacao.Utilizavel);
+    }
+
+    // --- Minor B: fallback silencioso para a formula rejeitada ---------------
+
+    [Fact]
+    public void Estoque_de_seguranca_nulo_conta_o_fallback_para_a_formula_rejeitada()
+    {
+        // Sem eSeg declarado a formula degenera na Proporcional (a que foi rejeitada por
+        // amplificar a discordancia do ML) mesmo com SegurancaFixa selecionado - isso tem
+        // de aparecer contado, nao so silenciosamente acontecer.
+        var result = new DecisionComparer().Compare(
+            [Item(2m, compraSugerida: 16m, vendaDia: 2m, mlDia: 3.0,
+                  tipoCalculo: 1, estoqueMaximo: 20m, estoqueSeguranca: null)]);
+
+        result.ItensComFallbackEstoqueSeguranca.Should().Be(1);
+    }
+
+    [Fact]
+    public void Estoque_de_seguranca_positivo_nao_conta_fallback()
+    {
+        var result = new DecisionComparer().Compare(
+            [Item(2m, compraSugerida: 16m, vendaDia: 2m, mlDia: 3.0,
+                  tipoCalculo: 1, estoqueMaximo: 20m, estoqueSeguranca: 6m)]);
+
+        result.ItensComFallbackEstoqueSeguranca.Should().Be(0);
+    }
+
+    [Fact]
+    public void Modo_proporcional_selecionado_nao_conta_como_fallback()
+    {
+        // Sem SegurancaFixa pedido, nao ha formula rejeitada sendo restaurada as
+        // escondidas - o proprio modo escolhido ja e o proporcional.
+        var opt = new DecisionOptions { ReescalaTipo1 = ReescalaEstoqueMaximo.Proporcional };
+        var result = new DecisionComparer(opt).Compare(
+            [Item(2m, compraSugerida: 16m, vendaDia: 2m, mlDia: 3.0,
+                  tipoCalculo: 1, estoqueMaximo: 20m, estoqueSeguranca: null)]);
+
+        result.ItensComFallbackEstoqueSeguranca.Should().Be(0);
+    }
+
+    [Fact]
+    public void Dias_de_reposicao_nao_conta_fallback_de_estoque_de_seguranca()
+    {
+        // TipoCalculo 2 nao usa eSeg; o conceito de fallback nao se aplica a ele.
+        var result = new DecisionComparer().Compare(
+            [Item(2m, compraSugerida: 10m, vendaDia: 2m, mlDia: 3.0, tipoCalculo: 2)]);
+
+        result.ItensComFallbackEstoqueSeguranca.Should().Be(0);
     }
 }

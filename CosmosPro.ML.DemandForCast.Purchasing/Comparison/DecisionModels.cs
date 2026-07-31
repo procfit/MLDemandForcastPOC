@@ -277,11 +277,14 @@ public sealed record DecisionItem
 /// </param>
 /// <param name="DiferencaAssinada">
 /// <c>recalculado − gravado</c>. Positivo = a nossa fórmula compra mais que o ERP.
-/// O sinal é o que torna a falha diagnosticável: se o PBS arredondar para o múltiplo mais
-/// próximo em vez de para cima, todas as divergências ficam do mesmo lado (positivas) e
-/// valem no máximo um <paramref name="FatorEmbalagem"/>. Essa assinatura se lê como
-/// "erramos o modo de arredondamento", que é um conserto de uma linha, e não como
-/// "a fórmula está errada".
+/// O sinal é o que torna a falha diagnosticável: como <c>ceil(x) − round(x) ∈ {0, 1}</c>
+/// pacote, se o PBS arredondar para o múltiplo mais próximo em vez de para cima a
+/// divergência nunca cai entre zero e um <paramref name="FatorEmbalagem"/> — ela é
+/// <b>exatamente</b> zero ou <b>exatamente</b> um pacote, sempre do mesmo lado (positiva),
+/// nunca uma fração intermediária. "Zero ou um pacote inteiro, nada entre os dois" é uma
+/// impressão digital bem mais forte para diagnosticar modo de arredondamento errado do que
+/// "no máximo um pacote": aponta direto para um conserto de uma linha ("erramos o modo de
+/// arredondamento"), não para "a fórmula está errada".
 /// </param>
 /// <param name="FatorEmbalagem">
 /// O múltiplo de compra da linha, repetido aqui para que a comparação acima possa ser
@@ -292,7 +295,6 @@ public sealed record ItemReconciliado(
     int LojaId,
     string Sku,
     string Curva,
-    byte TipoCalculo,
     StatusReconciliacao Status,
     decimal CompraSugeridaErp,
     decimal CompraRecalculada,
@@ -300,7 +302,11 @@ public sealed record ItemReconciliado(
     decimal DiferencaAssinada,
     decimal? FatorEmbalagem);
 
-/// <summary>Recorte do portão de validade numa curva de giro. Mesmas contagens do resumo global.</summary>
+/// <summary>
+/// Recorte do portão de validade numa curva de giro. Mesmas contagens do resumo global —
+/// inclusive <c>DivergenciaAbsMedia</c> e <c>DivergenciaAbsMaxima</c>, computadas só sobre
+/// os itens divergentes do grupo (ver <see cref="ReconciliacaoResumo.DivergenciaAbsMaxima"/>).
+/// </summary>
 public sealed record ReconciliacaoPorCurva(
     string Curva,
     int Itens,
@@ -325,6 +331,21 @@ public sealed record ReconciliacaoPorCurva(
 /// "quando erra, erra quanto?", e distingue poucas falhas grandes de um centavo espalhado.
 /// Sem nenhum divergente, vale zero.
 /// </param>
+/// <param name="DivergenciaAbsMaxima">
+/// Máximo de <c>|recalculado − gravado|</c>, com o mesmo recorte de
+/// <paramref name="DivergenciaAbsMedia"/>: só os itens <b>divergentes</b>. Uma divergência
+/// dentro da tolerância não aparece aqui — quem quiser enxergar o quanto o portão tolerou
+/// mesmo entre reconciliados precisa olhar
+/// <see cref="DecisionComparisonResult.DetalheReconciliacao"/> item a item.
+/// </param>
+/// <param name="ItensComparados">
+/// Quantos itens desta população chegaram a ser efetivamente comparados (reconciliados,
+/// dentro do horizonte do ML e sem cair pela política de ruptura). Existe para que
+/// <see cref="TaxaConcordancia"/> saiba quando suprimir o número: reconciliar 100% da
+/// população e não comparar nenhum item é exatamente o cenário que motivou este campo —
+/// sem ele a taxa sairia 1,0 e um leitor apressado leria "sucesso" onde não houve
+/// comparação nenhuma.
+/// </param>
 /// <param name="PorCurva">
 /// O mesmo recorte por curva de giro. Uma taxa global alta com uma curva inteira
 /// divergindo é o sintoma de sobrevivência seletiva que a média global esconde
@@ -335,15 +356,24 @@ public sealed record ReconciliacaoResumo(
     int Reconciliados,
     int Divergentes,
     int BracoMlIndeterminado,
+    int ItensComparados,
     decimal DivergenciaAbsMedia,
     decimal DivergenciaAbsMaxima,
     IReadOnlyDictionary<string, ReconciliacaoPorCurva> PorCurva)
 {
     /// <summary>
-    /// Fração da população em que reproduzimos o ERP. Abaixo de um patamar alto, nenhum
-    /// número desta camada é apresentável.
+    /// Fração da população em que reproduzimos o ERP — mas só quando isso responde a algo.
+    /// Nula com população vazia (não há taxa a reportar) e nula também quando a população
+    /// reconciliou por inteiro e, mesmo assim, nenhum item chegou a ser comparado: é o caso
+    /// de horizonte 7 contra cobertura de 30 dias do PBS — a fórmula bate 100% das vezes,
+    /// mas mostrar 1,0 leria como "comparação bem-sucedida" o que na verdade não comparou
+    /// nada. Divergência parcial não é suprimida: uma taxa baixa já é, por si só, o alarme
+    /// deste portão — abaixo de um patamar alto, nenhum número desta camada é apresentável.
     /// </summary>
-    public double TaxaConcordancia => Itens == 0 ? 0 : (double)Reconciliados / Itens;
+    public double? TaxaConcordancia =>
+        Itens == 0 || (ItensComparados == 0 && Reconciliados == Itens)
+            ? null
+            : (double)Reconciliados / Itens;
 }
 
 /// <summary>
@@ -366,6 +396,55 @@ public sealed record ItemForaDoHorizonte(
         $"{DiasEstoque} dias exige previsão de {DiasEstoque} dias à frente; o pipeline atual " +
         "produz horizonte fixo menor. Enquanto a previsão multi-horizonte não existir, este " +
         "item não tem braço ML — não é vazamento de informação nem divergência de fórmula.";
+}
+
+/// <summary>
+/// Se o resultado produziu algo que uma UI pode chamar de "comparação" e, quando não, por
+/// quê — sem que o chamador precise inspecionar contagens para descobrir.
+///
+/// <para>
+/// Existe porque <c>ItensComparados == 0</c> sozinho não impede um resultado bem formado:
+/// os dois braços saem zerados, o <see cref="WinRate"/> sai (0,0,0,0) e, se a população
+/// inteira tiver reconciliado antes de cair por horizonte ou por ruptura,
+/// <c>Reconciliacao.TaxaConcordancia</c> fica nula justamente por causa deste campo — mas
+/// nada além dele avisa que a execução não comparou nada. É o caso real de horizonte 7
+/// contra uma sugestão de 30 dias do PBS: o portão de validade fez o trabalho dele, e ainda
+/// assim não há braço ML a disputar.
+/// </para>
+/// </summary>
+public enum UtilidadeComparacao
+{
+    /// <summary><c>ItensComparados &gt; 0</c>: há pelo menos um par ERP/ML pontuado.</summary>
+    Utilizavel,
+
+    /// <summary><c>ItensNaPopulacao == 0</c>: nada foi passado ao comparador.</summary>
+    PopulacaoVazia,
+
+    /// <summary>
+    /// Todo item reconciliado caiu em <c>ForaDoHorizonteMl</c>: a cobertura da compra
+    /// excede <see cref="DecisionOptions.HorizonteMaximoMl"/> para 100% do que reconciliou.
+    /// </summary>
+    ForaDoHorizonteMl,
+
+    /// <summary>
+    /// Todo item reconciliado e dentro do horizonte caiu pela política de ruptura
+    /// (<see cref="DecisionOptions.Ruptura"/>) — a janela inteira ficou sem venda válida.
+    /// </summary>
+    DescartadoPorRuptura,
+
+    /// <summary>
+    /// Nenhum item da população reconciliou: a aritmética modelada não reproduziu o
+    /// <c>CompraSugerida</c> gravado para nenhuma linha. O portão de validade fechou por
+    /// completo, antes mesmo de horizonte ou ruptura entrarem em jogo.
+    /// </summary>
+    ReconciliacaoDivergente,
+
+    /// <summary>
+    /// <c>ItensComparados == 0</c> por uma combinação de motivos, nenhum sozinho
+    /// respondendo por toda a população — por exemplo parte fora do horizonte e parte
+    /// descartada por ruptura.
+    /// </summary>
+    SemItensComparaveis
 }
 
 /// <summary>
@@ -457,11 +536,27 @@ public sealed record DecisaoComparada(
 /// que puxa os agregados monetários para baixo — sem esta contagem a queda ficaria
 /// invisível.
 /// </param>
+/// <param name="Utilidade">
+/// Se este resultado é utilizável como comparação e, quando não, por quê — ver
+/// <see cref="UtilidadeComparacao"/>. É o campo que uma UI deve checar primeiro; os demais
+/// só respondem "utilizável" ou "por quê" depois de contar população, horizonte e ruptura.
+/// </param>
+/// <param name="ItensComFallbackEstoqueSeguranca">
+/// Itens de <c>TipoCalculo</c> 1 comparados com <see cref="DecisionOptions.ReescalaTipo1"/>
+/// igual a <see cref="ReescalaEstoqueMaximo.SegurancaFixa"/> (a hipótese escolhida) cujo
+/// <c>EstoqueSeguranca</c> gravado é nulo ou não positivo: sem componente fixo declarado, a
+/// fórmula degenera na alternativa <see cref="ReescalaEstoqueMaximo.Proporcional"/> — a que
+/// um ajuste anterior rejeitou por amplificar a discordância do ML. Não é erro (eSeg pode
+/// faltar legitimamente, e lançar exceção seria pior), mas precisa ser contável: sem esta
+/// contagem, parte da população usaria silenciosamente a fórmula rejeitada.
+/// </param>
 public sealed record DecisionComparisonResult(
     int ItensNaPopulacao,
     int ItensComparados,
     int ItensDescartadosPorRuptura,
     int ItensSemPrecoCompra,
+    UtilidadeComparacao Utilidade,
+    int ItensComFallbackEstoqueSeguranca,
     ReconciliacaoResumo Reconciliacao,
     IReadOnlyList<ItemReconciliado> DetalheReconciliacao,
     IReadOnlyList<ItemForaDoHorizonte> ForaDoHorizonteMl,
