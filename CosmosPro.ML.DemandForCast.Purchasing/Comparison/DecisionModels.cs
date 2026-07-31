@@ -396,13 +396,25 @@ public sealed record ItemForaDoHorizonte(
     short DiasEstoque,
     int HorizonteMaximoMl)
 {
-    public string Motivo =>
-        $"A compra do item (sugestão {SugestaoId}, loja {LojaId}, sku {Sku}) cobre " +
-        $"{DiasEstoque} dias, mas o braço ML só prevê {HorizonteMaximoMl} dia(s) à frente do " +
-        "corte (DecisionOptions.HorizonteMaximoMl). Decidir uma compra de " +
-        $"{DiasEstoque} dias exige previsão de {DiasEstoque} dias à frente; o pipeline atual " +
-        "produz horizonte fixo menor. Enquanto a previsão multi-horizonte não existir, este " +
-        "item não tem braço ML — não é vazamento de informação nem divergência de fórmula.";
+    /// <summary>
+    /// Por que estes itens não têm braço ML. É o mesmo texto para a lista inteira — o que
+    /// varia de item para item já está nos campos do próprio registro —, e por isso vive em
+    /// <see cref="DecisionComparisonResult.MotivoForaDoHorizonteMl"/>, uma vez por resultado.
+    ///
+    /// <para>
+    /// Era uma propriedade calculada de instância, e o serializador gravava a frase inteira
+    /// em cada linha: com o estado documentado de hoje (100% da população reconciliada cai
+    /// por horizonte) e uma sugestão real do PBS de dezenas de milhares de itens, isso são
+    /// megabytes de uma mesma frase gravados em <c>engine.ComparacoesPbs</c>, trafegados no
+    /// GET e desserializados dentro do render do Blazor.
+    /// </para>
+    /// </summary>
+    public static string Motivo(int horizonteMaximoMl) =>
+        "A compra destes itens cobre mais dias do que o braço ML alcança: o pipeline atual só " +
+        $"prevê {horizonteMaximoMl} dia(s) à frente do corte (DecisionOptions.HorizonteMaximoMl), " +
+        "e decidir uma compra de N dias exige previsão de N dias à frente. A cobertura de cada " +
+        "item está em DiasEstoque. Enquanto a previsão multi-horizonte não existir, estes itens " +
+        "não têm braço ML — não é vazamento de informação nem divergência de fórmula.";
 }
 
 /// <summary>
@@ -571,4 +583,14 @@ public sealed record DecisionComparisonResult(
     ArmDecisionResult Ml,
     WinRate Vitoria,
     IReadOnlyDictionary<string, IReadOnlyDictionary<string, WinRate>> VitoriaPorDimensao,
-    IReadOnlyList<DecisaoComparada> Detalhe);
+    IReadOnlyList<DecisaoComparada> Detalhe)
+{
+    /// <summary>
+    /// A explicação de <see cref="ForaDoHorizonteMl"/>, uma vez para a lista inteira — ver
+    /// <see cref="ItemForaDoHorizonte.Motivo"/>. Nula quando nenhum item foi recusado por
+    /// horizonte: sem item recusado não há horizonte declarado a citar, e inventar um número
+    /// aqui afirmaria o que este resultado não sabe.
+    /// </summary>
+    public string? MotivoForaDoHorizonteMl =>
+        ForaDoHorizonteMl.Count == 0 ? null : ItemForaDoHorizonte.Motivo(ForaDoHorizonteMl[0].HorizonteMaximoMl);
+}

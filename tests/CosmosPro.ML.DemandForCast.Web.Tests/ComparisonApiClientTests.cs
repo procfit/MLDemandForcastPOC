@@ -191,6 +191,12 @@ public sealed class ComparisonApiClientTests
         explicacao.Should().Contain("não comparou nenhum item");
         explicacao.Should().Contain("horizonte de 7 dia(s)");
         explicacao.Should().Contain("ausência de comparação");
+
+        // O motivo chega uma vez para a lista inteira, não por item: com dezenas de milhares
+        // de linhas recusadas, a frase repetida em cada uma seriam megabytes de texto
+        // idêntico no ResultadoJson, no GET e dentro do render.
+        b.MotivoForaDoHorizonteMl.Should().Contain("7 dia(s)");
+        b.ForaDoHorizonteMl.Should().NotBeNullOrEmpty();
     }
 
     [Theory]
@@ -448,8 +454,9 @@ public sealed class ComparisonApiClientTests
         },
         "detalheReconciliacao": [],
         "foraDoHorizonteMl": [
-          { "sugestaoId": 1001, "lojaId": 10, "sku": "SKU-1", "diasEstoque": 30, "horizonteMaximoMl": 7, "motivo": "A compra do item cobre 30 dias, mas o braço ML só prevê 7 dia(s) à frente do corte." }
+          { "sugestaoId": 1001, "lojaId": 10, "sku": "SKU-1", "diasEstoque": 30, "horizonteMaximoMl": 7 }
         ],
+        "motivoForaDoHorizonteMl": "A compra destes itens cobre mais dias do que o braço ML alcança: o pipeline atual só prevê 7 dia(s) à frente do corte. A cobertura de cada item está em DiasEstoque.",
         "erp": {
           "nome": "erp",
           "unidadesCompradas": 0, "valorComprado": 0, "excessoUnidades": 0, "excessoValor": 0, "faltaUnidades": 0,

@@ -48,8 +48,8 @@ internal sealed class SimulacaoWorker(
         var claimed = await ClaimNextAsync(ct);
         if (claimed is null) return false;
 
-        logger.LogInformation("Simulando job {Id} (treino={Treino} · janela={Janela}d).",
-            claimed.Id, claimed.TreinoJobId, claimed.JanelaDias);
+        logger.LogInformation("Simulando job {Id} (rede={Rede} · treino={Treino} · janela={Janela}d).",
+            claimed.Id, claimed.RedeId, claimed.TreinoJobId, claimed.JanelaDias);
         try
         {
             var outcome = await processor.ProcessAsync(claimed, ct);
@@ -82,6 +82,11 @@ internal sealed class SimulacaoWorker(
         var connStr = config.GetConnectionString("engine")
             ?? throw new InvalidOperationException("Connection string 'engine' não encontrada.");
 
+        // O claim é a ÚNICA leitura da linha — tudo que o SimulacaoProcessor lê do job
+        // precisa estar no OUTPUT. Omitir uma coluna não quebra nada visivelmente: o
+        // processor recebe o default do tipo e roda contra rede/parâmetros errados. Foi o
+        // defeito do TreinoWorker (RedeId e TreinoAte faltando) e, depois, o mesmo aqui —
+        // com RedeId 0 o Stage não devolve observação nenhuma e toda simulação falhava.
         const string sql = """
             ;WITH cte AS (
                 SELECT TOP (1) *
@@ -92,7 +97,7 @@ internal sealed class SimulacaoWorker(
             UPDATE cte
                 SET Status = 'Processando',
                     DataInicioProcessamento = SYSDATETIMEOFFSET()
-                OUTPUT INSERTED.Id, INSERTED.TreinoJobId, INSERTED.JanelaDias,
+                OUTPUT INSERTED.Id, INSERTED.RedeId, INSERTED.TreinoJobId, INSERTED.JanelaDias,
                        INSERTED.LeadTimeDias, INSERTED.CicloDias, INSERTED.FatorServico;
             """;
 
@@ -105,11 +110,12 @@ internal sealed class SimulacaoWorker(
         return new SimulacaoCompra
         {
             Id = reader.GetGuid(0),
-            TreinoJobId = reader.GetGuid(1),
-            JanelaDias = reader.GetInt32(2),
-            LeadTimeDias = reader.GetInt32(3),
-            CicloDias = reader.GetInt32(4),
-            FatorServico = reader.GetDouble(5),
+            RedeId = reader.GetInt32(1),
+            TreinoJobId = reader.GetGuid(2),
+            JanelaDias = reader.GetInt32(3),
+            LeadTimeDias = reader.GetInt32(4),
+            CicloDias = reader.GetInt32(5),
+            FatorServico = reader.GetDouble(6),
             Status = SimulacaoStatus.Processando,
         };
     }

@@ -283,7 +283,8 @@ public sealed record CamadaBResultado(
     ArmDecisaoView? Ml,
     PlacarVitorias? Vitoria,
     IReadOnlyDictionary<string, IReadOnlyDictionary<string, PlacarVitorias>>? VitoriaPorDimensao,
-    IReadOnlyList<DecisaoComparadaView>? Detalhe)
+    IReadOnlyList<DecisaoComparadaView>? Detalhe,
+    string? MotivoForaDoHorizonteMl = null)
 {
     /// <summary>
     /// Único portão que a UI deve checar antes de exibir qualquer número desta camada.
@@ -422,13 +423,17 @@ public sealed record ItemReconciliadoView(
     decimal DiferencaAssinada,
     decimal? FatorEmbalagem);
 
+/// <summary>
+/// Item que o braço ML não alcança. Sem o motivo por item de propósito: ele é o mesmo para
+/// a lista inteira e chega uma vez só, em
+/// <see cref="CamadaBResultado.MotivoForaDoHorizonteMl"/>.
+/// </summary>
 public sealed record ItemForaDoHorizonteView(
     long SugestaoId,
     int LojaId,
     string? Sku,
     short DiasEstoque,
-    int HorizonteMaximoMl,
-    string? Motivo);
+    int HorizonteMaximoMl);
 
 public sealed record ArmDecisaoView(
     string? Nome,

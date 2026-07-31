@@ -499,6 +499,14 @@
                                                         <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
                                                             Itens que o braço ML não alcança (@fora.Count no total; a lista mostra os primeiros):
                                                         </RadzenText>
+                                                        @if (!string.IsNullOrWhiteSpace(b.MotivoForaDoHorizonteMl))
+                                                        {
+                                                            @* O motivo é o mesmo para a lista inteira e chega uma vez só no resultado:
+                                                               por item ele repetiria a mesma frase em dezenas de milhares de linhas. *@
+                                                            <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                                                @b.MotivoForaDoHorizonteMl
+                                                            </RadzenText>
+                                                        }
                                                         <RadzenDataGrid TItem="ItemForaDoHorizonteView" Data="@fora" AllowPaging="true" PageSize="8" Density="Density.Compact">
                                                             <Columns>
                                                                 <RadzenDataGridColumn TItem="ItemForaDoHorizonteView" Property="SugestaoId" Title="Sugestão" Width="120px" />
@@ -686,6 +694,10 @@
                                                         <RadzenDataGridColumn TItem="OverrideRow" Title="Para baixo" Width="130px" TextAlign="TextAlign.Right">
                                                             <Template Context="r">@Pct(r.Figuras?.FracaoAjustesParaBaixo)</Template>
                                                         </RadzenDataGridColumn>
+                                                        <RadzenDataGridColumn TItem="OverrideRow" Title="Base dos desvios" Width="170px" TextAlign="TextAlign.Right">
+                                                            <HeaderTemplate><span>Base dos desvios</span><HelpTip Text="@TipBaseDesvio" Size="0.85rem" /></HeaderTemplate>
+                                                            <Template Context="r">@BaseDoDesvio(r)</Template>
+                                                        </RadzenDataGridColumn>
                                                         <RadzenDataGridColumn TItem="OverrideRow" Title="Desvio |rel.| médio" Width="170px" TextAlign="TextAlign.Right">
                                                             <Template Context="r">@Pct(r.Figuras?.DesvioRelativoMedioAbsoluto)</Template>
                                                         </RadzenDataGridColumn>
@@ -708,6 +720,8 @@
                                                     Desvio absoluto e desvio assinado andam juntos: overrides que se cancelam (um +50%,
                                                     outro −50%) deixam o assinado perto de zero enquanto o absoluto continua alto. Só os
                                                     dois lado a lado distinguem "sem intervenção" de "intervenção que se cancela no agregado".
+                                                    Os dois saem apurados sobre a "base dos desvios", não sobre a base inteira: linha de
+                                                    adição (o ERP não sugeriu nada) não tem denominador e fica de fora.
                                                 </RadzenText>
 
                                                 @if (c.PorCurva is { Count: > 0 } curvasC)
@@ -779,6 +793,10 @@
     private const string TipPosicao =
         "Erro da posição resultante (estoque + pendentes + compra) contra a venda real da janela. Outra grandeza " +
         "que a camada A: aqui é unidades na janela, não unidades/dia.";
+    private const string TipBaseDesvio =
+        "Quanto da base entra nas duas médias de desvio relativo. Linha de adição (o ERP sugeriu zero) não tem " +
+        "denominador — dividir por zero não é definido — e por isso fica de fora delas, embora conte nas frações " +
+        "e na base total. Numa população pesada em adições, os desvios são apurados sobre bem menos que a base.";
     private const string TipRegressao =
         "Média global esconde regressão local (CLAUDE.md §6). Chaves marcadas são aquelas em que o ML PERDE para o " +
         "ERP, mesmo quando o resultado global favorece o ML — são exatamente as que um número único apagaria.";
@@ -1030,13 +1048,27 @@
         return linhas;
     }
 
-    public sealed record OverrideRow(string Escopo, OverrideFigurasView? Figuras);
+    public sealed record OverrideRow(string Escopo, OverrideFigurasView? Figuras, bool Ponderado);
 
     private static IReadOnlyList<OverrideRow> OverrideRows(CamadaCResultado c)
     {
-        var linhas = new List<OverrideRow> { new("por item (não ponderado)", c.NaoPonderado) };
-        if (c.Ponderado is { } p) linhas.Add(new("por valor em R$ (ponderado)", p));
+        var linhas = new List<OverrideRow> { new("por item (não ponderado)", c.NaoPonderado, false) };
+        if (c.Ponderado is { } p) linhas.Add(new("por valor em R$ (ponderado)", p, true));
         return linhas;
+    }
+
+    /// <summary>
+    /// Base efetiva das duas colunas de desvio relativo, ao lado da base total. Sem ela, uma
+    /// população pesada em linhas de adição exibiria os desvios apurados sobre um
+    /// denominador silenciosamente menor que o anunciado na linha.
+    /// </summary>
+    private static string BaseDoDesvio(OverrideRow r)
+    {
+        if (r.Figuras is not { } f) return "não apurada";
+        var formato = r.Ponderado ? "N2" : "N0";
+        return f.Base == 0m
+            ? "sem base"
+            : $"{f.ComDenominador.ToString(formato)} de {f.Base.ToString(formato)}";
     }
 
     // --- Drill-down ------------------------------------------------------------

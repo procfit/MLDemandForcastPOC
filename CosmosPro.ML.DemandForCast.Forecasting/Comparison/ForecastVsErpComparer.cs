@@ -33,8 +33,10 @@ namespace CosmosPro.ML.DemandForCast.Forecasting.Comparison;
 /// mesmas em todos os dias do par, senão a quebra por dimensão dependeria da ordem em
 /// que o chamador passou os dias.</item>
 /// </list>
-/// Além delas, a população precisa ser homogênea em rede e em <c>TipoCalculo</c>:
-/// os dois métodos do ERP são baselines distintos e duas redes são dois casos.
+/// Além delas, a população precisa ser homogênea em rede e em <c>TipoCalculo</c>, e o
+/// <c>TipoCalculo</c> precisa ser um dos dois modelados (1 ou 2): os dois métodos do ERP
+/// são baselines distintos, duas redes são dois casos, e um método desconhecido não tem
+/// baseline identificado a que atribuir o resultado.
 /// </para>
 ///
 /// <para>
@@ -235,6 +237,16 @@ public sealed class ForecastVsErpComparer(ComparisonOptions? options = null)
 
         foreach (var item in populacao)
         {
+            // Mesma recusa da camada B (DecisionComparer.ValidarHomogeneidade): uma população
+            // homogênea num TipoCalculo que não existe passaria por aqui e sairia rotulada
+            // como baseline do ERP sem que baseline nenhum tenha sido identificado.
+            if (item.TipoCalculo is not (1 or 2))
+                throw new ArgumentException(
+                    $"TipoCalculo {item.TipoCalculo} não é modelado (só 1 = Emax e Eseg e " +
+                    "2 = Dias de Reposição). Produzir número para um método desconhecido seria " +
+                    "atribuir o resultado a um baseline que não sabemos qual é.",
+                    ParamPopulacao);
+
             if (item.RedeId != rede)
                 throw new ArgumentException(
                     $"A população mistura as redes {rede} e {item.RedeId}. Com duas redes o estudo é " +

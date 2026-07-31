@@ -554,9 +554,25 @@ public sealed class DecisionComparerTests
         fora.Sku.Should().Be("SKU1");
         fora.DiasEstoque.Should().Be(dias);
         fora.HorizonteMaximoMl.Should().Be(7);
-        fora.Motivo.Should().Contain($"cobre {dias} dias");
-        fora.Motivo.Should().Contain("multi-horizonte");
-        fora.Motivo.Should().NotContain("Regra de informação");
+
+        // O motivo vem uma vez por resultado, nao por item: e a mesma frase para a lista
+        // inteira, e repeti-la em cada linha gravava megabytes de texto identico no
+        // ResultadoJson. O que varia de item para item continua nos campos acima.
+        result.MotivoForaDoHorizonteMl.Should().Contain("7 dia(s)");
+        result.MotivoForaDoHorizonteMl.Should().Contain("multi-horizonte");
+        result.MotivoForaDoHorizonteMl.Should().Contain("DiasEstoque");
+        result.MotivoForaDoHorizonteMl.Should().NotContain("Regra de informação");
+    }
+
+    [Fact]
+    public void Sem_item_fora_do_horizonte_o_motivo_nao_e_inventado()
+    {
+        var result = new DecisionComparer().Compare(
+            [Item(2m, compraSugerida: 10m, vendaDia: 2m, mlDia: 3.0)]);
+
+        result.ForaDoHorizonteMl.Should().BeEmpty();
+        result.MotivoForaDoHorizonteMl.Should().BeNull(
+            "sem item recusado nao ha horizonte declarado a citar, e um texto fixo aqui afirmaria o que este resultado nao sabe");
     }
 
     [Fact]

@@ -111,7 +111,7 @@ internal sealed class SimulacaoProcessor(
         var result = simulator.Run(options, observations, estoqueInicial, atributos, policies, forecaster);
 
         // Nome dos produtos (só dos SKUs simulados) para a lista de compra na UI.
-        var nomes = await LoadNomesAsync(connStr, skus, ct);
+        var nomes = await LoadNomesAsync(connStr, job.RedeId, skus, ct);
 
         var output = new SimulationOutput(DateTimeOffset.UtcNow, treino.Id, nomes, result);
         var json = JsonSerializer.Serialize(output);
@@ -131,8 +131,13 @@ internal sealed class SimulacaoProcessor(
         return LightGbmForecastModel.Load(ms);
     }
 
+    /// <summary>
+    /// Nome dos produtos simulados. O filtro por rede não é cosmético: <c>Produtos</c> tem
+    /// PK <c>(RedeId, Sku)</c> porque o mesmo código de SKU existe em redes diferentes, e
+    /// sem ele o dicionário ficaria com o nome que a última rede lida tiver gravado.
+    /// </summary>
     private static async Task<Dictionary<string, string>> LoadNomesAsync(
-        string connStr, IReadOnlyCollection<string> skus, CancellationToken ct)
+        string connStr, int redeId, IReadOnlyCollection<string> skus, CancellationToken ct)
     {
         var nomes = new Dictionary<string, string>(skus.Count, StringComparer.OrdinalIgnoreCase);
         if (skus.Count == 0) return nomes;
@@ -148,7 +153,9 @@ internal sealed class SimulacaoProcessor(
             names.Add(p);
             cmd.Parameters.AddWithValue(p, sku);
         }
-        cmd.CommandText = $"SELECT Sku, Nome FROM dbo.Produtos WHERE Sku IN ({string.Join(", ", names)})";
+        cmd.Parameters.AddWithValue("@redeId", redeId);
+        cmd.CommandText =
+            $"SELECT Sku, Nome FROM dbo.Produtos WHERE RedeId = @redeId AND Sku IN ({string.Join(", ", names)})";
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
             nomes[r.GetString(0)] = r.IsDBNull(1) ? "" : r.GetString(1);

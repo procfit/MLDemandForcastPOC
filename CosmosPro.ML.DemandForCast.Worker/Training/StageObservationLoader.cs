@@ -89,6 +89,31 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         return result;
     }
 
+    /// <summary>
+    /// Só o orçamento top-<paramref name="maxSkus"/> e a classe ABC de cada SKU dele, no
+    /// corte pedido. Mesma seleção e mesma regra de classificação de
+    /// <see cref="LoadAsync"/> — é a mesma consulta —, sem montar a série: quem precisa
+    /// apenas do rótulo ABC não deveria pagar a varredura de <c>Vendas</c> linha a linha,
+    /// a de <c>EstoquesDiarios</c> e a materialização de todas as observações.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, string>> LoadOrcamentoAbcAsync(
+        int redeId, int maxSkus, DateOnly? treinoAte, CancellationToken ct)
+    {
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+
+        var (selectedSkus, abcBySku) = await SelectTopSkusAndAbcAsync(conn, redeId, maxSkus, treinoAte, ct);
+
+        var result = new Dictionary<string, string>(selectedSkus.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var sku in selectedSkus)
+            result[sku] = abcBySku.GetValueOrDefault(sku, "C");
+
+        logger.LogInformation(
+            "Orçamento da rede {RedeId} no corte {Corte}: {N} SKU(s) com classe ABC.",
+            redeId, treinoAte?.ToString("yyyy-MM-dd") ?? "nenhum", result.Count);
+        return result;
+    }
+
     private sealed class Mutable
     {
         public decimal Quantidade;

@@ -258,6 +258,11 @@ internal sealed class ComparacaoProcessor(
         var previsao = new List<ComparisonItem>();
         var decisao = new List<DecisionItem>();
         var intervencao = new List<HumanOverrideItem>();
+        // Memo do orçamento/ABC por corte, vivo só nesta execução. O agrupamento abaixo já
+        // é por data, então hoje cada corte aparece uma vez; o memo existe para que iterar
+        // sugestão a sugestão (em vez de data a data) não volte a custar uma consulta por
+        // linha da sugestão.
+        var abcPorCorte = new Dictionary<DateOnly, IReadOnlyDictionary<string, string>>();
         int itensDaSugestao = 0, foraA = 0, foraAAlemDoHistorico = 0, foraB = 0, foraBAlemDoHistorico = 0, foraOrcamentoSkus = 0;
 
         // Teto do histórico importado: nenhuma camada pode pontuar dia além dele,
@@ -281,8 +286,14 @@ internal sealed class ComparacaoProcessor(
                 .Select(i => (i.Sku, i.LojaId))
                 .ToHashSet();
 
-            var (dias, skusNoOrcamento) = await PreverJanelaAsync(
-                connStr, job.RedeId, treino.MaxSkus, corte, chaves, observacoes, modelo, ct);
+            if (!abcPorCorte.TryGetValue(corte, out var abc))
+            {
+                abc = await new StageObservationLoader(connStr, logger)
+                    .LoadOrcamentoAbcAsync(job.RedeId, treino.MaxSkus, treinoAte: corte, ct);
+                abcPorCorte[corte] = abc;
+            }
+
+            var (dias, skusNoOrcamento) = PreverJanela(corte, abc, chaves, observacoes, modelo);
 
             foreach (var sugestao in grupo)
             {
@@ -303,7 +314,7 @@ internal sealed class ComparacaoProcessor(
                     });
 
                     // Motivo próprio, checado antes de A/B: um SKU fora do orçamento
-                    // top-MaxSkus recalculado com o corte (ver PreverJanelaAsync) não
+                    // top-MaxSkus recalculado com o corte (ver PreverJanela) não
                     // tem classe ABC nem feature nenhuma, então cairia nos dois
                     // balde de A/B ao mesmo tempo por um motivo que não é falta de
                     // dado nem de horizonte — sai contado à parte e não disputa
@@ -435,40 +446,31 @@ internal sealed class ComparacaoProcessor(
     /// dias que a população precisa.
     ///
     /// <para>
-    /// A classe ABC é recalculada com o mesmo corte porque ela é <b>feature</b> e sai de
+    /// A classe ABC vem recalculada com o mesmo corte porque ela é <b>feature</b> e sai de
     /// uma soma sobre a variável-alvo: mantê-la do histórico inteiro faria o modelo saber,
     /// no dia da sugestão, quanto o item ia vender depois dela. A regra de classificação
-    /// não é reescrita aqui — o <see cref="StageObservationLoader"/> é chamado de novo com
-    /// o corte, e só o rótulo resultante é transposto para a série completa.
+    /// não é reescrita aqui — é a do <see cref="StageObservationLoader"/>, chamado com o
+    /// corte pelo laço de população, e só o rótulo resultante é transposto para a série
+    /// completa.
     /// </para>
     ///
     /// <para>
     /// <b>Skew de treino/serviço, não vazamento:</b> este corte é o da SUGESTÃO, não o
     /// <c>TreinoJob.TreinoAte</c> que o modelo de fato usou. Quando o treino termina antes
     /// da sugestão — o caso normal, contrato 1 exige isso —, tanto a ClasseAbc quanto o
-    /// orçamento top-<c>maxSkus</c> abaixo vêm de uma janela mais longa do que a que o
-    /// modelo observou no ajuste. Documentado ao lado do skew de preço em
+    /// orçamento top-<c>maxSkus</c> vêm de uma janela mais longa do que a que o modelo
+    /// observou no ajuste. Documentado ao lado do skew de preço em
     /// <see cref="ComparacaoOutput.RessalvaPadraoTreinoServe"/>.
     /// </para>
     /// </summary>
-    private async Task<(Dictionary<(string Sku, int LojaId, DateOnly Data), DiaAvaliado> Dias, HashSet<string> SkusNoOrcamento)>
-        PreverJanelaAsync(
-        string connStr,
-        int redeId,
-        int maxSkus,
+    private (Dictionary<(string Sku, int LojaId, DateOnly Data), DiaAvaliado> Dias, HashSet<string> SkusNoOrcamento)
+        PreverJanela(
         DateOnly corte,
+        IReadOnlyDictionary<string, string> abc,
         HashSet<(string Sku, int LojaId)> chaves,
         IReadOnlyList<DailyObservation> observacoes,
-        LightGbmForecastModel modelo,
-        CancellationToken ct)
+        LightGbmForecastModel modelo)
     {
-        var anteriores = await new StageObservationLoader(connStr, logger)
-            .LoadAsync(redeId, maxSkus, treinoAte: corte, ct);
-
-        var abc = anteriores
-            .GroupBy(o => o.Sku, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First().ClasseAbc, StringComparer.OrdinalIgnoreCase);
-
         // As chaves de `abc` SÃO o orçamento top-maxSkus recalculado com o corte da
         // sugestão: quem não está aqui não ganhou ClasseAbc nem feature nenhuma, e
         // precisa sair contado à parte em ItensForaOrcamentoSkus — o motivo é
@@ -565,7 +567,7 @@ internal sealed class ComparacaoProcessor(
 /// </param>
 /// <param name="ItensForaOrcamentoSkus">
 /// Itens cujo SKU ficou fora do orçamento top-<c>MaxSkus</c> recalculado com o corte da
-/// sugestão (ver <see cref="ComparacaoProcessor.PreverJanelaAsync"/>). Distinto de falta
+/// sugestão (ver <see cref="ComparacaoProcessor.PreverJanela"/>). Distinto de falta
 /// de dado: o SKU pode ter série completa e mesmo assim não caber no orçamento —
 /// sobretudo com <c>MaxSkus</c> pequeno perto de um catálogo grande, ou quando o volume
 /// do SKU só cresce depois do corte de treino.
@@ -624,9 +626,9 @@ internal sealed record ComparacaoOutput(
     /// </para>
     ///
     /// <para>
-    /// <b>Segundo skew, mesma direção do efeito:</b> <see cref="ComparacaoProcessor.PreverJanelaAsync"/>
-    /// recalcula a ClasseAbc e o próprio orçamento top-<c>MaxSkus</c> com o corte da
-    /// SUGESTÃO, não com <c>TreinoJob.TreinoAte</c> — o corte que o modelo de fato usou no
+    /// <b>Segundo skew, mesma direção do efeito:</b> a ClasseAbc e o próprio orçamento
+    /// top-<c>MaxSkus</c> servidos por <see cref="ComparacaoProcessor.PreverJanela"/> são
+    /// recalculados com o corte da SUGESTÃO, não com <c>TreinoJob.TreinoAte</c> — o corte que o modelo de fato usou no
     /// ajuste. Quando o treino termina antes da sugestão (o caso normal; o contrato 1
     /// exige isso), o rótulo de ClasseAbc servido ao modelo e a própria composição do
     /// conjunto de SKUs vêm de uma janela mais longa do que a que ele observou treinando.

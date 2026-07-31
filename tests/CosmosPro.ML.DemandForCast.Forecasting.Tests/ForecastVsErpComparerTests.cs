@@ -250,6 +250,23 @@ public sealed class ForecastVsErpComparerTests
         act.Should().Throw<ArgumentException>().WithMessage("*TipoCalculo*");
     }
 
+    /// <summary>
+    /// População homogênea, mas num método que não é nenhum dos dois do ERP. Antes só a
+    /// validação da API barrava isso; a camada B já recusava, e as duas camadas precisam
+    /// aceitar exatamente a mesma população.
+    /// </summary>
+    [Theory]
+    [InlineData((byte)0)]
+    [InlineData((byte)3)]
+    public void Populacao_com_TipoCalculo_fora_de_1_e_2_falha_ruidosamente(byte tipo)
+    {
+        var pop = new[] { Item(2.0, UmDia(3m, 3.0), sku: "A") with { TipoCalculo = tipo } };
+
+        var act = () => new ForecastVsErpComparer().Compare(pop);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*não é modelado*");
+    }
+
     [Fact]
     public void Populacao_com_redes_misturadas_falha_ruidosamente()
     {
