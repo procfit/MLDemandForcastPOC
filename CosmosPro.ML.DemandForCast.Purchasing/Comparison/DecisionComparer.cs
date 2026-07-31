@@ -33,24 +33,43 @@ namespace CosmosPro.ML.DemandForCast.Purchasing.Comparison;
 /// <item><b>2 — "Dias de Reposição":</b> <c>necessidade = demanda/dia × DiasEstoque</c>.</item>
 /// <item><b>1 — "Emax e Eseg":</b> repõe até o <c>EstoqueMaximo</c> gravado. Como o eMax do
 /// ERP é função da demanda dele, mantê-lo fixo faria a demanda não entrar na conta e os
-/// dois braços comprariam sempre igual; então o braço ML usa o eMax reescalado pela razão
-/// entre as demandas, <c>necessidade = EstoqueMaximo × (demanda/dia ÷ DemandaDia)</c>, o
-/// que preserva os dias de cobertura implícitos no eMax. <c>EstoqueSeguranca</c> não entra
-/// à parte: em tipo 1 já está embutido no eMax, e em tipo 2 vem zerado.</item>
+/// dois braços comprariam sempre igual; então o braço ML reescala o eMax pela razão
+/// <c>r = demanda_ml ÷ DemandaDia</c>. <b>Como</b> reescalar é a hipótese de
+/// <see cref="DecisionOptions.ReescalaTipo1"/>: o default isola a parcela fixa
+/// (<c>eSeg + (eMax − eSeg) × r</c>) e a alternativa reescala o nível inteiro
+/// (<c>eMax × r</c>).</item>
 /// </list>
 /// E, nos dois casos:
-/// <c>compra = arredonda_para_cima(max(0, necessidade − EstoqueSaldo − PedidosPendentes),
-/// FatorEmbalagem)</c>.
+/// <c>compra = arredonda_para_cima(max(0, necessidade − posição de compra), FatorEmbalagem)</c>,
+/// onde a posição de compra é <c>EstoqueSaldo</c> mais os <c>PedidosPendentes</c> quando o
+/// cabeçalho da sugestão manda considerá-los.
+/// </para>
+///
+/// <para>
+/// <b>Posição de compra e posição pontuada são coisas diferentes.</b> A primeira obedece a
+/// flag <c>ConsideraPedidosPendentes</c>, porque é assim que o ERP decide. A segunda —
+/// <c>EstoqueSaldo + PedidosPendentes + compra</c>, medida contra a venda real — conta os
+/// pendentes sempre: mercadoria em trânsito chega e atende a janela independentemente de o
+/// ERP tê-la considerado ao decidir.
 /// </para>
 ///
 /// <para>
 /// <b>O que a reconciliação NÃO valida.</b> Ela é forte no tipo 2, onde a demanda entra na
 /// fórmula e reproduzir o resultado é evidência de que a fórmula está certa. No tipo 1 ela
-/// valida a posição de estoque, os pendentes e o arredondamento, mas <b>não</b> a
-/// linearidade usada para reescalar o eMax: com a demanda do ERP a razão vale 1 e o
-/// reescalonamento some da conta por construção. Se o eMax do ERP tiver componente fixo, o
-/// braço ML do tipo 1 estará enviesado sem que nada aqui acuse. Está registrado no relatório
-/// da tarefa como concern aberto.
+/// valida a posição de estoque, os pendentes e o arredondamento, mas <b>não</b> a hipótese
+/// de reescala do eMax: com a demanda do ERP a razão vale 1, as duas hipóteses colapsam no
+/// próprio eMax e o reescalonamento some da conta por construção. As duas continuam sendo
+/// <b>suposições sobre as entranhas do ERP</b>, nenhuma validada enquanto nenhuma sugestão
+/// real do PBS tiver sido reconciliada — e concordância baixa significa "não modelamos o
+/// ERP", não "o ML ganhou".
+/// </para>
+///
+/// <para>
+/// <b>Horizonte do braço ML.</b> Decidir uma compra que cobre N dias exige prever N dias à
+/// frente. <see cref="DecisionOptions.HorizonteMaximoMl"/> declara até onde o pipeline de
+/// previsão chega (7 hoje); item com <c>DiasEstoque</c> maior sai da comparação listado em
+/// <c>DecisionComparisonResult.ForaDoHorizonteMl</c>, item a item, com o motivo. É lacuna
+/// de capacidade do lado do ML, não violação de regra de informação.
 /// </para>
 ///
 /// <para>
@@ -79,6 +98,26 @@ public sealed class DecisionComparer
                 "subconjunto de dias compararia unidades compradas para N dias com a demanda " +
                 "de menos que N. Use ExcluirPar (padrão) ou Incluir como sensibilidade.",
                 nameof(options));
+
+        if (_opt.HorizonteMaximoMl < 1)
+            throw new ArgumentException(
+                $"HorizonteMaximoMl {_opt.HorizonteMaximoMl}: sem pelo menos um dia de horizonte " +
+                "o braço ML não existe e nada há a comparar.",
+                nameof(options));
+
+        // O horizonte é uma promessa sobre as features: prever o dia corte+H-1 sem enxergar
+        // o futuro exige que as features dele parem em corte-1, o que só acontece com lead
+        // time >= H. Declarar um horizonte que o lead time não sustenta faria a regra de
+        // informação rejeitar os dias distantes — a falha reapareceria como vazamento.
+        if (_opt.HorizonteMaximoMl > _opt.LeadTimeDias)
+            throw new ArgumentException(
+                $"HorizonteMaximoMl {_opt.HorizonteMaximoMl} excede LeadTimeDias " +
+                $"{_opt.LeadTimeDias}. Prever {_opt.HorizonteMaximoMl} dias à frente do corte " +
+                $"exige features construídas com lead time de pelo menos {_opt.HorizonteMaximoMl} " +
+                "dias; com o lead time atual o dia mais distante seria alimentado por observação " +
+                "posterior ao corte. Suba os dois juntos quando o pipeline produzir previsão " +
+                "multi-horizonte.",
+                nameof(options));
     }
 
     public DecisionComparisonResult Compare(IReadOnlyList<DecisionItem> populacao)
@@ -86,6 +125,7 @@ public sealed class DecisionComparer
         ValidarHomogeneidade(populacao);
 
         var reconciliacao = new List<ItemReconciliado>(populacao.Count);
+        var foraDoHorizonte = new List<ItemForaDoHorizonte>();
         var decisoes = new List<Decisao>(populacao.Count);
         var descartadosPorRuptura = 0;
         var semPreco = 0;
@@ -94,14 +134,30 @@ public sealed class DecisionComparer
         {
             ValidarItem(item);
 
+            // Uma compra que cobre DiasEstoque dias precisa de previsão até o último deles.
+            // Fora do horizonte declarado, a janela não é sequer validável — os dias
+            // distantes violariam a regra de informação por construção — então a checagem
+            // vem antes dela e o item sai por capacidade, não por vazamento.
+            var dentroDoHorizonte = item.DiasEstoque <= _opt.HorizonteMaximoMl;
+            if (dentroDoHorizonte) ValidarJanela(item);
+
             var recalculada = QuantidadeCompra(item, item.DemandaDiaErp);
-            var divergencia = Math.Abs(recalculada - item.CompraSugerida);
+            var diferenca = recalculada - item.CompraSugerida;
+            var divergencia = Math.Abs(diferenca);
             var status = Classificar(item, divergencia);
 
             reconciliacao.Add(new ItemReconciliado(
-                item.SugestaoId, item.LojaId, item.Sku, status, item.CompraSugerida, recalculada, divergencia));
+                item.SugestaoId, item.LojaId, item.Sku, item.Curva, item.TipoCalculo, status,
+                item.CompraSugerida, recalculada, divergencia, diferenca, item.FatorEmbalagem));
 
             if (status != StatusReconciliacao.Reconciliado) continue;
+
+            if (!dentroDoHorizonte)
+            {
+                foraDoHorizonte.Add(new ItemForaDoHorizonte(
+                    item.SugestaoId, item.LojaId, item.Sku, item.DiasEstoque, _opt.HorizonteMaximoMl));
+                continue;
+            }
 
             var dias = DiasPontuaveis(item);
             if (dias.Count == 0)
@@ -114,12 +170,13 @@ public sealed class DecisionComparer
 
             var vendaReal = dias.Sum(d => d.Features.Target);
             var demandaDiaMl = Math.Max(0m, (decimal)dias.Average(d => d.PrevisaoMl));
+            var pontuada = PosicaoParaPontuacao(item);
 
             // O braço ERP usa o CompraSugerida gravado, não a nossa reconstrução: a decisão
             // do método atual tem de ser a que o ERP de fato tomou. A reconciliação é o que
             // autoriza pôr ao lado dela uma quantidade produzida pela nossa fórmula.
-            var erp = Braco.Avaliar(item.CompraSugerida, PosicaoInicial(item), vendaReal, item.PrecoCompra);
-            var ml = Braco.Avaliar(QuantidadeCompra(item, demandaDiaMl), PosicaoInicial(item), vendaReal, item.PrecoCompra);
+            var erp = Braco.Avaliar(item.CompraSugerida, pontuada, vendaReal, item.PrecoCompra);
+            var ml = Braco.Avaliar(QuantidadeCompra(item, demandaDiaMl), pontuada, vendaReal, item.PrecoCompra);
 
             decisoes.Add(new Decisao(item, dias.Count, vendaReal, demandaDiaMl, erp, ml, Julgar(erp, ml)));
         }
@@ -131,6 +188,7 @@ public sealed class DecisionComparer
             semPreco,
             Resumir(reconciliacao),
             reconciliacao,
+            foraDoHorizonte,
             Agregar(NomeErp, decisoes, d => d.Erp),
             Agregar(NomeMl, decisoes, d => d.Ml),
             Placar(decisoes),
@@ -146,10 +204,19 @@ public sealed class DecisionComparer
 
     // --- Aritmética do ERP ---------------------------------------------------
 
-    private static decimal PosicaoInicial(DecisionItem item) =>
+    /// <summary>Posição que o ERP enxerga ao decidir: obedece a flag do cabeçalho.</summary>
+    private static decimal PosicaoParaCompra(DecisionItem item) =>
         item.EstoqueSaldo + (item.ConsideraPedidosPendentes ? item.PedidosPendentes : 0m);
 
-    private static decimal QuantidadeCompra(DecisionItem item, decimal demandaDia)
+    /// <summary>
+    /// Posição que a janela de fato recebe: o que está a caminho chega e atende a venda,
+    /// tenha o ERP considerado ou não ao calcular. Ignorá-lo aqui subestimaria a compra em
+    /// excesso dos dois braços.
+    /// </summary>
+    private static decimal PosicaoParaPontuacao(DecisionItem item) =>
+        item.EstoqueSaldo + item.PedidosPendentes;
+
+    private decimal QuantidadeCompra(DecisionItem item, decimal demandaDia)
     {
         var necessidade = item.TipoCalculo switch
         {
@@ -157,7 +224,7 @@ public sealed class DecisionComparer
             // reconstrói o braço ERP (é até lá que ele repõe, qualquer que seja a demanda);
             // o braço ML nunca chega aqui nesse caso — o item vira BracoMlIndeterminado.
             1 when item.DemandaDiaErp <= 0m => item.EstoqueMaximo ?? 0m,
-            1 => (item.EstoqueMaximo ?? 0m) * (demandaDia / item.DemandaDiaErp),
+            1 => NecessidadeEmaxEseg(item, demandaDia / item.DemandaDiaErp),
             2 => demandaDia * item.DiasEstoque,
             _ => throw new ArgumentException(
                 $"TipoCalculo {item.TipoCalculo} não é modelado (só 1 = Emax e Eseg e " +
@@ -166,7 +233,21 @@ public sealed class DecisionComparer
                 ParamPopulacao),
         };
 
-        return ArredondarEmbalagem(Math.Max(0m, necessidade - PosicaoInicial(item)), item.FatorEmbalagem);
+        return ArredondarEmbalagem(Math.Max(0m, necessidade - PosicaoParaCompra(item)), item.FatorEmbalagem);
+    }
+
+    private decimal NecessidadeEmaxEseg(DecisionItem item, decimal razao)
+    {
+        var eMax = item.EstoqueMaximo ?? 0m;
+
+        if (_opt.ReescalaTipo1 == ReescalaEstoqueMaximo.Proporcional) return eMax * razao;
+
+        // eSeg maior que o eMax deixaria a parcela reescalada negativa — a demanda do ML
+        // passaria a reduzir a necessidade. O dado do ERP é inconsistente nesse caso e o
+        // nível inteiro é tratado como fixo.
+        var eSeg = Math.Clamp(item.EstoqueSeguranca ?? 0m, 0m, Math.Max(0m, eMax));
+
+        return eSeg + (eMax - eSeg) * razao;
     }
 
     private static decimal ArredondarEmbalagem(decimal quantidade, decimal? fatorEmbalagem) =>
@@ -188,15 +269,46 @@ public sealed class DecisionComparer
 
     private static ReconciliacaoResumo Resumir(List<ItemReconciliado> itens)
     {
-        var tentados = itens.Where(i => i.Status != StatusReconciliacao.BracoMlIndeterminado).ToList();
+        var (media, maxima) = Divergencias(itens);
 
         return new ReconciliacaoResumo(
             itens.Count,
             itens.Count(i => i.Status == StatusReconciliacao.Reconciliado),
             itens.Count(i => i.Status == StatusReconciliacao.Divergente),
             itens.Count(i => i.Status == StatusReconciliacao.BracoMlIndeterminado),
-            tentados.Count == 0 ? 0m : tentados.Average(i => i.Divergencia),
-            tentados.Count == 0 ? 0m : tentados.Max(i => i.Divergencia));
+            media,
+            maxima,
+            ResumirPorCurva(itens));
+    }
+
+    private static IReadOnlyDictionary<string, ReconciliacaoPorCurva> ResumirPorCurva(
+        List<ItemReconciliado> itens) =>
+        itens.Where(i => !string.IsNullOrEmpty(i.Curva))
+             .GroupBy(i => i.Curva)
+             .ToDictionary(g => g.Key, g =>
+             {
+                 var grupo = g.ToList();
+                 var (media, maxima) = Divergencias(grupo);
+
+                 return new ReconciliacaoPorCurva(
+                     g.Key,
+                     grupo.Count,
+                     grupo.Count(i => i.Status == StatusReconciliacao.Reconciliado),
+                     grupo.Count(i => i.Status == StatusReconciliacao.Divergente),
+                     grupo.Count(i => i.Status == StatusReconciliacao.BracoMlIndeterminado),
+                     media,
+                     maxima);
+             });
+
+    // Média e máximo sobre os DIVERGENTES: incluir quem bateu empurraria a média para zero
+    // justamente quando a concordância é alta, escondendo o tamanho das poucas falhas.
+    private static (decimal Media, decimal Maxima) Divergencias(List<ItemReconciliado> itens)
+    {
+        var divergentes = itens.Where(i => i.Status == StatusReconciliacao.Divergente).ToList();
+
+        return divergentes.Count == 0
+            ? (0m, 0m)
+            : (divergentes.Average(i => i.Divergencia), divergentes.Max(i => i.Divergencia));
     }
 
     // --- Pontuação -----------------------------------------------------------
@@ -294,16 +406,7 @@ public sealed class DecisionComparer
                 $"{item.LojaId}, sku {item.Sku}). Sem dias de cobertura não há janela a pontuar.",
                 ParamPopulacao);
 
-        if (item.Dias.Count != item.DiasEstoque)
-            throw new ArgumentException(
-                $"O item (sugestão {item.SugestaoId}, loja {item.LojaId}, sku {item.Sku}) tem " +
-                $"DiasEstoque {item.DiasEstoque} e {item.Dias.Count} dia(s) na janela. Pontuar uma " +
-                "compra dimensionada para a cobertura inteira contra a venda de um recorte menor " +
-                "produziria excesso nos dois braços só por causa do recorte.",
-                ParamPopulacao);
-
         var corte = DateOnly.FromDateTime(item.DataHora);
-        var fimJanela = corte.AddDays(item.DiasEstoque);
 
         if (item.ModeloTreinadoAte >= corte)
             throw new ArgumentException(
@@ -319,7 +422,26 @@ public sealed class DecisionComparer
                 $"{item.PrecoCongeladoAPartirDe:yyyy-MM-dd}, mas a DataHora da sugestão é " +
                 $"{corte:yyyy-MM-dd}.",
                 ParamPopulacao);
+    }
 
+    /// <summary>
+    /// Regras de população e de informação sobre a janela. Só se aplicam a item dentro do
+    /// horizonte declarado do braço ML: além dele, os dias distantes violariam a regra de
+    /// informação por construção, e reportá-los como vazamento apontaria o leitor para o
+    /// problema errado.
+    /// </summary>
+    private void ValidarJanela(DecisionItem item)
+    {
+        if (item.Dias.Count != item.DiasEstoque)
+            throw new ArgumentException(
+                $"O item (sugestão {item.SugestaoId}, loja {item.LojaId}, sku {item.Sku}) tem " +
+                $"DiasEstoque {item.DiasEstoque} e {item.Dias.Count} dia(s) na janela. Pontuar uma " +
+                "compra dimensionada para a cobertura inteira contra a venda de um recorte menor " +
+                "produziria excesso nos dois braços só por causa do recorte.",
+                ParamPopulacao);
+
+        var corte = DateOnly.FromDateTime(item.DataHora);
+        var fimJanela = corte.AddDays(item.DiasEstoque);
         var datas = new HashSet<DateOnly>();
 
         foreach (var dia in item.Dias)
@@ -403,8 +525,10 @@ public sealed class DecisionComparer
     }
 
     /// <param name="Disponivel">
-    /// Posição resultante: estoque + pendentes + compra. É o que o braço teria para atender
-    /// a janela, e o ponto de comparação com a venda real.
+    /// Posição resultante: <c>EstoqueSaldo + PedidosPendentes + compra</c>, com os pendentes
+    /// contados sempre — mesmo quando <c>ConsideraPedidosPendentes</c> os manteve fora do
+    /// cálculo da compra. É o que o braço teria fisicamente para atender a janela, e o ponto
+    /// de comparação com a venda real.
     /// </param>
     /// <param name="Desvio">
     /// |posição resultante − venda real|. Arbitra o vencedor do item sem precisar arbitrar

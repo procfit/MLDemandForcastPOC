@@ -34,6 +34,41 @@ public enum StatusReconciliacao
     BracoMlIndeterminado
 }
 
+/// <summary>
+/// Como o braço ML obtém o nível de reposição em <c>TipoCalculo</c> 1, dado o
+/// <c>EstoqueMaximo</c> que o ERP gravou e a razão <c>r = demanda_ml ÷ DemandaDia</c>.
+///
+/// <para>
+/// <b>As duas alternativas são suposições sobre as entranhas do ERP, nenhuma validada.</b>
+/// A reconciliação não consegue arbitrar entre elas: no braço ERP <c>r = 1</c> por
+/// construção e as duas colapsam no próprio <c>EstoqueMaximo</c>. Enquanto nenhuma
+/// sugestão real do PBS tiver sido reconciliada, uma taxa de concordância baixa significa
+/// "não modelamos o ERP", não "o ML ganhou". O modo existe para que a sensibilidade do
+/// resultado a esta escolha possa ser reportada em vez de ficar embutida.
+/// </para>
+/// </summary>
+public enum ReescalaEstoqueMaximo
+{
+    /// <summary>
+    /// <c>necessidade = eSeg + (eMax − eSeg) × r</c>. Supõe que o eMax do ERP tem um
+    /// componente fixo (o estoque de segurança gravado) e um componente proporcional à
+    /// demanda, e reescala só o segundo. Default: se a relação verdadeira for
+    /// <c>eMax = a + b·d</c> com piso <c>a &gt; 0</c>, reescalar o nível inteiro erraria por
+    /// <c>a(r − 1)</c>, amplificando toda discordância do ML — comprando demais quando ele
+    /// prevê alto e de menos quando prevê baixo. Com <c>EstoqueSeguranca</c> nulo ou zero
+    /// (o caso do <c>TipoCalculo</c> 2 e de linhas sem eSeg) o resultado é idêntico ao de
+    /// <see cref="Proporcional"/>.
+    /// </summary>
+    SegurancaFixa,
+
+    /// <summary>
+    /// <c>necessidade = eMax × r</c>. Supõe o eMax estritamente linear na demanda, com
+    /// intercepto zero. Mantido como alternativa explícita para medir a sensibilidade do
+    /// resultado à hipótese do componente fixo.
+    /// </summary>
+    Proporcional
+}
+
 public sealed record DecisionOptions
 {
     /// <summary>
@@ -41,8 +76,52 @@ public sealed record DecisionOptions
     /// recalculado abaixo da qual o item é dado por reconciliado. O default 0,001 é uma
     /// unidade da última casa de <c>DECIMAL(15,3)</c> da coluna de origem: cobre
     /// arredondamento de transporte, não cobre divergência de regra.
+    ///
+    /// <para>
+    /// <b>A tolerância não escala com o arredondamento de embalagem.</b> <c>DemandaDia</c>
+    /// é <c>DECIMAL(12,4)</c> na origem e as quantidades são <c>DECIMAL(15,3)</c>: com
+    /// <c>FatorEmbalagem &gt; 1</c>, uma diferença menor que a última casa que caia
+    /// exatamente sobre a fronteira de um pacote vira um pacote inteiro ao passar pelo
+    /// <c>Math.Ceiling</c>, e a divergência registrada é de um <c>FatorEmbalagem</c>, não
+    /// de 0,001. Isso é comportamento esperado da própria regra de múltiplo de compra e
+    /// não indica erro de fórmula — aumentar a tolerância para "corrigi-lo" mascararia
+    /// divergência de regra de verdade.
+    /// </para>
     /// </summary>
     public decimal ToleranciaReconciliacao { get; init; } = 0.001m;
+
+    /// <summary>
+    /// <b>Contrato de capacidade do braço ML:</b> quantos dias à frente do corte
+    /// (<c>SugestoesCompra.DataHora</c>) o pipeline que produziu as previsões consegue
+    /// prever. Um item cujo <c>DiasEstoque</c> excede este horizonte não tem braço ML —
+    /// ele sai da comparação listado em
+    /// <c>DecisionComparisonResult.ForaDoHorizonteMl</c>, com o motivo, em vez de virar
+    /// violação de vazamento de informação.
+    ///
+    /// <para>
+    /// O default 7 é a capacidade real do pipeline de F5/F6 hoje: as features de histórico
+    /// são construídas com lead time de 7 dias, então o dia mais distante cujas
+    /// observações são todas anteriores ao corte é <c>corte + 6</c>. Coberturas de 15 e 30
+    /// dias, correntes no PBS, ficam fora — a lacuna é de capacidade de previsão
+    /// multi-horizonte, não desta camada.
+    /// </para>
+    ///
+    /// <para>
+    /// Declarar um horizonte maior exige features geradas com
+    /// <see cref="LeadTimeDias"/> pelo menos igual a ele, senão a regra de informação
+    /// rejeitaria — corretamente — os dias mais distantes. Por isso o construtor de
+    /// <c>DecisionComparer</c> recusa <c>HorizonteMaximoMl &gt; LeadTimeDias</c>: é o
+    /// ponto único que uma tarefa futura precisa satisfazer.
+    /// </para>
+    /// </summary>
+    public int HorizonteMaximoMl { get; init; } = 7;
+
+    /// <summary>
+    /// Qual das duas hipóteses sobre o <c>EstoqueMaximo</c> do ERP o braço ML usa em
+    /// <c>TipoCalculo</c> 1. Ver <see cref="ReescalaEstoqueMaximo"/> — nenhuma das duas
+    /// está validada contra o PBS.
+    /// </summary>
+    public ReescalaEstoqueMaximo ReescalaTipo1 { get; init; } = ReescalaEstoqueMaximo.SegurancaFixa;
 
     /// <summary>
     /// Só <see cref="RupturaTratamento.ExcluirPar"/> (default, e o mesmo default da
@@ -120,8 +199,17 @@ public sealed record DecisionItem
 
     /// <summary>
     /// <c>SugestoesCompra.ConsideraPedidosPendentes</c> — flag do cabeçalho da sugestão.
-    /// Quando falso o ERP ignora o que já está a caminho, e o braço ML tem de ignorar
-    /// também.
+    /// Quando falso o ERP ignora o que já está a caminho ao <b>calcular a compra</b>, e o
+    /// braço ML tem de ignorar também.
+    ///
+    /// <para>
+    /// <b>A flag governa só a aritmética da compra.</b> A pontuação do desfecho contra a
+    /// venda real sempre conta os pendentes: mercadoria em trânsito chega e atende a
+    /// janela, quer o ERP a tenha considerado ao decidir, quer não. Ignorá-la também na
+    /// pontuação não favoreceria um braço sobre o outro, mas subestimaria a compra em
+    /// excesso dos dois — com saldo 0, 100 pendentes e venda 100, os dois braços comprariam
+    /// ~100 e o excesso apareceria como ~0 em vez de 100.
+    /// </para>
     /// </summary>
     public bool ConsideraPedidosPendentes { get; init; } = true;
 
@@ -135,9 +223,12 @@ public sealed record DecisionItem
     public decimal? EstoqueMaximo { get; init; }
 
     /// <summary>
-    /// <c>EstoqueSeguranca</c> calculado pelo ERP. Não entra na aritmética modelada:
-    /// em <c>TipoCalculo</c> 1 ele já está embutido no <see cref="EstoqueMaximo"/>, e em
-    /// <c>TipoCalculo</c> 2 vem zerado. Carregado para inspeção.
+    /// <c>EstoqueSeguranca</c> calculado pelo ERP. Em <c>TipoCalculo</c> 1 é a parcela do
+    /// <see cref="EstoqueMaximo"/> que o modo
+    /// <see cref="ReescalaEstoqueMaximo.SegurancaFixa"/> trata como componente fixo, e que
+    /// portanto <b>não</b> é reescalada pela demanda do ML. Nulo ou zero (o caso do
+    /// <c>TipoCalculo</c> 2) faz o braço ML recair na reescala proporcional do nível
+    /// inteiro, sem mudar o comportamento do tipo 2.
     /// </summary>
     public decimal? EstoqueSeguranca { get; init; }
 
@@ -172,27 +263,46 @@ public sealed record DecisionItem
     public required IReadOnlyList<DiaAvaliado> Dias { get; init; }
 }
 
-/// <summary>Reconciliação de um item: o que o ERP gravou contra o que a nossa fórmula produz.</summary>
+/// <summary>
+/// Reconciliação de um item: o que o ERP gravou contra o que a nossa fórmula produz.
+/// Carrega os atributos que permitem <b>caracterizar</b> quem reconcilia e quem não —
+/// contar não basta.
+/// </summary>
+/// <param name="Curva">
+/// Curva de giro do ERP. Item que reconcilia é item em que nenhuma regra extra do ERP
+/// entrou (<c>Efetividade</c>, piso de <c>EstoqueMinimo</c>, lote mínimo), e essas regras
+/// não se distribuem uniformemente pelo catálogo. Sem este eixo, uma comparação rodando
+/// só sobre a metade fácil do catálogo seria indistinguível de uma rodando sobre ele
+/// inteiro.
+/// </param>
+/// <param name="DiferencaAssinada">
+/// <c>recalculado − gravado</c>. Positivo = a nossa fórmula compra mais que o ERP.
+/// O sinal é o que torna a falha diagnosticável: se o PBS arredondar para o múltiplo mais
+/// próximo em vez de para cima, todas as divergências ficam do mesmo lado (positivas) e
+/// valem no máximo um <paramref name="FatorEmbalagem"/>. Essa assinatura se lê como
+/// "erramos o modo de arredondamento", que é um conserto de uma linha, e não como
+/// "a fórmula está errada".
+/// </param>
+/// <param name="FatorEmbalagem">
+/// O múltiplo de compra da linha, repetido aqui para que a comparação acima possa ser
+/// feita sem voltar à população.
+/// </param>
 public sealed record ItemReconciliado(
     long SugestaoId,
     int LojaId,
     string Sku,
+    string Curva,
+    byte TipoCalculo,
     StatusReconciliacao Status,
     decimal CompraSugeridaErp,
     decimal CompraRecalculada,
-    decimal Divergencia);
+    decimal Divergencia,
+    decimal DiferencaAssinada,
+    decimal? FatorEmbalagem);
 
-/// <summary>
-/// Agregado do portão de validade, sobre <b>toda</b> a população — inclusive itens que
-/// depois caem por ruptura, porque a pergunta "modelamos certo a aritmética do ERP?" não
-/// depende da janela de venda.
-/// </summary>
-/// <param name="DivergenciaAbsMedia">
-/// Média de <c>|recalculado − gravado|</c> sobre os itens em que a reconciliação foi
-/// tentada. Uma taxa de concordância alta com divergência média alta nos poucos que
-/// falham é um sintoma diferente de uma divergência de um centavo espalhada por todos.
-/// </param>
-public sealed record ReconciliacaoResumo(
+/// <summary>Recorte do portão de validade numa curva de giro. Mesmas contagens do resumo global.</summary>
+public sealed record ReconciliacaoPorCurva(
+    string Curva,
     int Itens,
     int Reconciliados,
     int Divergentes,
@@ -200,11 +310,62 @@ public sealed record ReconciliacaoResumo(
     decimal DivergenciaAbsMedia,
     decimal DivergenciaAbsMaxima)
 {
+    public double TaxaConcordancia => Itens == 0 ? 0 : (double)Reconciliados / Itens;
+}
+
+/// <summary>
+/// Agregado do portão de validade, sobre <b>toda</b> a população — inclusive itens que
+/// depois caem por ruptura ou por horizonte, porque a pergunta "modelamos certo a
+/// aritmética do ERP?" não depende da janela de venda.
+/// </summary>
+/// <param name="DivergenciaAbsMedia">
+/// Média de <c>|recalculado − gravado|</c> sobre os itens <b>divergentes</b>, não sobre
+/// todos os tentados: com concordância alta, uma média sobre todos seria empurrada para
+/// zero pelos itens que bateram e esconderia o tamanho das falhas. Assim ela responde
+/// "quando erra, erra quanto?", e distingue poucas falhas grandes de um centavo espalhado.
+/// Sem nenhum divergente, vale zero.
+/// </param>
+/// <param name="PorCurva">
+/// O mesmo recorte por curva de giro. Uma taxa global alta com uma curva inteira
+/// divergindo é o sintoma de sobrevivência seletiva que a média global esconde
+/// (CLAUDE.md §6). Itens sem curva preenchida não aparecem aqui.
+/// </param>
+public sealed record ReconciliacaoResumo(
+    int Itens,
+    int Reconciliados,
+    int Divergentes,
+    int BracoMlIndeterminado,
+    decimal DivergenciaAbsMedia,
+    decimal DivergenciaAbsMaxima,
+    IReadOnlyDictionary<string, ReconciliacaoPorCurva> PorCurva)
+{
     /// <summary>
     /// Fração da população em que reproduzimos o ERP. Abaixo de um patamar alto, nenhum
     /// número desta camada é apresentável.
     /// </summary>
     public double TaxaConcordancia => Itens == 0 ? 0 : (double)Reconciliados / Itens;
+}
+
+/// <summary>
+/// Item que o braço ML não consegue disputar porque a compra cobre mais dias do que o
+/// pipeline de previsão alcança. Não é violação de regra de informação nem falha de
+/// reconciliação — é lacuna de capacidade do lado do ML, e por isso o item sai da
+/// comparação identificado e sem derrubar a execução.
+/// </summary>
+public sealed record ItemForaDoHorizonte(
+    long SugestaoId,
+    int LojaId,
+    string Sku,
+    short DiasEstoque,
+    int HorizonteMaximoMl)
+{
+    public string Motivo =>
+        $"A compra do item (sugestão {SugestaoId}, loja {LojaId}, sku {Sku}) cobre " +
+        $"{DiasEstoque} dias, mas o braço ML só prevê {HorizonteMaximoMl} dia(s) à frente do " +
+        "corte (DecisionOptions.HorizonteMaximoMl). Decidir uma compra de " +
+        $"{DiasEstoque} dias exige previsão de {DiasEstoque} dias à frente; o pipeline atual " +
+        "produz horizonte fixo menor. Enquanto a previsão multi-horizonte não existir, este " +
+        "item não tem braço ML — não é vazamento de informação nem divergência de fórmula.";
 }
 
 /// <summary>
@@ -235,6 +396,9 @@ public sealed record VendaPerdidaIlustrativa(decimal Unidades, decimal Valor);
 /// </summary>
 /// <param name="ExcessoUnidades">
 /// Σ max(0, posição resultante − venda real da janela): o que sobraria no fim da janela.
+/// A posição resultante é <c>EstoqueSaldo + PedidosPendentes + compra</c>, com os
+/// pendentes contados <b>sempre</b> — inclusive quando
+/// <c>ConsideraPedidosPendentes</c> é falso e eles não entraram no cálculo da compra.
 /// </param>
 /// <param name="FaltaUnidades">
 /// Σ max(0, venda real da janela − posição resultante): o que faltaria para atender a
@@ -279,8 +443,14 @@ public sealed record DecisaoComparada(
 /// dois braços.
 /// </param>
 /// <param name="ItensDescartadosPorRuptura">
-/// Itens reconciliados cuja janela caiu pela política de ruptura. Reportar junto com
-/// <paramref name="ItensComparados"/>.
+/// Itens reconciliados e dentro do horizonte cuja janela caiu pela política de ruptura.
+/// Reportar junto com <paramref name="ItensComparados"/>.
+/// </param>
+/// <param name="ForaDoHorizonteMl">
+/// Itens reconciliados que o braço ML não alcança porque a compra cobre mais dias do que
+/// o horizonte declarado em <c>DecisionOptions.HorizonteMaximoMl</c>. Os portões são
+/// aplicados em ordem — reconciliação, horizonte, ruptura — e cada item aparece só no
+/// primeiro que o barrou.
 /// </param>
 /// <param name="ItensSemPrecoCompra">
 /// Itens comparados sem <c>PrecoCompra</c>. Eles contribuem em unidades e zero em R$, o
@@ -294,6 +464,7 @@ public sealed record DecisionComparisonResult(
     int ItensSemPrecoCompra,
     ReconciliacaoResumo Reconciliacao,
     IReadOnlyList<ItemReconciliado> DetalheReconciliacao,
+    IReadOnlyList<ItemForaDoHorizonte> ForaDoHorizonteMl,
     ArmDecisionResult Erp,
     ArmDecisionResult Ml,
     WinRate Vitoria,
