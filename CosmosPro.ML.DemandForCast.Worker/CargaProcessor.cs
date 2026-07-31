@@ -159,14 +159,26 @@ internal sealed class CargaProcessor(
         }
 
         var manifesto = leitura.Manifesto!;
-        await db.ComparacaoSessoes
-            .Where(s => s.Id == sessao.Id)
+
+        // Mesmo WHERE otimista do ramo de inviabilidade: quando o SessaoWorker existir, ele
+        // pode tirar a sessão de ProcessandoDados enquanto esta gravação está em voo, e sem o
+        // guard uma leitura velha sobrescreveria a sugestão de uma sessão que já avançou.
+        var vinculadas = await db.ComparacaoSessoes
+            .Where(s => s.Id == sessao.Id && s.Status == sessao.Status)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.SugestaoId, manifesto.SugestaoId)
                 .SetProperty(x => x.SugestaoDescricao, manifesto.SugestaoDescricao)
                 .SetProperty(x => x.SugestaoDataHora, manifesto.SugestaoDataHora)
                 .SetProperty(x => x.SugestaoTipoCalculo, manifesto.SugestaoTipoCalculo)
                 .SetProperty(x => x.AtualizadoEm, agora), ct);
+
+        if (vinculadas == 0)
+        {
+            logger.LogWarning(
+                "Sessão {SessaoId} mudou de estado durante o import; vínculo com a sugestão {SugestaoId} não gravado.",
+                sessao.Id, manifesto.SugestaoId);
+            return;
+        }
 
         logger.LogInformation(
             "Sessão {SessaoId} vinculada à sugestão {SugestaoId} de {DataHora:dd/MM/yyyy} (método {TipoCalculo}), " +
