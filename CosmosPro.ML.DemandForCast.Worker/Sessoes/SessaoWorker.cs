@@ -89,7 +89,14 @@ internal sealed class SessaoWorker(
     private async Task<bool> AvancarParaTreinoAsync(
         EngineDbContext db, SessaoEmAndamento sessao, CancellationToken ct)
     {
-        var (job, motivo) = SessaoJobs.Treino(sessao, DateTimeOffset.UtcNow);
+        // A leitura só faz sentido se a sessão souber a qual sugestão está ancorada; quem decide
+        // que uma sessão sem declaração é inviável continua sendo SessaoJobs, e a checagem
+        // aqui existe apenas para não consultar o Stage com âncora nula.
+        var stage = sessao is { SugestaoDataHora: { } dataHora, SugestaoTipoCalculo: { } tipoCalculo }
+            ? await LerSugestaoNoStageAsync(sessao.RedeId, dataHora, tipoCalculo, ct)
+            : default;
+
+        var (job, motivo) = SessaoJobs.Treino(sessao, stage, DateTimeOffset.UtcNow);
         if (job is null)
         {
             return await GravarStatusAsync(
@@ -109,9 +116,66 @@ internal sealed class SessaoWorker(
         }
 
         logger.LogInformation(
-            "Sessão {SessaoId}: treino {TreinoId} enfileirado com corte em {TreinoAte:yyyy-MM-dd} (rede {RedeId}).",
-            sessao.Id, job.Id, job.TreinoAte, job.RedeId);
+            "Sessão {SessaoId}: treino {TreinoId} enfileirado com corte em {TreinoAte:yyyy-MM-dd} e orçamento de " +
+            "{MaxSkus} SKU(s) para os {SkusDaSugestao} da sugestão (rede {RedeId}).",
+            sessao.Id, job.Id, job.TreinoAte, job.MaxSkus, stage.SkusDistintos, job.RedeId);
         return true;
+    }
+
+    /// <summary>
+    /// Lê no Stage o que o import deixou da sugestão a que a sessão está ancorada: quantos
+    /// cabeçalhos o recorte seleciona e quantos SKUs distintos eles avaliaram.
+    ///
+    /// <para>
+    /// O recorte é o <b>mesmo</b> de <see cref="Comparison.StageSugestaoLoader"/> — rede, método
+    /// e o dia da sugestão com fim exclusivo no dia seguinte —, porque os dois números precisam
+    /// descrever a população que a comparação vai de fato montar. Sem o filtro de método,
+    /// contaria itens que a comparação nem olha.
+    /// </para>
+    ///
+    /// <para>
+    /// A contagem de SKUs é <c>DISTINCT</c> porque o orçamento do treino é por SKU e uma
+    /// sugestão real repete o mesmo SKU em cada loja: contar linhas inflaria o orçamento pelo
+    /// número de lojas.
+    /// </para>
+    /// </summary>
+    private async Task<SugestaoNoStage> LerSugestaoNoStageAsync(
+        int redeId, DateTime sugestaoDataHora, byte tipoCalculo, CancellationToken ct)
+    {
+        var connStr = config.GetConnectionString("Stage")
+            ?? throw new InvalidOperationException("Connection string 'Stage' não encontrada.");
+
+        var dia = DateOnly.FromDateTime(sugestaoDataHora);
+
+        const string sql = """
+            SELECT (
+                SELECT COUNT(*)
+                FROM dbo.SugestoesCompra
+                WHERE RedeId = @redeId AND TipoCalculo = @tipo
+                  AND DataHora >= @inicio AND DataHora < @fim
+            ) AS Cabecalhos,
+            (
+                SELECT COUNT(DISTINCT i.Sku)
+                FROM dbo.SugestoesCompraItens i
+                INNER JOIN dbo.SugestoesCompra s
+                    ON s.RedeId = i.RedeId AND s.SugestaoId = i.SugestaoId
+                WHERE i.RedeId = @redeId AND s.TipoCalculo = @tipo
+                  AND s.DataHora >= @inicio AND s.DataHora < @fim
+            ) AS SkusDistintos;
+            """;
+
+        await using var conn = new SqlConnection(connStr);
+        await conn.OpenAsync(ct);
+        await using var cmd = new SqlCommand(sql, conn) { CommandTimeout = 300 };
+        cmd.Parameters.AddWithValue("@redeId", redeId);
+        cmd.Parameters.AddWithValue("@tipo", tipoCalculo);
+        cmd.Parameters.AddWithValue("@inicio", dia.ToDateTime(TimeOnly.MinValue));
+        cmd.Parameters.AddWithValue("@fim", dia.AddDays(1).ToDateTime(TimeOnly.MinValue));
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return default;
+
+        return new SugestaoNoStage(reader.GetInt32(0), reader.GetInt32(1));
     }
 
     private async Task<bool> AvancarParaComparacaoAsync(
@@ -202,6 +266,12 @@ internal sealed class SessaoWorker(
     /// <summary>
     /// Situação do job da fase corrente. A fase é decidida pelo estado da sessão, e cada
     /// estado tem exatamente um job para observar.
+    ///
+    /// <para>
+    /// Todo estado não terminal do job passa por <see cref="Andamento"/>, que é onde a fase
+    /// abandonada é interceptada: sem isso, um job deixado em <c>Processando</c> por um worker
+    /// que caiu mantinha a sessão sendo repescada para sempre.
+    /// </para>
     /// </summary>
     private async Task<(JobResultado Resultado, string? MensagemErro)> LerFaseAsync(
         EngineDbContext db, SessaoEmAndamento sessao, CancellationToken ct)
@@ -210,67 +280,87 @@ internal sealed class SessaoWorker(
         {
             case SessaoStatus.ProcessandoDados:
             {
-                if (sessao.CargaStageId is not { } id) return FasePerdida("importação dos seus dados");
+                const string fase = "importação dos seus dados";
+                if (sessao.CargaStageId is not { } id) return FasePerdida(fase);
 
                 var job = await db.CargasStage.AsNoTracking()
                     .Where(c => c.Id == id)
-                    .Select(c => new { c.Status, c.MensagemErro })
+                    .Select(c => new { c.Status, c.MensagemErro, c.DataInicioProcessamento })
                     .FirstOrDefaultAsync(ct);
 
-                if (job is null) return FasePerdida("importação dos seus dados");
+                if (job is null) return FasePerdida(fase);
 
                 return job.Status switch
                 {
                     CargaStageStatus.Concluida => (JobResultado.Concluido, null),
                     CargaStageStatus.Falha => (JobResultado.Falhou,
                         Detalhar("importar os seus dados", job.MensagemErro)),
-                    _ => (JobResultado.EmAndamento, null),
+                    _ => Andamento(fase, job.DataInicioProcessamento, sessao),
                 };
             }
 
             case SessaoStatus.Treinando:
             {
-                if (sessao.TreinoJobId is not { } id) return FasePerdida("aprendizado do padrão de venda");
+                const string fase = "aprendizado do padrão de venda";
+                if (sessao.TreinoJobId is not { } id) return FasePerdida(fase);
 
                 var job = await db.TreinoJobs.AsNoTracking()
                     .Where(t => t.Id == id)
-                    .Select(t => new { t.Status, t.MensagemErro })
+                    .Select(t => new { t.Status, t.MensagemErro, t.DataInicioProcessamento })
                     .FirstOrDefaultAsync(ct);
 
-                if (job is null) return FasePerdida("aprendizado do padrão de venda");
+                if (job is null) return FasePerdida(fase);
 
                 return job.Status switch
                 {
                     TreinoStatus.Concluido => (JobResultado.Concluido, null),
                     TreinoStatus.Falha => (JobResultado.Falhou,
                         Detalhar("aprender o padrão de venda das suas lojas", job.MensagemErro)),
-                    _ => (JobResultado.EmAndamento, null),
+                    _ => Andamento(fase, job.DataInicioProcessamento, sessao),
                 };
             }
 
             case SessaoStatus.Comparando:
             {
-                if (sessao.ComparacaoPbsId is not { } id) return FasePerdida("comparação dos dois métodos");
+                const string fase = "comparação dos dois métodos";
+                if (sessao.ComparacaoPbsId is not { } id) return FasePerdida(fase);
 
                 var job = await db.ComparacoesPbs.AsNoTracking()
                     .Where(c => c.Id == id)
-                    .Select(c => new { c.Status, c.MensagemErro })
+                    .Select(c => new { c.Status, c.MensagemErro, c.DataInicioProcessamento })
                     .FirstOrDefaultAsync(ct);
 
-                if (job is null) return FasePerdida("comparação dos dois métodos");
+                if (job is null) return FasePerdida(fase);
 
                 return job.Status switch
                 {
                     ComparacaoPbsStatus.Concluido => (JobResultado.Concluido, null),
                     ComparacaoPbsStatus.Falha => (JobResultado.Falhou,
                         Detalhar("comparar os dois métodos", job.MensagemErro)),
-                    _ => (JobResultado.EmAndamento, null),
+                    _ => Andamento(fase, job.DataInicioProcessamento, sessao),
                 };
             }
 
             default:
                 return (JobResultado.EmAndamento, null);
         }
+    }
+
+    /// <summary>
+    /// Fase que ainda não terminou: continua em andamento, ou é declarada abandonada porque a
+    /// reclamação envelheceu além do limite. Ver <see cref="SessaoJobs.FaseAbandonada"/>.
+    /// </summary>
+    private (JobResultado, string?) Andamento(
+        string fase, DateTimeOffset? inicioDoProcessamento, SessaoEmAndamento sessao)
+    {
+        var motivo = SessaoJobs.FaseAbandonada(fase, inicioDoProcessamento, DateTimeOffset.UtcNow);
+        if (motivo is null) return (JobResultado.EmAndamento, null);
+
+        logger.LogWarning(
+            "Sessão {SessaoId}: fase {Fase} reclamada em {Inicio:O} e sem progresso desde então; encerrando a sessão.",
+            sessao.Id, sessao.Status, inicioDoProcessamento);
+
+        return (JobResultado.Falhou, motivo);
     }
 
     /// <summary>

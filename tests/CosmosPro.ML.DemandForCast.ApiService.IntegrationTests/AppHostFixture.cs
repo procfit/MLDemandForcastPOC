@@ -206,6 +206,15 @@ public sealed class AppHostFixture : IAsyncLifetime
         => await App.GetConnectionStringAsync("Stage", ct)
            ?? throw new InvalidOperationException("Recurso 'Stage' sem connection string.");
 
+    /// <summary>
+    /// Connection string do banco <c>engine</c>. Necessária para os testes que precisam plantar
+    /// um estado que a API não sabe produzir — sessão apontando para um job abandonado, por
+    /// exemplo — e depois observar o Worker reagir a ele.
+    /// </summary>
+    public async Task<string> GetEngineConnectionStringAsync(CancellationToken ct = default)
+        => await App.GetConnectionStringAsync("engine", ct)
+           ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
     public async ValueTask DisposeAsync()
     {
         if (App is not null)

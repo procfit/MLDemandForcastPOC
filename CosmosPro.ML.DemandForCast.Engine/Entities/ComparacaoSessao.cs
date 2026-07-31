@@ -48,6 +48,40 @@ public sealed class ComparacaoSessao
 
     public static bool PodeTransicionar(SessaoStatus de, SessaoStatus para) =>
         Permitidas.TryGetValue(de, out var destinos) && destinos.Contains(para);
+
+    /// <summary>
+    /// Tempo que uma fase pode passar sem sinal de progresso antes de ser tratada como
+    /// abandonada.
+    ///
+    /// <para>
+    /// Existe porque nenhuma das três filas tem <i>lease</i> ou <i>heartbeat</i>: elas
+    /// reclamam com <c>WHERE Status = 'Pendente'</c> e gravam <c>Processando</c>, então um
+    /// processo que morre no meio deixa o job em <c>Processando</c> para sempre e a sessão
+    /// esperando por ele para sempre. Passado este limite, quem observa a fase termina a
+    /// sessão com um motivo em vez de girar em silêncio.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Duas horas</b> porque o custo dos dois erros é assimétrico. Cortar cedo mataria um
+    /// treino vivo dizendo ao comprador que "o processamento foi interrompido" — mentira, e
+    /// ele reenviaria um arquivo que estava certo. Cortar tarde só adiada a mensagem de uma
+    /// sessão que já está morta. Os pontos de referência que este repositório tem são os
+    /// orçamentos dos testes de integração — 8 min para um treino de 2 SKUs sobre um ano
+    /// (<c>TreinoCorteIntegrationTests</c>) e 15 min para o ciclo sintético inteiro
+    /// (<c>SessaoOrquestracaoIntegrationTests</c>) —, e o orçamento de SKUs da sessão vai a
+    /// no máximo <c>SessaoJobs.TetoDeSkusDoTreino</c>: duas horas deixam uma ordem de
+    /// grandeza de folga sobre isso. Acima disso a explicação provável deixa de ser "LightGBM
+    /// lento" e passa a ser "o worker caiu", porque um worker que reinicia volta em segundos
+    /// e o job que ele abandonou nunca retorna a <c>Pendente</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// O mesmo número decide, no envio de dados, se outra sessão da rede ainda está viva
+    /// (<c>ComparacoesEndpoints</c>): sem isso, um worker que morresse trancaria a rede para
+    /// sempre — o bloqueio precisa cicatrizar pelo mesmo relógio que mata a sessão.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan LimiteDeFaseSemProgresso = TimeSpan.FromMinutes(120);
 }
 
 public enum SessaoStatus

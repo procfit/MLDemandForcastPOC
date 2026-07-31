@@ -16,6 +16,9 @@ public sealed class SessaoJobsTests
     private static readonly DateTime SugestaoDataHora = new(2026, 7, 1, 9, 30, 0);
     private static readonly Guid TreinoJobId = Guid.Parse("0198a0f0-0000-7000-8000-000000000001");
 
+    /// <summary>Retrato normal do Stage: uma sugestão só, com poucos SKUs.</summary>
+    private static readonly SugestaoNoStage UmaSugestao = new(Cabecalhos: 1, SkusDistintos: 12);
+
     private static SessaoEmAndamento Sessao(
         SessaoStatus status = SessaoStatus.ProcessandoDados,
         byte? tipoCalculo = 2,
@@ -52,7 +55,7 @@ public sealed class SessaoJobsTests
     [Fact]
     public void Treino_corta_no_dia_da_sugestao_porque_o_corte_e_exclusivo()
     {
-        var (job, motivo) = SessaoJobs.Treino(Sessao(), Agora);
+        var (job, motivo) = SessaoJobs.Treino(Sessao(), UmaSugestao, Agora);
 
         motivo.Should().BeNull();
         job!.TreinoAte.Should().Be(new DateOnly(2026, 7, 1),
@@ -68,7 +71,7 @@ public sealed class SessaoJobsTests
     {
         var dataHora = new DateTime(2026, 7, 1, hora, minuto, segundo);
 
-        var (job, _) = SessaoJobs.Treino(SessaoComData(dataHora), Agora);
+        var (job, _) = SessaoJobs.Treino(SessaoComData(dataHora), UmaSugestao, Agora);
 
         job!.TreinoAte.Should().Be(new DateOnly(2026, 7, 1),
             "o corte é por dia: nenhuma venda do dia da sugestão pode entrar, seja a que hora ela foi calculada");
@@ -79,13 +82,76 @@ public sealed class SessaoJobsTests
     {
         var sessao = Sessao();
 
-        var (job, _) = SessaoJobs.Treino(sessao, Agora);
+        var (job, _) = SessaoJobs.Treino(sessao, UmaSugestao, Agora);
 
         job!.RedeId.Should().Be(sessao.RedeId, "modelo é sempre por rede — treinar com o Stage de outra cruzaria dado comercial");
         job.Status.Should().Be(TreinoStatus.Pendente);
         job.DataAgendamento.Should().Be(Agora);
         job.Id.Should().NotBeEmpty();
         job.MaxSkus.Should().BeGreaterThan(0, "o TreinoProcessor usa MaxSkus como orçamento de SKUs; zero não treina nada");
+    }
+
+    /// <summary>
+    /// O orçamento sai do tamanho da sugestão, não de uma constante. Com número fixo pequeno,
+    /// uma sugestão real do PBS (milhares de SKUs) perderia quase toda a população para
+    /// <c>ItensForaOrcamentoSkus</c> e a comparação sairia vazia por um motivo que não tem nada
+    /// a ver com o método sob teste.
+    /// </summary>
+    [Fact]
+    public void Orcamento_do_treino_acompanha_os_skus_da_sugestao()
+    {
+        var (job, _) = SessaoJobs.Treino(Sessao(), new SugestaoNoStage(1, SkusDistintos: 640), Agora);
+
+        job!.MaxSkus.Should().Be(640,
+            "todo SKU que o ERP avaliou precisa ter chance de entrar no orçamento top-N do treino");
+    }
+
+    /// <summary>
+    /// Teto: o <c>StageObservationLoader</c> manda um parâmetro por SKU num único
+    /// <c>IN (…)</c>, e o SQL Server para em 2100 parâmetros por comando — passar disso não
+    /// deixa o treino lento, quebra o treino. O tempo de ajuste também cresce com o número de
+    /// SKUs, e ninguém mediu isso em dado real ainda.
+    /// </summary>
+    [Fact]
+    public void Orcamento_do_treino_para_no_teto_mesmo_com_sugestao_gigante()
+    {
+        var (job, _) = SessaoJobs.Treino(Sessao(), new SugestaoNoStage(1, SkusDistintos: 45_000), Agora);
+
+        job!.MaxSkus.Should().Be(SessaoJobs.TetoDeSkusDoTreino);
+        job.MaxSkus.Should().BeLessThan(2_000,
+            "acima de ~2000 SKUs o IN (@s0…@sN) do loader estoura o limite de parâmetros do SQL Server");
+    }
+
+    /// <summary>
+    /// Piso: o orçamento escolhe os SKUs de maior volume <b>da rede</b>, não os da sugestão.
+    /// Pedir exatamente 2 porque a sugestão tem 2 itens selecionaria os 2 mais vendidos do
+    /// catálogo — que podem não ser os da sugestão — e a comparação sairia vazia por orçamento.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public void Orcamento_do_treino_nao_desce_abaixo_do_piso(int skusDaSugestao)
+    {
+        var (job, _) = SessaoJobs.Treino(Sessao(), new SugestaoNoStage(1, skusDaSugestao), Agora);
+
+        job!.MaxSkus.Should().Be(SessaoJobs.PisoDeSkusDoTreino);
+    }
+
+    /// <summary>
+    /// Uma sessão é ancorada a UMA sugestão e a comparação agrega sem separar por sugestão:
+    /// duas selecionadas pelo mesmo recorte sairiam somadas num resultado que não descreve
+    /// nenhuma das duas. A recusa é aqui, antes do treino, e não na comparação — que também
+    /// atende a execução avulsa da F13, onde janela com várias sugestões é o comportamento
+    /// pedido.
+    /// </summary>
+    [Fact]
+    public void Duas_sugestoes_no_mesmo_recorte_nao_geram_treino()
+    {
+        var (job, motivo) = SessaoJobs.Treino(Sessao(), new SugestaoNoStage(Cabecalhos: 2, SkusDistintos: 30), Agora);
+
+        job.Should().BeNull("somar duas sugestões daria um número que não descreve nenhuma delas");
+        motivo.Should().NotBeNullOrWhiteSpace();
+        motivo.Should().Contain("extrator", "quem lê é comprador: o texto tem de terminar numa próxima ação");
     }
 
     /// <summary>
@@ -144,7 +210,7 @@ public sealed class SessaoJobsTests
     [Fact]
     public void Sessao_sem_data_da_sugestao_nao_gera_treino_e_devolve_motivo_acionavel()
     {
-        var (job, motivo) = SessaoJobs.Treino(SessaoComData(null), Agora);
+        var (job, motivo) = SessaoJobs.Treino(SessaoComData(null), UmaSugestao, Agora);
 
         job.Should().BeNull("sem corte o treino aprenderia com o gabarito e a comparação seria recusada");
         motivo.Should().NotBeNullOrWhiteSpace();
@@ -154,12 +220,48 @@ public sealed class SessaoJobsTests
     [Fact]
     public void Sessao_sem_metodo_do_ERP_nao_gera_treino_e_devolve_motivo_acionavel()
     {
-        var (job, motivo) = SessaoJobs.Treino(Sessao(tipoCalculo: null), Agora);
+        var (job, motivo) = SessaoJobs.Treino(Sessao(tipoCalculo: null), UmaSugestao, Agora);
 
         job.Should().BeNull("o método viaja na mesma declaração da data: faltando um, a fase seguinte não tem contra o que disputar");
         motivo.Should().NotBeNullOrWhiteSpace();
         motivo.Should().Contain("extrator");
     }
+
+    /// <summary>
+    /// A fase abandonada é o único jeito de a sessão sair de um job que ninguém vai terminar: as
+    /// três filas reclamam com <c>Status = 'Pendente'</c> e gravam <c>Processando</c>, sem lease
+    /// e sem heartbeat, então um worker que morre no meio do treino deixa a sessão sendo
+    /// repescada a cada 5 segundos para sempre.
+    /// </summary>
+    [Fact]
+    public void Fase_reclamada_ha_mais_que_o_limite_encerra_a_sessao_com_proxima_acao()
+    {
+        var inicio = Agora - ComparacaoSessao.LimiteDeFaseSemProgresso - TimeSpan.FromMinutes(1);
+
+        var motivo = SessaoJobs.FaseAbandonada("aprendizado do padrão de venda", inicio, Agora);
+
+        motivo.Should().NotBeNullOrWhiteSpace();
+        motivo.Should().Contain("Envie os dados novamente",
+            "quem lê é comprador de farmácia: o texto tem de terminar numa próxima ação");
+    }
+
+    [Fact]
+    public void Fase_dentro_do_limite_continua_em_andamento()
+    {
+        var inicio = Agora - ComparacaoSessao.LimiteDeFaseSemProgresso + TimeSpan.FromMinutes(1);
+
+        SessaoJobs.FaseAbandonada("aprendizado do padrão de venda", inicio, Agora).Should().BeNull(
+            "treino longo é normal; cortar cedo mataria job vivo dizendo que o processamento foi interrompido");
+    }
+
+    /// <summary>
+    /// Job ainda <c>Pendente</c> (sem início de processamento) nunca é abandono: fila parada
+    /// significa worker nenhum de pé, e nesse cenário quem julgaria também não está rodando.
+    /// Quando um worker sobe, o job pendente é reclamado — matar a sessão seria o desfecho errado.
+    /// </summary>
+    [Fact]
+    public void Fase_ainda_nao_reclamada_nunca_e_abandono()
+        => SessaoJobs.FaseAbandonada("importação dos seus dados", null, Agora).Should().BeNull();
 
     [Fact]
     public void Comparacao_sem_declaracao_da_sugestao_tambem_devolve_motivo()

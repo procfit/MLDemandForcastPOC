@@ -56,10 +56,17 @@ public sealed class SessaoManifestoIntegrationTests(AppHostFixture fixture)
             "a comparação precisa saber contra qual dos dois métodos do ERP ela disputa");
     }
 
+    /// <summary>
+    /// Rede própria, e não a de <see cref="ZIP_com_declaracao_grava_a_sugestao_e_o_retrato_na_sessao"/>:
+    /// aquela sessão segue viva para treino e comparação depois de a sugestão ser gravada, e uma
+    /// rede só admite uma sessão em voo por vez — o Stage é por rede e cada envio o substitui
+    /// inteiro. Compartilhar a rede faria este caso ser recusado no upload, por concorrência, em
+    /// vez de exercitar a inviabilidade.
+    /// </summary>
     [Fact]
     public async Task ZIP_sem_declaracao_deixa_a_sessao_inviavel_e_nao_em_falha()
     {
-        var redeId = await EnsureRedeAsync("Rede Sessao Manifesto", Slug);
+        var redeId = await EnsureRedeAsync("Rede Sessao Manifesto Sem Declaracao", $"{Slug}-sem-decl");
         var sessaoId = await CriarSessaoAsync(redeId, "Sem declaracao");
 
         await EnviarAsync(sessaoId, redeId, comManifesto: false);
