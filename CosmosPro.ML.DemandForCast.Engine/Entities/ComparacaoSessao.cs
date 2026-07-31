@@ -25,6 +25,25 @@ public sealed class ComparacaoSessao
     public DateTime? SugestaoDataHora { get; set; }
     public byte? SugestaoTipoCalculo { get; set; }
 
+    /// <summary>
+    /// Quantos SKUs da sugestão o extrator não encontrou no cadastro de produtos do PBS,
+    /// copiado do manifesto do ZIP.
+    ///
+    /// <para>
+    /// Fica na sessão porque é a única ponte entre o manifesto e o resultado: o manifesto
+    /// vive no diretório temporário do import, que é apagado no fim dele, e a
+    /// materialização acontece três fases depois. Sem isto o comprador descobriria a
+    /// ausência como célula vazia na tabela em vez de "N itens sem cadastro".
+    /// </para>
+    ///
+    /// <para>
+    /// Anulável, e não zero por default: sessões anteriores a esta coluna e envios sem
+    /// declaração não sabem quantos foram, e afirmar zero nesses casos diria "nenhum item
+    /// ficou de fora" sem ter verificado.
+    /// </para>
+    /// </summary>
+    public int? SkusSemCadastro { get; set; }
+
     public Guid? CargaStageId { get; set; }
     public Guid? TreinoJobId { get; set; }
     public Guid? ComparacaoPbsId { get; set; }

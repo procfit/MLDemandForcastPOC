@@ -79,7 +79,7 @@ internal sealed class SessaoWorker(
         {
             SessaoStatus.Treinando => await AvancarParaTreinoAsync(db, sessao, ct),
             SessaoStatus.Comparando => await AvancarParaComparacaoAsync(db, sessao, ct),
-            SessaoStatus.Concluida => await GravarStatusAsync(db, sessao, SessaoStatus.Concluida, ct: ct),
+            SessaoStatus.Concluida => await ConcluirAsync(scope.ServiceProvider, db, sessao, ct),
             SessaoStatus.Falha => await GravarStatusAsync(
                 db, sessao, SessaoStatus.Falha, mensagemErro: mensagemErro, ct: ct),
             _ => false,
@@ -176,6 +176,50 @@ internal sealed class SessaoWorker(
         if (!await reader.ReadAsync(ct)) return default;
 
         return new SugestaoNoStage(reader.GetInt32(0), reader.GetInt32(1));
+    }
+
+    /// <summary>
+    /// Conclui a sessão <b>materializando o resultado dela</b>. A gravação de
+    /// <c>Concluida</c> mora dentro da materialização, na mesma transação das linhas de
+    /// detalhe — ver <see cref="SessaoResultadoMaterializador"/>.
+    ///
+    /// <para>
+    /// <b>Por que a materialização é disparada aqui.</b> Esta é a última volta em que a
+    /// sessão ainda está em <c>Comparando</c>, e o Stage da rede continua sendo o que a
+    /// comparação mediu: o próximo ZIP o apaga inteiro (<c>DELETE ... WHERE RedeId</c> no
+    /// <see cref="CargaProcessor"/>). Materializar na abertura da tela chegaria tarde — e
+    /// chegaria tarde em silêncio, mostrando o resultado do envio seguinte com a cara do
+    /// anterior.
+    /// </para>
+    ///
+    /// <para>
+    /// Falha na materialização encerra a sessão em <c>Falha</c>, e não em <c>Concluida</c>
+    /// sem resultado: uma sessão concluída com tela vazia manda o comprador procurar um
+    /// número que nunca foi gravado. Mesma política do <see cref="Comparison.ComparacaoWorker"/>
+    /// para o job dele.
+    /// </para>
+    /// </summary>
+    private async Task<bool> ConcluirAsync(
+        IServiceProvider scoped, EngineDbContext db, SessaoEmAndamento sessao, CancellationToken ct)
+    {
+        var materializador = scoped.GetRequiredService<SessaoResultadoMaterializador>();
+
+        try
+        {
+            return await materializador.MaterializarAsync(sessao, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Sessão {SessaoId}: falha ao materializar o resultado.", sessao.Id);
+
+            return await GravarStatusAsync(
+                db, sessao, SessaoStatus.Falha,
+                mensagemErro: Detalhar("montar o resultado desta comparação", ex.Message), ct: ct);
+        }
     }
 
     private async Task<bool> AvancarParaComparacaoAsync(
@@ -418,7 +462,8 @@ internal sealed class SessaoWorker(
                 SET AtualizadoEm = SYSDATETIMEOFFSET()
                 OUTPUT INSERTED.Id, INSERTED.RedeId, INSERTED.Status,
                        INSERTED.CargaStageId, INSERTED.TreinoJobId, INSERTED.ComparacaoPbsId,
-                       INSERTED.SugestaoDataHora, INSERTED.SugestaoTipoCalculo;
+                       INSERTED.SugestaoDataHora, INSERTED.SugestaoTipoCalculo,
+                       INSERTED.SkusSemCadastro;
             """;
 
         await using var conn = new SqlConnection(connStr);
@@ -435,6 +480,7 @@ internal sealed class SessaoWorker(
             TreinoJobId: reader.IsDBNull(4) ? null : reader.GetGuid(4),
             ComparacaoPbsId: reader.IsDBNull(5) ? null : reader.GetGuid(5),
             SugestaoDataHora: reader.IsDBNull(6) ? null : reader.GetDateTime(6),
-            SugestaoTipoCalculo: reader.IsDBNull(7) ? null : reader.GetByte(7));
+            SugestaoTipoCalculo: reader.IsDBNull(7) ? null : reader.GetByte(7),
+            SkusSemCadastro: reader.IsDBNull(8) ? null : reader.GetInt32(8));
     }
 }

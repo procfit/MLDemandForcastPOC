@@ -42,7 +42,8 @@ public sealed class SessaoJobsTests
             TreinoJobId: treinoJobId,
             ComparacaoPbsId: null,
             SugestaoDataHora: sugestaoDataHora,
-            SugestaoTipoCalculo: tipoCalculo);
+            SugestaoTipoCalculo: tipoCalculo,
+            SkusSemCadastro: null);
 
     /// <summary>
     /// O corte é o próprio dia da sugestão porque as duas pontas concordam nisso: o

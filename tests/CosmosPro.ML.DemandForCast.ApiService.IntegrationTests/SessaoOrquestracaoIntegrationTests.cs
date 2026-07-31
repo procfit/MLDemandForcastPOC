@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Net;
+using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Tests.Shared.Csv;
 using CosmosPro.ML.DemandForCast.Tests.Shared.Fakers;
+using Microsoft.EntityFrameworkCore;
 using Refit;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
@@ -119,6 +121,42 @@ public sealed class SessaoOrquestracaoIntegrationTests(AppHostFixture fixture)
             outraRede, ct: TestContext.Current.CancellationToken);
         comparacoesDaOutra.IsSuccessStatusCode.Should().BeTrue();
         comparacoesDaOutra.Content.Should().NotContain(c => c.Id == ciclo.Comparacao.Id);
+    }
+
+    /// <summary>
+    /// A sessão não termina só mudando de estado: ela deixa o resultado materializado. É a
+    /// única passagem em que isso é exercitado sobre o ciclo <b>inteiro</b> de verdade —
+    /// comparação real, Stage real —, e o que se afirma são os números que vêm do Stage, que o
+    /// próximo envio desta rede apagaria.
+    /// </summary>
+    [Fact]
+    public async Task Sessao_concluida_deixa_o_detalhe_por_item_materializado()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ciclo = await CicloAsync();
+
+        var connStr = await fixture.GetEngineConnectionStringAsync(ct);
+        var options = new DbContextOptionsBuilder<EngineDbContext>().UseSqlServer(connStr).Options;
+        await using var db = new EngineDbContext(options);
+
+        var itens = await db.ComparacaoSessaoItens.AsNoTracking()
+            .Where(i => i.SessaoId == ciclo.SessaoId)
+            .ToListAsync(ct);
+
+        var item = itens.Should().ContainSingle(
+            "a sugestão deste ciclo tem uma linha, e materializar é o que mantém a comparação " +
+            "legível depois de outro envio apagar o Stage desta rede").Subject;
+
+        item.LojaId.Should().Be(LojaId);
+        item.Sku.Should().Be(Sku);
+        item.NomeProduto.Should().Be("Produto Orquestracao", "o cadastro é copiado enquanto ainda existe");
+        item.Curva.Should().Be("A");
+        item.CompraSugeridaPbs.Should().Be(20m);
+        item.DemandaDiaPbs.Should().Be(6m);
+        item.VendidoNaJanela.Should().Be(40m,
+            "cobertura de 5 dias a partir de 01/07, com venda 6+7+8+9+10 no dataset deste ciclo");
+        item.DemandaDiaMl.Should().NotBeNull(
+            "a cobertura de 5 dias cabe no horizonte de 7 do pipeline, então a camada A pontuou este item");
     }
 
     /// <summary>

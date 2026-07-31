@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Net;
+using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Tests.Shared.Csv;
 using CosmosPro.ML.DemandForCast.Tests.Shared.Fakers;
+using Microsoft.EntityFrameworkCore;
 using Refit;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
@@ -32,6 +34,12 @@ public sealed class SessaoManifestoIntegrationTests(AppHostFixture fixture)
     private const long SugestaoId = 7101;
     private const byte TipoCalculo = 2;
 
+    /// <summary>
+    /// Itens que o extrator não achou no cadastro do PBS. Diferente de zero de propósito: é a
+    /// travessia do valor que se afirma, e zero seria indistinguível de coluna não escrita.
+    /// </summary>
+    private const int SkusSemCadastro = 3;
+
     private static readonly DateOnly Inicio = new(2026, 1, 1);
     private static readonly DateOnly Fim = new(2026, 8, 31);
     private static readonly DateTime SugestaoDataHora = new(2026, 7, 1, 9, 30, 0);
@@ -54,6 +62,23 @@ public sealed class SessaoManifestoIntegrationTests(AppHostFixture fixture)
             "é desta data que sai o corte anti-vazamento do treino da fase seguinte");
         sessao.SugestaoTipoCalculo.Should().Be(TipoCalculo,
             "a comparação precisa saber contra qual dos dois métodos do ERP ela disputa");
+
+        // Lido do banco porque a view da sessão não expõe o campo: quem o consome é a
+        // materialização do resultado, não a tela de acompanhamento. É a única ponte entre o
+        // manifesto — que vive num diretório temporário apagado no fim do import — e o aviso
+        // "N itens sem cadastro" que o comprador precisa ler no resultado.
+        var ct = TestContext.Current.CancellationToken;
+        var connStr = await fixture.GetEngineConnectionStringAsync(ct);
+        var options = new DbContextOptionsBuilder<EngineDbContext>().UseSqlServer(connStr).Options;
+        await using var db = new EngineDbContext(options);
+
+        var skusSemCadastro = await db.ComparacaoSessoes.AsNoTracking()
+            .Where(s => s.Id == sessaoId)
+            .Select(s => s.SkusSemCadastro)
+            .FirstAsync(ct);
+
+        skusSemCadastro.Should().Be(SkusSemCadastro,
+            "sem isto gravado, o aviso de itens sem cadastro morre no log do import");
     }
 
     /// <summary>
@@ -232,7 +257,7 @@ public sealed class SessaoManifestoIntegrationTests(AppHostFixture fixture)
           "JanelaInicio": "{{Inicio:yyyy-MM-dd}}",
           "JanelaFim": "{{Fim:yyyy-MM-dd}}",
           "VersaoExtractor": "1.0.0",
-          "SkusSemCadastro": 0
+          "SkusSemCadastro": {{SkusSemCadastro}}
         }
         """);
 

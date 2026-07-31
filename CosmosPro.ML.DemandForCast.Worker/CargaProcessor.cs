@@ -170,6 +170,10 @@ internal sealed class CargaProcessor(
                 .SetProperty(x => x.SugestaoDescricao, manifesto.SugestaoDescricao)
                 .SetProperty(x => x.SugestaoDataHora, manifesto.SugestaoDataHora)
                 .SetProperty(x => x.SugestaoTipoCalculo, manifesto.SugestaoTipoCalculo)
+                // Único ponto em que este número pode ser guardado: o manifesto vive no
+                // diretório temporário que este processador apaga ao terminar, e quem precisa
+                // dele é a materialização do resultado, três fases adiante.
+                .SetProperty(x => x.SkusSemCadastro, manifesto.SkusSemCadastro)
                 .SetProperty(x => x.AtualizadoEm, agora), ct);
 
         if (vinculadas == 0)

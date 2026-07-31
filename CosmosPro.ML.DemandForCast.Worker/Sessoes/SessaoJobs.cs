@@ -16,7 +16,8 @@ internal sealed record SessaoEmAndamento(
     Guid? TreinoJobId,
     Guid? ComparacaoPbsId,
     DateTime? SugestaoDataHora,
-    byte? SugestaoTipoCalculo);
+    byte? SugestaoTipoCalculo,
+    int? SkusSemCadastro);
 
 /// <summary>
 /// O que o import deixou no Stage a respeito da sugestão a que a sessão está ancorada, lido

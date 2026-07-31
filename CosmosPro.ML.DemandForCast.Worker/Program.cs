@@ -40,7 +40,10 @@ builder.Services.AddHostedService<ComparacaoWorker>();
 
 // Orquestração das sessões de comparação (F14): polling sobre engine.ComparacaoSessoes.
 // Não processa fase nenhuma — observa o job da fase corrente e cria o da seguinte, o que
-// mantém os três workers acima sem saber que sessões existem.
+// mantém os três workers acima sem saber que sessões existem. A exceção é o fim da última
+// fase: ali ele materializa o resultado, porque o Stage que a comparação mediu não
+// sobrevive ao próximo import.
+builder.Services.AddScoped<SessaoResultadoMaterializador>();
 builder.Services.AddHostedService<SessaoWorker>();
 
 var host = builder.Build();
