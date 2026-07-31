@@ -57,6 +57,7 @@ app.MapStageEndpoints();
 app.MapTrainingEndpoints();
 app.MapPurchasingEndpoints();
 app.MapComparacoesEndpoints();
+app.MapComparisonEndpoints();
 
 app.MapDefaultEndpoints();
 

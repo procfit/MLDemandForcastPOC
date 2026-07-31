@@ -28,6 +28,7 @@ public sealed class AppHostFixture : IAsyncLifetime
     public IRedesApi RedesApi { get; private set; } = null!;
     public IStageApi StageApi { get; private set; } = null!;
     public IComparacoesApi ComparacoesApi { get; private set; } = null!;
+    public IComparisonApi ComparisonApi { get; private set; } = null!;
     public ITrainingApi TrainingApi { get; private set; } = null!;
 
     /// <summary>Rede semeada pela migration AddRedes — usada pelos testes que não criam rede própria.</summary>
@@ -68,6 +69,7 @@ public sealed class AppHostFixture : IAsyncLifetime
         RedesApi = RestService.For<IRedesApi>(httpClient);
         StageApi = RestService.For<IStageApi>(httpClient);
         ComparacoesApi = RestService.For<IComparacoesApi>(httpClient);
+        ComparisonApi = RestService.For<IComparisonApi>(httpClient);
         TrainingApi = RestService.For<ITrainingApi>(httpClient);
 
         using var healthyCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));

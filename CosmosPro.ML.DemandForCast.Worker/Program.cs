@@ -1,5 +1,6 @@
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Worker;
+using CosmosPro.ML.DemandForCast.Worker.Comparison;
 using CosmosPro.ML.DemandForCast.Worker.Purchasing;
 using CosmosPro.ML.DemandForCast.Worker.Training;
 
@@ -29,6 +30,12 @@ builder.Services.AddHostedService<TreinoWorker>();
 // Replay das políticas eMax/eSeg vs ROP+forecast com KPIs comparativos.
 builder.Services.AddScoped<SimulacaoProcessor>();
 builder.Services.AddHostedService<SimulacaoWorker>();
+
+// Comparação contra o ERP (F13): mesma fila-pattern sobre engine.ComparacoesPbs.
+// Roda as três camadas (previsão, decisão, intervenção humana) sobre a população
+// que o PBS avaliou.
+builder.Services.AddScoped<ComparacaoProcessor>();
+builder.Services.AddHostedService<ComparacaoWorker>();
 
 var host = builder.Build();
 await host.RunAsync();
