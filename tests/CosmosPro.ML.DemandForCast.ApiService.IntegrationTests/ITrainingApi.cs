@@ -17,6 +17,10 @@ public interface ITrainingApi
 
     [Get("/api/training/{id}")]
     Task<IApiResponse<TreinoJobView>> GetAsync(Guid id, CancellationToken ct = default);
+
+    [Get("/api/training")]
+    Task<IApiResponse<List<TreinoJobView>>> ListAsync(
+        [Query] int redeId, [Query] int take = 50, CancellationToken ct = default);
 }
 
 public sealed record EnqueueTrainingRequest(int? MaxSkus, DateOnly? TreinoAte);

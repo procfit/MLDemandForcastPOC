@@ -2,6 +2,7 @@ using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Worker;
 using CosmosPro.ML.DemandForCast.Worker.Comparison;
 using CosmosPro.ML.DemandForCast.Worker.Purchasing;
+using CosmosPro.ML.DemandForCast.Worker.Sessoes;
 using CosmosPro.ML.DemandForCast.Worker.Training;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -36,6 +37,11 @@ builder.Services.AddHostedService<SimulacaoWorker>();
 // que o PBS avaliou.
 builder.Services.AddScoped<ComparacaoProcessor>();
 builder.Services.AddHostedService<ComparacaoWorker>();
+
+// Orquestração das sessões de comparação (F14): polling sobre engine.ComparacaoSessoes.
+// Não processa fase nenhuma — observa o job da fase corrente e cria o da seguinte, o que
+// mantém os três workers acima sem saber que sessões existem.
+builder.Services.AddHostedService<SessaoWorker>();
 
 var host = builder.Build();
 await host.RunAsync();

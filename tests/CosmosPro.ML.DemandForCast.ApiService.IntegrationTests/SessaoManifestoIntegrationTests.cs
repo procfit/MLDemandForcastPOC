@@ -123,9 +123,10 @@ public sealed class SessaoManifestoIntegrationTests(AppHostFixture fixture)
     }
 
     /// <summary>
-    /// Espera o Worker terminar de processar o envio. Sem <c>SessaoWorker</c> (Task 7) a
-    /// sessão do caminho feliz permanece em <c>ProcessandoDados</c> depois do import, então
-    /// o sinal de término é a sugestão gravada — ou um estado terminal.
+    /// Espera o Worker terminar de processar o envio. O sinal é a sugestão gravada, não um
+    /// estado terminal: com o <c>SessaoWorker</c> em pé a sessão do caminho feliz segue para
+    /// treino e comparação, e o que esta classe afirma é o vínculo, não o ciclo — quem cobre
+    /// o ciclo é <see cref="SessaoOrquestracaoIntegrationTests"/>.
     /// </summary>
     private async Task<SessaoView> AguardarSessaoAsync(Guid sessaoId, int redeId)
     {
