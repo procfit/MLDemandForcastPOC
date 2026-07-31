@@ -6,8 +6,15 @@ namespace CosmosPro.ML.DemandForCast.Features;
 /// Constrói <see cref="FeatureVector"/> a partir de séries diárias de
 /// <see cref="DailyObservation"/>. Regra central: nenhuma feature de histórico
 /// (lags/rolling) usa dados mais recentes que D - LeadTimeDias — anti-leakage
-/// rígido (CLAUDE.md §6). Calendário, promoção e preço do próprio dia-alvo D são
+/// rígido (CLAUDE.md §6). Calendário e promoção do próprio dia-alvo D são
 /// tratados como conhecidos (planejados com antecedência).
+///
+/// <para>
+/// O preço é o ponto sensível: o que chega aqui é o preço médio REALIZADO da venda
+/// do dia, não um preço de tabela. Serve para treino, mas para avaliação contra um
+/// baseline que não dispunha dessa informação use
+/// <see cref="FeatureConfig.PrecoCongeladoAPartirDe"/>.
+/// </para>
 /// </summary>
 public sealed class FeatureBuilder(FeatureConfig? config = null)
 {
@@ -52,6 +59,9 @@ public sealed class FeatureBuilder(FeatureConfig? config = null)
 
         int historicoMin = _cfg.HistoricoMinimoDias;
 
+        var corteDePreco = _cfg.PrecoCongeladoAPartirDe;
+        var ancora = corteDePreco is { } corte ? AncoraDePreco(densa, corte, _cfg.RollingLongo) : default;
+
         for (int d = historicoMin; d < densa.Count; d++)
         {
             var alvo = densa[d];
@@ -63,8 +73,13 @@ public sealed class FeatureBuilder(FeatureConfig? config = null)
             var (mean7, _, _) = RollingStats(qtd, d, _cfg.LeadTimeDias, _cfg.RollingCurto);
             var (mean28, std28, max28) = RollingStats(qtd, d, _cfg.LeadTimeDias, _cfg.RollingLongo);
 
+            var congelado = corteDePreco is { } c && alvo.Data >= c;
+
             var precoMediaRecente = RollingPrecoMedia(densa, d, _cfg.LeadTimeDias, _cfg.RollingLongo);
-            var precoRel = precoMediaRecente > 0 ? alvo.PrecoUnitario / precoMediaRecente : 1m;
+            var precoAlvo = congelado ? ancora.Preco : alvo.PrecoUnitario;
+            var precoRel = congelado
+                ? ancora.Relativo
+                : (precoMediaRecente > 0 ? alvo.PrecoUnitario / precoMediaRecente : 1m);
 
             yield return new FeatureVector
             {
@@ -92,7 +107,7 @@ public sealed class FeatureBuilder(FeatureConfig? config = null)
 
                 EmPromocao = alvo.EmPromocao,
                 DiasDesdeUltimaPromo = DiasDesdeUltimaPromo(densa, d, _cfg.LeadTimeDias),
-                PrecoUnitario = alvo.PrecoUnitario,
+                PrecoUnitario = precoAlvo,
                 PrecoRelativoMedia = precoRel,
 
                 Categoria = alvo.Categoria,
@@ -181,6 +196,38 @@ public sealed class FeatureBuilder(FeatureConfig? config = null)
         }
         var std = (decimal)Math.Sqrt((double)(somaSq / n));
         return (mean, std, max);
+    }
+
+    /// <summary>
+    /// Estado de preço da série no instante do corte: último preço praticado
+    /// estritamente antes de <paramref name="corte"/> e sua razão contra a média
+    /// rolling que termina no último dia antes do corte. Os dois valores são
+    /// carregados para a frente em todo dia-alvo a partir do corte, então nenhuma
+    /// informação de preço posterior ao corte alcança a linha de features.
+    ///
+    /// <para>
+    /// Preço zero quando a série não tem nenhum dia com venda antes do corte — mesma
+    /// leitura que um dia densificado sem venda.
+    /// </para>
+    /// </summary>
+    private static (decimal Preco, decimal Relativo) AncoraDePreco(
+        List<DailyObservation> densa, DateOnly corte, int window)
+    {
+        int ultimo = -1;
+        for (int i = densa.Count - 1; i >= 0; i--)
+        {
+            if (densa[i].Data < corte) { ultimo = i; break; }
+        }
+        if (ultimo < 0) return (0m, 1m);
+
+        decimal preco = 0m;
+        for (int i = ultimo; i >= 0; i--)
+        {
+            if (densa[i].PrecoUnitario > 0) { preco = densa[i].PrecoUnitario; break; }
+        }
+
+        var media = RollingPrecoMedia(densa, ultimo, 0, window);
+        return (preco, media > 0 ? preco / media : 1m);
     }
 
     private static decimal RollingPrecoMedia(List<DailyObservation> densa, int targetIdx, int offset, int window)

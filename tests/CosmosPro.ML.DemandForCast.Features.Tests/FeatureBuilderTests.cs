@@ -191,6 +191,53 @@ public sealed class FeatureBuilderTests
     }
 
     [Fact]
+    public void Preco_congelado_nao_deixa_remarcacao_do_dia_alvo_entrar_na_linha()
+    {
+        // Serie a 10,00 ate 04/02 (indice 34) e remarcada para 4,00 dali em diante.
+        // O corte cai em 04/02: nenhum dia-alvo a partir do corte pode carregar o preco
+        // remarcado, porque o desconto so foi conhecido no proprio dia da venda.
+        const int diaDoCorte = 34;
+        var corte = Origem.AddDays(diaDoCorte);
+
+        var serie = SerieIndexada(45, i => new DailyObservation
+        {
+            Data = Origem, LojaId = 1, Sku = "SKU1",
+            Quantidade = 1m,
+            PrecoUnitario = i >= diaDoCorte ? 4m : 10m,
+        });
+
+        var cfg = new FeatureConfig { PrecoCongeladoAPartirDe = corte };
+        var fvs = new FeatureBuilder(cfg).BuildSeries(serie).ToList();
+
+        fvs.Should().NotBeEmpty();
+        fvs.Should().OnlyContain(f => f.Data >= corte);
+        fvs.Should().OnlyContain(f => f.PrecoUnitario == 10m,
+            "o preco do dia-alvo tem de ser o ultimo conhecido ANTES do corte");
+        fvs.Should().NotContain(f => f.PrecoUnitario == 4m);
+        // PrecoRelativoMedia deriva do mesmo preco: 10 / 10 = 1.
+        fvs.Should().OnlyContain(f => f.PrecoRelativoMedia == 1m);
+    }
+
+    [Fact]
+    public void Sem_congelamento_o_preco_realizado_do_dia_alvo_entra_na_linha()
+    {
+        // O congelamento e opt-in: o caminho de treino continua vendo o preco realizado.
+        const int diaDoCorte = 34;
+
+        var serie = SerieIndexada(45, i => new DailyObservation
+        {
+            Data = Origem, LojaId = 1, Sku = "SKU1",
+            Quantidade = 1m,
+            PrecoUnitario = i >= diaDoCorte ? 4m : 10m,
+        });
+
+        var fvs = new FeatureBuilder().BuildSeries(serie).ToList();
+
+        fvs.Should().OnlyContain(f => f.PrecoUnitario == 4m);
+        fvs.Should().Contain(f => f.PrecoRelativoMedia < 1m);
+    }
+
+    [Fact]
     public void Config_com_lag_menor_que_lead_time_eh_rejeitada()
     {
         var cfg = new FeatureConfig { LeadTimeDias = 7, Lags = [3, 14] };

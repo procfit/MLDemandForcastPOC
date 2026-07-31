@@ -4,48 +4,100 @@ using CosmosPro.ML.DemandForCast.Forecasting.Evaluation;
 namespace CosmosPro.ML.DemandForCast.Forecasting.Comparison;
 
 /// <summary>
-/// Como um dia em ruptura (estoque zerado) entra na apuracao da demanda real.
-/// Venda observada em dia de ruptura subestima a demanda — o item nao vendeu
-/// porque nao estava la (CLAUDE.md §6).
+/// Como um dia em ruptura (estoque zerado) entra na apuração da demanda real.
+/// Venda observada em dia de ruptura subestima a demanda — o item não vendeu
+/// porque não estava lá (CLAUDE.md §6).
 /// </summary>
 public enum RupturaTratamento
 {
     /// <summary>
-    /// Padrao. O dia sai da conta dos DOIS bracos: a demanda real e a media
-    /// dos dias sem ruptura, e a previsao do ML e promediada sobre os mesmos dias.
-    /// Mesma politica de mascaramento de <c>WalkForwardBacktest</c>.
-    /// </summary>
-    ExcluirDia,
-
-    /// <summary>
-    /// Leitura conservadora: qualquer ruptura na janela invalida o par inteiro.
-    /// Util quando se suspeita que a ruptura deprimiu a demanda tambem nos dias
-    /// vizinhos (cliente que nao achou e nao voltou).
+    /// <b>Padrão e resultado de manchete.</b> Qualquer ruptura na janela invalida o par
+    /// inteiro. É o único modo em que os dois braços são pontuados sobre exatamente o
+    /// mesmo conjunto de dias: numa janela limpa não há seleção que um braço acompanhe
+    /// e o outro não.
+    ///
+    /// <para>
+    /// Custa população — ruptura é frequente em farma —, e por isso
+    /// <c>ParesDescartados</c> precisa ser reportado junto com <c>ParesAvaliados</c>.
+    /// O custo é aceito porque a alternativa não é comparável (ver
+    /// <see cref="ExcluirDia"/>).
+    /// </para>
     /// </summary>
     ExcluirPar,
 
     /// <summary>
-    /// Analise de sensibilidade apenas: pontua a venda observada como se fosse
-    /// demanda. Sabidamente enviesado para baixo — nunca use como resultado.
+    /// <b>Análise de sensibilidade, nunca o número de manchete.</b> O dia em ruptura sai
+    /// da conta: a demanda real é a média dos dias sobreviventes e a previsão do ML é
+    /// promediada sobre esses mesmos dias.
+    ///
+    /// <para>
+    /// Parece simétrico e não é. O ML tem uma previsão por dia e é reprojetado sobre o
+    /// subconjunto que sobreviveu; o ERP entrega um único escalar para a janela toda e
+    /// não tem como se reprojetar. Como ruptura correlaciona com demanda alta, a
+    /// seleção é feita sobre um desfecho, e só um dos braços se adapta a ela — um ML
+    /// que errasse feio exatamente nos dias descartados sairia impune. Verdade
+    /// compartilhada não é viés compartilhado quando os braços têm graus de liberdade
+    /// diferentes em relação à seleção.
+    /// </para>
+    ///
+    /// <para>
+    /// Continua disponível porque preserva população e responde a uma pergunta
+    /// legítima ("e se a ruptura fosse só ruído de observação?"), desde que lida como
+    /// sensibilidade e apresentada ao lado de <see cref="ExcluirPar"/>.
+    /// </para>
+    /// </summary>
+    ExcluirDia,
+
+    /// <summary>
+    /// Análise de sensibilidade apenas: pontua a venda observada como se fosse
+    /// demanda. Sabidamente enviesado para baixo — é o piso pessimista da demanda
+    /// real, útil para delimitar o intervalo entre "ruptura não existe" e
+    /// <see cref="ExcluirPar"/>. Nunca use como resultado.
     /// </summary>
     Incluir
+}
+
+/// <summary>
+/// Unidade em que as métricas de erro de um resultado foram apuradas. Existe porque
+/// MAE/RMSE só são comparáveis entre painéis quando o ponto de erro é o mesmo — e o
+/// deste comparador não é o do <c>WalkForwardBacktest</c>.
+/// </summary>
+public enum UnidadeMetrica
+{
+    /// <summary>
+    /// Um ponto de erro por (dia, loja, sku) — a unidade do <c>WalkForwardBacktest</c>.
+    /// </summary>
+    ErroPorDia,
+
+    /// <summary>
+    /// Um ponto de erro por par (sugestão, loja, sku), com previsão e verdade
+    /// promediadas sobre a janela avaliada. A média encolhe a variância: para o MESMO
+    /// modelo, o MAE/RMSE nesta unidade sai sistematicamente MENOR que o MAE/RMSE em
+    /// <see cref="ErroPorDia"/>. Os dois números não podem ser lidos lado a lado como
+    /// se medissem a mesma coisa.
+    /// </summary>
+    ErroPorParNaJanela
 }
 
 public sealed record ComparisonOptions
 {
     /// <summary>
     /// Lead time (dias) do feature engineering de F5 — ver <c>FeatureConfig.LeadTimeDias</c>.
-    /// Define a observacao mais recente que alimenta um dia-alvo D: <c>D - LeadTimeDias</c>.
-    /// E o que permite ao comparador checar a regra de informacao sem enxergar as features.
+    /// Define a observação mais recente que alimenta um dia-alvo D: <c>D - LeadTimeDias</c>.
+    /// É o que permite ao comparador checar a regra de informação sem enxergar as features.
     /// </summary>
     public int LeadTimeDias { get; init; } = 7;
 
-    public RupturaTratamento Ruptura { get; init; } = RupturaTratamento.ExcluirDia;
+    /// <summary>
+    /// Padrão <see cref="RupturaTratamento.ExcluirPar"/> — o único modo em que os dois
+    /// braços são pontuados sobre o mesmo conjunto de dias. Os demais são sensibilidade.
+    /// </summary>
+    public RupturaTratamento Ruptura { get; init; } = RupturaTratamento.ExcluirPar;
 
     /// <summary>
-    /// Diferenca absoluta entre os erros dos dois bracos abaixo da qual o par e
-    /// declarado empate. Default 1e-9 = so empate exato. Empate nunca conta como
-    /// vitoria, mas conta no denominador da taxa.
+    /// Diferença absoluta entre os erros dos dois braços abaixo da qual o par é
+    /// declarado empate. Default 1e-9 = só empate exato. Empate nunca conta como
+    /// vitória, mas conta no denominador da taxa.
     /// </summary>
     public double EmpateTolerancia { get; init; } = 1e-9;
 }
@@ -53,14 +105,14 @@ public sealed record ComparisonOptions
 /// <summary>
 /// Um dia-alvo da janela avaliada. <paramref name="Features"/> traz a verdade
 /// (<c>Target</c> = unidades vendidas) e o sinal de ruptura (<c>IsValidTarget</c>
-/// = false), na mesma convencao de F5 — nao ha campo redundante aqui.
+/// = false), na mesma convenção de F5 — não há campo redundante aqui.
 /// </summary>
 public readonly record struct DiaAvaliado(FeatureVector Features, double PrevisaoMl);
 
 /// <summary>
-/// Uma linha da populacao: o par (sugestao, loja, sku) que o ERP de fato avaliou.
-/// A populacao entra pronta e o comparador nunca a alarga — avaliar o ML sobre
-/// itens que o ERP nao olhou tornaria a comparacao sem sentido.
+/// Uma linha da população: o par (sugestão, loja, sku) que o ERP de fato avaliou.
+/// A população entra pronta e o comparador nunca a alarga — avaliar o ML sobre
+/// itens que o ERP não olhou tornaria a comparação sem sentido.
 /// </summary>
 public sealed record ComparisonItem
 {
@@ -69,25 +121,34 @@ public sealed record ComparisonItem
     public required long SugestaoId { get; init; }
 
     /// <summary>
-    /// <c>SugestoesCompra.DataHora</c>. E o corte de informacao: nada que o ML usou
+    /// <c>SugestoesCompra.DataHora</c>. É o corte de informação: nada que o ML usou
     /// pode ser desta data em diante.
     /// </summary>
     public required DateTime DataHora { get; init; }
 
-    /// <summary>1 = "Emax e Eseg", 2 = "Dias de Reposicao". Sao baselines distintos.</summary>
+    /// <summary>
+    /// Última data cujo dado entrou no ajuste do modelo de ML que produziu
+    /// <c>DiaAvaliado.PrevisaoMl</c>. Precisa ser estritamente anterior a
+    /// <see cref="DataHora"/>: sem esse campo, um modelo ajustado sobre o período
+    /// inteiro passaria calado por todas as demais checagens — a regra de informação
+    /// olha as features do dia-alvo, não o conjunto de treino.
+    /// </summary>
+    public required DateOnly ModeloTreinadoAte { get; init; }
+
+    /// <summary>1 = "Emax e Eseg", 2 = "Dias de Reposição". São baselines distintos.</summary>
     public required byte TipoCalculo { get; init; }
 
     public required int LojaId { get; init; }
 
     public required string Sku { get; init; }
 
-    /// <summary><c>SugestoesCompraItens.DemandaDia</c> — a previsao do proprio ERP, unidades/dia.</summary>
+    /// <summary><c>SugestoesCompraItens.DemandaDia</c> — a previsão do próprio ERP, unidades/dia.</summary>
     public required double DemandaDiaErp { get; init; }
 
-    /// <summary>Curva de giro atribuida pelo ERP (A..E). Parametriza a cobertura dele.</summary>
+    /// <summary>Curva de giro atribuída pelo ERP (A..E). Parametriza a cobertura dele.</summary>
     public string Curva { get; init; } = "";
 
-    /// <summary>Dias-alvo da janela, com a previsao do ML para cada um.</summary>
+    /// <summary>Dias-alvo da janela, com a previsão do ML para cada um. Sem datas repetidas.</summary>
     public required IReadOnlyList<DiaAvaliado> Dias { get; init; }
 }
 
@@ -112,15 +173,16 @@ public sealed record ParComparado(
     ResultadoPar Resultado);
 
 /// <summary>
-/// Metricas de um braco. Mesma forma de <c>BacktestResult</c> (Global + PorDimensao)
-/// para a UI renderizar backtest e comparacao com o mesmo codigo.
+/// Métricas de um braço. Mesma forma de <c>BacktestResult</c> (Global + PorDimensao)
+/// para a UI renderizar backtest e comparação com o mesmo código — mas não na mesma
+/// unidade: ver <c>ComparisonResult.Unidade</c>.
 /// </summary>
 public sealed record ArmResult(
     string Nome,
     ForecastMetrics Global,
     IReadOnlyDictionary<string, IReadOnlyDictionary<string, ForecastMetrics>> PorDimensao);
 
-/// <summary>Placar de pares. Empate entra em <see cref="N"/>, nunca em vitoria.</summary>
+/// <summary>Placar de pares. Empate entra em <see cref="N"/>, nunca em vitória.</summary>
 public sealed record WinRate(int N, int VitoriasMl, int VitoriasErp, int Empates)
 {
     public double TaxaVitoriaMl => N == 0 ? 0 : (double)VitoriasMl / N;
@@ -129,14 +191,23 @@ public sealed record WinRate(int N, int VitoriasMl, int VitoriasErp, int Empates
 }
 
 /// <param name="ParesDescartados">
-/// Pares da populacao que ficaram sem nenhum dia pontuavel (ruptura em toda a
-/// janela, ou janela vazia). Reportar junto com <paramref name="ParesAvaliados"/>:
-/// se a fracao descartada for alta, a comparacao perde poder e o numero precisa
-/// ser lido com essa ressalva.
+/// Pares da população que ficaram sem nenhum dia pontuável (ruptura na janela sob
+/// <c>ExcluirPar</c>, ruptura em toda a janela sob <c>ExcluirDia</c>, ou janela
+/// vazia). Reportar junto com <paramref name="ParesAvaliados"/>: se a fração
+/// descartada for alta, a comparação perde poder e o número precisa ser lido com
+/// essa ressalva.
+/// </param>
+/// <param name="Unidade">
+/// Sempre <see cref="UnidadeMetrica.ErroPorParNaJanela"/>. Rotulado explicitamente
+/// porque <c>BacktestResult</c> traz as MESMAS métricas em
+/// <see cref="UnidadeMetrica.ErroPorDia"/>, e promediar a janela encolhe a variância:
+/// o MAE daqui sai menor que o MAE do backtest para o mesmo modelo, sem que o modelo
+/// tenha melhorado. Quem renderizar os dois painéis precisa exibir este rótulo.
 /// </param>
 public sealed record ComparisonResult(
     int ParesAvaliados,
     int ParesDescartados,
+    UnidadeMetrica Unidade,
     ArmResult Erp,
     ArmResult Ml,
     WinRate Vitoria,

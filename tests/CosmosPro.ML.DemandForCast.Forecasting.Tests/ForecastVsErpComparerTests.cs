@@ -9,6 +9,13 @@ public sealed class ForecastVsErpComparerTests
     // (a observacao mais recente que alimenta 07/03 e 28/02, anterior a DataHora).
     private static readonly DateTime DataHora = new(2025, 3, 1, 8, 0, 0);
 
+    private static readonly DateOnly TreinadoAte = new(2025, 2, 28);
+
+    // O padrao de producao descarta o par inteiro na primeira ruptura; os testes que
+    // exercitam mascaramento por dia precisam pedir o modo de sensibilidade.
+    private static readonly ComparisonOptions PorDia =
+        new() { Ruptura = RupturaTratamento.ExcluirDia };
+
     private static DateOnly Dia(int offset) => new DateOnly(2025, 3, 1).AddDays(offset);
 
     private static FeatureVector Fv(
@@ -39,6 +46,7 @@ public sealed class ForecastVsErpComparerTests
             RedeId = 1,
             SugestaoId = sugestaoId,
             DataHora = dataHora ?? DataHora,
+            ModeloTreinadoAte = TreinadoAte,
             TipoCalculo = 1,
             LojaId = loja,
             Sku = sku,
@@ -122,7 +130,7 @@ public sealed class ForecastVsErpComparerTests
 
         var act = () => new ForecastVsErpComparer().Compare(pop);
 
-        act.Should().Throw<ArgumentException>().WithMessage("*informacao*");
+        act.Should().Throw<ArgumentException>().WithMessage("*informa*");
     }
 
     [Fact]
@@ -143,7 +151,27 @@ public sealed class ForecastVsErpComparerTests
         var opt = new ComparisonOptions { LeadTimeDias = 1 };
         var act = () => new ForecastVsErpComparer(opt).Compare([Item(2.0, [(6, 3m, 3.0, false)])]);
 
-        act.Should().Throw<ArgumentException>().WithMessage("*informacao*");
+        act.Should().Throw<ArgumentException>().WithMessage("*informa*");
+    }
+
+    [Fact]
+    public void Modelo_treinado_ate_a_data_da_sugestao_falha_ruidosamente()
+    {
+        // Nenhuma outra checagem pega isso: as features do dia-alvo respeitam o lead
+        // time, mas o AJUSTE do modelo viu o proprio periodo avaliado.
+        var pop = new[] { Item(2.0, UmDia(3m, 3.0)) with { ModeloTreinadoAte = new DateOnly(2025, 3, 1) } };
+
+        var act = () => new ForecastVsErpComparer().Compare(pop);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*treinado at*");
+    }
+
+    [Fact]
+    public void Modelo_treinado_ate_a_vespera_da_sugestao_eh_aceito()
+    {
+        var pop = new[] { Item(2.0, UmDia(3m, 3.0)) with { ModeloTreinadoAte = new DateOnly(2025, 2, 28) } };
+
+        new ForecastVsErpComparer().Compare(pop).ParesAvaliados.Should().Be(1);
     }
 
     // --- Regra de populacao --------------------------------------------------
@@ -158,7 +186,33 @@ public sealed class ForecastVsErpComparerTests
 
         var act = () => new ForecastVsErpComparer().Compare([item]);
 
-        act.Should().Throw<ArgumentException>().WithMessage("*populacao*");
+        act.Should().Throw<ArgumentException>().WithMessage("*popula*");
+    }
+
+    [Fact]
+    public void Dia_repetido_dentro_do_par_falha_ruidosamente()
+    {
+        // Mesma data duas vezes: pesaria dobrado na media da janela sem aparecer
+        // em nenhum campo do resultado.
+        var pop = new[] { Item(2.0, [(0, 3m, 3.0, false), (0, 30m, 30.0, false)]) };
+
+        var act = () => new ForecastVsErpComparer().Compare(pop);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*repete o dia-alvo*");
+    }
+
+    [Fact]
+    public void Par_duplicado_na_populacao_falha_ruidosamente()
+    {
+        var pop = new[]
+        {
+            Item(2.0, UmDia(3m, 3.0), sku: "A"),
+            Item(2.0, UmDia(3m, 3.0), sku: "A"),
+        };
+
+        var act = () => new ForecastVsErpComparer().Compare(pop);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*repete o par*");
     }
 
     [Fact]
@@ -190,7 +244,7 @@ public sealed class ForecastVsErpComparerTests
     }
 
     [Fact]
-    public void Populacao_vazia_devolve_resultado_neutro()
+    public void Populacao_vazia_devolve_resultado_neutro_com_dimensoes_vazias()
     {
         var result = new ForecastVsErpComparer().Compare([]);
 
@@ -199,19 +253,128 @@ public sealed class ForecastVsErpComparerTests
         result.Vitoria.TaxaVitoriaMl.Should().Be(0);
         result.Erp.Global.N.Should().Be(0);
         result.Ml.Global.N.Should().Be(0);
+
+        // Mesma forma do WalkForwardBacktest.EmptyDims(): sem ponto, sem eixo.
+        result.Ml.PorDimensao.Should().BeEmpty();
+        result.Erp.PorDimensao.Should().BeEmpty();
+        result.VitoriaPorDimensao.Should().BeEmpty();
+    }
+
+    // --- Previsao nao finita -------------------------------------------------
+
+    [Fact]
+    public void Previsao_NaN_do_ml_estoura_em_vez_de_virar_vitoria_do_erp()
+    {
+        // Math.Abs(NaN - x) <= tol e false, e NaN < x tambem: o par cairia como
+        // VitoriaErp em silencio enquanto o MAE global virava NaN.
+        var pop = new[] { Item(2.0, UmDia(3m, double.NaN), sku: "SKU_NAN") };
+
+        var act = () => new ForecastVsErpComparer().Compare(pop);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*n*o finita*SKU_NAN*");
+    }
+
+    [Fact]
+    public void Previsao_infinita_do_ml_estoura()
+    {
+        var pop = new[] { Item(2.0, UmDia(3m, double.PositiveInfinity)) };
+
+        var act = () => new ForecastVsErpComparer().Compare(pop);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*n*o finita*");
+    }
+
+    [Fact]
+    public void DemandaDia_nao_finita_do_erp_estoura()
+    {
+        var pop = new[] { Item(double.NaN, UmDia(3m, 3.0), sku: "SKU_ERP") };
+
+        var act = () => new ForecastVsErpComparer().Compare(pop);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*n*o finita*SKU_ERP*");
+    }
+
+    // --- Hierarquia constante ------------------------------------------------
+
+    [Fact]
+    public void Classe_abc_que_muda_no_meio_da_janela_falha_ruidosamente()
+    {
+        // A curva ABC e recalculada periodicamente. Se a janela atravessar uma
+        // reclassificacao, ler a hierarquia do primeiro dia faria o par cair no balde
+        // que o chamador ordenou primeiro — e a quebra por ABC deixaria de reproduzir.
+        var item = Item(2.0, UmDia(3m, 3.0)) with
+        {
+            Dias =
+            [
+                new DiaAvaliado(Fv(Dia(0), 3m, false, 1, "SKU1", "OTC", "A", "SP"), 3.0),
+                new DiaAvaliado(Fv(Dia(1), 3m, false, 1, "SKU1", "OTC", "B", "SP"), 3.0),
+            ],
+        };
+
+        var act = () => new ForecastVsErpComparer().Compare([item]);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*ClasseAbc*");
+    }
+
+    [Fact]
+    public void Categoria_que_muda_no_meio_da_janela_falha_ruidosamente()
+    {
+        var item = Item(2.0, UmDia(3m, 3.0)) with
+        {
+            Dias =
+            [
+                new DiaAvaliado(Fv(Dia(0), 3m, false, 1, "SKU1", "OTC", "A", "SP"), 3.0),
+                new DiaAvaliado(Fv(Dia(1), 3m, false, 1, "SKU1", "Controlado", "A", "SP"), 3.0),
+            ],
+        };
+
+        var act = () => new ForecastVsErpComparer().Compare([item]);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*Categoria*");
+    }
+
+    [Fact]
+    public void UF_que_muda_no_meio_da_janela_falha_ruidosamente()
+    {
+        var item = Item(2.0, UmDia(3m, 3.0)) with
+        {
+            Dias =
+            [
+                new DiaAvaliado(Fv(Dia(0), 3m, false, 1, "SKU1", "OTC", "A", "SP"), 3.0),
+                new DiaAvaliado(Fv(Dia(1), 3m, false, 1, "SKU1", "OTC", "A", "MG"), 3.0),
+            ],
+        };
+
+        var act = () => new ForecastVsErpComparer().Compare([item]);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*UF*");
     }
 
     // --- Ruptura -------------------------------------------------------------
 
     [Fact]
-    public void Dia_em_ruptura_sai_do_calculo_dos_dois_bracos()
+    public void ExcluirPar_eh_o_padrao_e_descarta_o_par_com_qualquer_ruptura()
     {
-        // 10 vendidos no dia sem ruptura; dia em ruptura vendeu 0 (estoque zerado).
-        // A demanda real do par e 10/dia, nao 5/dia. E a media do ML tambem precisa
-        // ignorar o dia mascarado, senao um braco e julgado em dias que o outro nao ve.
-        var pop = new[] { Item(10.0, [(0, 10m, 10.0, false), (1, 0m, 100.0, true)]) };
+        // Sem isso os dois bracos seriam pontuados sobre conjuntos de dias diferentes:
+        // o ML se reprojeta nos sobreviventes, o escalar do ERP nao tem como.
+        var pop = new[] { Item(10.0, [(0, 10m, 10.0, false), (1, 0m, 10.0, true)]) };
 
         var result = new ForecastVsErpComparer().Compare(pop);
+
+        result.ParesAvaliados.Should().Be(0);
+        result.ParesDescartados.Should().Be(1);
+    }
+
+    [Fact]
+    public void ExcluirDia_mascara_o_dia_nos_dois_bracos_como_sensibilidade()
+    {
+        // 10 vendidos no dia sem ruptura; dia em ruptura vendeu 0 (estoque zerado).
+        // No modo de sensibilidade a demanda real do par e 10/dia e a media do ML
+        // ignora o dia mascarado — mas so o ML consegue se reprojetar assim, por isso
+        // este nao e o numero de manchete.
+        var pop = new[] { Item(10.0, [(0, 10m, 10.0, false), (1, 0m, 100.0, true)]) };
+
+        var result = new ForecastVsErpComparer(PorDia).Compare(pop);
 
         var par = result.Detalhe.Single();
         par.DiasAvaliados.Should().Be(1);
@@ -220,15 +383,26 @@ public sealed class ForecastVsErpComparerTests
     }
 
     [Fact]
-    public void ExcluirPar_descarta_o_par_inteiro_quando_ha_qualquer_ruptura()
+    public void ExcluirDia_deixa_o_ml_escapar_do_erro_cometido_no_dia_descartado()
     {
-        var opt = new ComparisonOptions { Ruptura = RupturaTratamento.ExcluirPar };
-        var pop = new[] { Item(10.0, [(0, 10m, 10.0, false), (1, 0m, 10.0, true)]) };
+        // O caso concreto que motiva ExcluirPar como padrao: o ML errou feio (20) no dia
+        // que a ruptura removeu e acertou (8) nos sobreviventes; o ERP tem um escalar so
+        // (10) para a janela inteira. Sob ExcluirDia o ML zera o erro; sob ExcluirPar
+        // ninguem e pontuado num recorte que o outro nao ve.
+        var dias = new (int, decimal, double, bool)[]
+        {
+            (0, 8m, 8.0, false), (1, 8m, 8.0, false), (2, 8m, 8.0, false),
+            (3, 8m, 8.0, false), (4, 8m, 8.0, false),
+            (5, 0m, 20.0, true), (6, 0m, 20.0, true),
+        };
 
-        var result = new ForecastVsErpComparer(opt).Compare(pop);
+        var porDia = new ForecastVsErpComparer(PorDia).Compare([Item(10.0, dias)]);
+        porDia.Detalhe.Single().ErroAbsMl.Should().BeApproximately(0, 1e-9);
+        porDia.Detalhe.Single().Resultado.Should().Be(ResultadoPar.VitoriaMl);
 
-        result.ParesAvaliados.Should().Be(0);
-        result.ParesDescartados.Should().Be(1);
+        var padrao = new ForecastVsErpComparer().Compare([Item(10.0, dias)]);
+        padrao.ParesAvaliados.Should().Be(0);
+        padrao.ParesDescartados.Should().Be(1);
     }
 
     [Fact]
@@ -252,7 +426,7 @@ public sealed class ForecastVsErpComparerTests
             Item(10.0, UmDia(10m, 10.0), sku: "B"),
         };
 
-        var result = new ForecastVsErpComparer().Compare(pop);
+        var result = new ForecastVsErpComparer(PorDia).Compare(pop);
 
         result.ParesAvaliados.Should().Be(1);
         result.ParesDescartados.Should().Be(1);
@@ -299,6 +473,34 @@ public sealed class ForecastVsErpComparerTests
         result.Ml.PorDimensao.Keys.Should().Contain(["Categoria", "ClasseAbc", "Loja", "UF", "CurvaErp"]);
         result.Ml.PorDimensao["Loja"].Keys.Should().Contain("1");
         result.Ml.PorDimensao["CurvaErp"].Keys.Should().Contain("B");
+    }
+
+    // --- Unidade da metrica --------------------------------------------------
+
+    [Fact]
+    public void Resultado_declara_que_a_metrica_e_por_par_e_nao_por_dia()
+    {
+        // O backtest pontua um erro por (dia, loja, sku); aqui e um por par, com a
+        // janela promediada. Sem o rotulo, os dois paineis seriam lidos como a mesma
+        // medida — e a media encolhe a variancia, entao o MAE daqui sai menor de graca.
+        var result = new ForecastVsErpComparer().Compare([Item(2.0, UmDia(3m, 3.0))]);
+
+        result.Unidade.Should().Be(UnidadeMetrica.ErroPorParNaJanela);
+        result.Unidade.Should().NotBe(UnidadeMetrica.ErroPorDia);
+    }
+
+    [Fact]
+    public void Metrica_por_par_encolhe_o_erro_frente_a_metrica_por_dia()
+    {
+        // Mesma serie, mesmas previsoes: o ML erra +6 num dia e -6 no outro. Por dia o
+        // MAE seria 6; promediado no par os erros se cancelam e o MAE vai a zero. E a
+        // razao de existir UnidadeMetrica.
+        var pop = new[] { Item(10.0, [(0, 10m, 16.0, false), (1, 10m, 4.0, false)]) };
+
+        var result = new ForecastVsErpComparer().Compare(pop);
+
+        result.Ml.Global.N.Should().Be(1, "um ponto por par, nao um por dia");
+        result.Ml.Global.Mae.Should().BeApproximately(0, 1e-9);
     }
 
     [Fact]

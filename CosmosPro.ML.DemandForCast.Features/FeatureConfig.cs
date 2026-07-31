@@ -21,6 +21,29 @@ public sealed record FeatureConfig
     public int RollingLongo { get; init; } = 28;
 
     /// <summary>
+    /// Congela o preço a partir desta data (inclusive). Para todo dia-alvo D &gt;= corte,
+    /// <c>PrecoUnitario</c> e <c>PrecoRelativoMedia</c> passam a usar o último preço
+    /// conhecido ESTRITAMENTE antes do corte, e não o preço realizado em D.
+    ///
+    /// <para>
+    /// Existe porque o preço unitário que chega a este builder é o preço médio
+    /// REALIZADO da venda do dia (<c>StageObservationLoader</c> lê
+    /// <c>AVG(PrecoUnitario)</c> de <c>Vendas</c>), não um preço de tabela planejado.
+    /// Num dia com remarcação não planejada, o desconto realizado entraria na linha de
+    /// features daquele mesmo dia e o modelo leria desconto → volume no dia que está
+    /// sendo pontuado (CLAUDE.md §6). Para treino isso é indiferente — o passado é
+    /// passado —, mas para avaliar previsão contra um baseline que não tinha essa
+    /// informação (F13, camada A) o corte é obrigatório.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>null</c> (padrão) = comportamento histórico, preço realizado do próprio D.
+    /// É opt-in: o caminho de treino não muda.
+    /// </para>
+    /// </summary>
+    public DateOnly? PrecoCongeladoAPartirDe { get; init; }
+
+    /// <summary>
     /// Histórico mínimo (em dias) exigido antes do primeiro dia-alvo válido.
     /// É o índice mais antigo que qualquer feature acessa:
     ///  - maior lag exige D - maxLag >= 0
