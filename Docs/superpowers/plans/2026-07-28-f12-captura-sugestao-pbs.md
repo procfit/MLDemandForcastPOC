@@ -161,6 +161,15 @@ CREATE TABLE dbo.SugestoesCompraItens
 
 ## Task 3: Queries do Extractor
 
+> **Substituída pelo plano da [F14](2026-07-28-f14-sessoes-de-comparacao.md)** (Tasks 2–3 de lá).
+> O spec das sessões de comparação mudou a UX do extrator: **uma** sugestão escolhida em
+> catálogo, e não uma janela de datas com múltiplos tipos de cálculo. As queries entregues
+> são `catalogo_sugestoes.sql`, `sugestoes_compra.sql` e `sugestoes_compra_itens.sql`
+> escopadas a uma `SUGESTAO_COMPRA`, mais a query de diagnóstico `EMPRESA <> FILIAL`
+> (`sugestoes_compra_diagnostico.sql`), que sobreviveu do Step 3 daqui. O Step 4 (contagem
+> prévia) foi absorvido pelo catálogo, que já traz o tamanho de cada sugestão. Os blocos SQL
+> abaixo ficam como registro do desenho original.
+
 **Files:**
 - Create: `CosmosPro.ML.DemandForCast.Extractor/Queries/sugestoes_compra.sql`
 - Create: `CosmosPro.ML.DemandForCast.Extractor/Queries/sugestoes_compra_itens.sql`
@@ -239,6 +248,15 @@ ORDER BY R.SUGESTAO_COMPRA, R.FILIAL, R.PRODUTO;
 ---
 
 ## Task 4: Extractor — UI e serviço
+
+> **Substituída pelo plano da [F14](2026-07-28-f14-sessoes-de-comparacao.md)** (Tasks 1 e 4 de lá).
+> No lugar da seção "Sugestões de compra" com janela de datas e checkbox por tipo de cálculo,
+> o extrator lista as sugestões, o usuário escolhe **uma**, e a janela do ZIP é **derivada**
+> dela por `ExtractionWindow.Derive` (12 meses de histórico antes; cobertura depois). O Step 3
+> daqui — união de produtos, para o `SqlBulkCopy` não estourar FK — permaneceu obrigatório e
+> foi implementado com linha placeholder em `produtos.csv`, contada em
+> `ZipManifest.SkusSemCadastro`. O Step 4 (avisar quando não há sugestão na janela) deixou de
+> existir: sem sugestão no catálogo não há o que escolher.
 
 **Files:**
 - Modify: `CosmosPro.ML.DemandForCast.Extractor/MainForm.cs`

@@ -64,12 +64,12 @@ POC de **engine de previsão de demanda** para varejo farmacêutico, alimentando
 
 ---
 
-## 4. Topologia de bancos & schema (F2.1 — atual)
+## 4. Topologia de bancos & schema (atual — F14)
 
 | Banco | Servidor | Schema gerenciado por | Conteúdo |
 |---|---|---|---|
-| `Stage` | SQL Server | **DACPAC** — SQL Server Project `CosmosPro.ML.DemandForCast.Database`, publicado pelo Aspire via `AddSqlProject` (`stage-schema` resource, one-shot, `WaitForCompletion`). | Staging area dos dados importados pelo usuário via UI (CSV/ZIP). Tabelas plural: `Redes`, `Lojas`, `Produtos`, `Vendas`, `EstoquesDiarios`, `Compras`, `Promocoes`, `MercadoIqvia`, `SinaisExternos`. Engine só lê, nunca escreve — o **Worker** é o único que escreve. |
-| `engine` | SQL Server | **EF Core migrations** via `Aspire.Hosting.EntityFrameworkCore.AddEFMigrations` + `RunDatabaseUpdateOnStart` (pacote prerelease 13.3.4-preview). Source-of-truth no projeto `CosmosPro.ML.DemandForCast.Engine`. | Metadados do engine: `Redes` (registro dos inquilinos, fonte de verdade do `RedeId`), `CargasStage`, `TreinoJobs`, `SimulacoesCompra`, e as 7 tabelas do ASP.NET Core Identity (`AspNetUsers` com `RedeId` + FK para `Redes`, `AspNetRoles`, etc). |
+| `Stage` | SQL Server | **DACPAC** — SQL Server Project `CosmosPro.ML.DemandForCast.Database`, publicado pelo Aspire via `AddSqlProject` (`stage-schema` resource, one-shot, `WaitForCompletion`). | Staging area dos dados importados pelo usuário via UI (CSV/ZIP). Tabelas plural: `Redes`, `Lojas`, `Produtos`, `Vendas`, `EstoquesDiarios`, `Compras`, `Promocoes`, `MercadoIqvia`, `SinaisExternos`, `SugestoesCompra`, `SugestoesCompraItens`. Engine só lê, nunca escreve — o **Worker** é o único que escreve. |
+| `engine` | SQL Server | **EF Core migrations** via `Aspire.Hosting.EntityFrameworkCore.AddEFMigrations` + `RunDatabaseUpdateOnStart` (pacote prerelease 13.3.4-preview). Source-of-truth no projeto `CosmosPro.ML.DemandForCast.Engine`. | Metadados do engine: `Redes` (registro dos inquilinos, fonte de verdade do `RedeId`), `CargasStage`, `TreinoJobs`, `SimulacoesCompra`, `ComparacoesPbs`, **`ComparacaoSessoes`** e **`ComparacaoSessaoItens`** (F14, ver abaixo), e as 7 tabelas do ASP.NET Core Identity (`AspNetUsers` com `RedeId` + FK para `Redes`, `AspNetRoles`, etc). |
 | `vendas-olap` | ClickHouse | Runner one-shot `CosmosPro.ML.DemandForCast.OlapSchema` (console .NET) que aplica scripts `Scripts/*.sql` embarcados, controlando versão via tabela `__schema_migrations`. AppHost wires com `AddProject(...).WithReference(vendasOlapDb)`; apiservice usa `WaitForCompletion(olapSchema)`. | Histórico denso para varredura analítica e feature extraction em massa. |
 
 **Regra:** schema do `Stage` **só** muda via SQL Project (não por script ad-hoc). Schema do `engine` **só** muda via EF Core migration. Sem migrations imperativas no banco `Stage`; sem CREATE TABLE manual em código consumidor. Esta separação é deliberada para manter `Stage` como contrato declarativo das fontes que o engine consome.
@@ -79,6 +79,21 @@ POC de **engine de previsão de demanda** para varejo farmacêutico, alimentando
 **`RedeId` nunca trafega em CSV.** O Worker injeta a partir da `CargaStage` (coluna marcada `ServerSupplied` em `TableSchemas`). Isso mantém o contrato CSV, o Extractor e os fakers intactos, e impede que um cliente reivindique a rede de outro escrevendo um id no arquivo. Ao adicionar tabela nova ao Stage, replique o padrão — e lembre que o polling do Worker é **cross-rede** (pega a próxima pendente de qualquer inquilino), então `RedeId` não entra nos índices de polling.
 
 **Identidade e escopo (F11):** login com ASP.NET Core Identity hospedado na **Web** (é o único processo que o navegador alcança — a `apiservice` não tem endpoint externo, e isso é invariante, não acidente). Papéis: `PowerUser` global (`RedeId` nulo) e `UsuarioRede` escopado. Nenhum código deve ler `redeId` de rota, query ou formulário para decidir escopo — use `IRedeContext`, que o deriva do usuário autenticado. A `apiservice` recebe `redeId` na query porque é interna; se algum dia for publicada, este modelo cai e ela precisa de auth própria.
+
+**Sessões de comparação (F14):** duas tabelas novas no `engine`, ambas com source-of-truth em `CosmosPro.ML.DemandForCast.Engine/Entities/`.
+
+- **`ComparacaoSessoes`** (`ComparacaoSessao`) — uma comparação ancorada a **uma** sugestão do PBS. PK `Id` (UUIDv7), `RedeId` com FK para `Redes`, `Status` gravado como texto (`HasConversion<string>`, 20 chars) e máquina de estados de sete fases em `ComparacaoSessao.PodeTransicionar`. Guarda a declaração que veio do `manifesto.json` (`SugestaoId`, `SugestaoDescricao`, `SugestaoDataHora`, `SugestaoTipoCalculo`, `SkusSemCadastro`), os ids das três fases (`CargaStageId`, `TreinoJobId`, `ComparacaoPbsId`), os agregados da manchete em `ResultadoJson` e os dois textos de desfecho (`MotivoInviabilidade` para pré-condição do envio, `MensagemErro` para o que quebrou). Índices `(Status, AtualizadoEm)` — polling **cross-rede**, como as demais filas, então sem `RedeId` — e `(RedeId, CriadoEm)` para a listagem do painel.
+- **`ComparacaoSessaoItens`** (`ComparacaoSessaoItem`) — o detalhe por item, PK `(SessaoId, LojaId, Sku)` e FK `Cascade` para a sessão (apagar a sessão apaga o detalhe; as FKs de job são `Restrict`, para preservar histórico). As precisões espelham o Stage de propósito — unidades `decimal(15,3)`, taxa de demanda/dia `decimal(12,4)`, valor `decimal(14,4)` —, porque o default do EF Core é `decimal(18,2)` e truncaria em silêncio.
+
+**O resultado da sessão é materializado, nunca recalculado.** Cada import faz `DELETE ... WHERE RedeId` no Stage (`CargaProcessor`), então o próximo ZIP da rede apaga a sugestão, as vendas e o cadastro que o resultado descreve. Uma sessão que só guardasse ponteiros viraria tela vazia — ou, pior, tela preenchida com os dados do envio seguinte e a cara do anterior. É por isso que `ComparacaoSessaoItens` existe como tabela em vez de consulta, e por isso `SessaoResultadoMaterializador` roda no fim da fase de comparação (última volta em que a sessão ainda está em `Comparando`), num `DELETE` + `SqlBulkCopy` + `UPDATE Status='Concluida'` na **mesma transação** — o `WHERE ... AND Status = <fase reclamada>` do `UPDATE` final é o que impede materialização em dobro quando dois processos reclamam a mesma sessão. Não mova isso para a abertura da tela e não troque a tabela por um recálculo do Stage.
+
+**As colunas do braço de ML são anuláveis, e isso é o contrato da tabela.** Nulo significa "não foi possível calcular", **nunca** "o ML disse zero" — duas afirmações opostas para quem lê a tela. Hoje a ausência é o desfecho esperado (ver a limitação de horizonte no README §6, F14), então gravar ou renderizar zero faria a tela dizer ao comprador que o ML mandaria não comprar nada. Vale igual para `SobraPbsValor`/`SobraMlValor`, nulos quando o item não tem `PrecoCompra`: zero ali afirmaria "esta compra não deixou capital parado", e é justamente a coluna pela qual o comprador ordena a tabela para achar o pior item. Não "simplifique" nulo para zero em nenhuma das pontas — montador, `DataTable` do bulk, DTO ou Razor.
+
+**`TreinoJob.TreinoAte` é controle anti-vazamento, não parâmetro de desempenho.** O import da sessão traz **de propósito** os dias posteriores à sugestão do ERP: eles são o gabarito contra o qual os dois braços são pontuados. Um treino sem corte aprende sobre esses mesmos dias e a comparação passa a medir memória, não previsão — por isso `ComparacaoProcessor` **recusa** um treino com `TreinoAte` nulo, e recusa também um cuja `TrainingResult.UltimaDataTreinada` não seja estritamente anterior à sugestão mais antiga da janela. `SessaoJobs.Treino` corta no **próprio dia da sugestão** porque o `StageObservationLoader` aplica o corte de forma exclusiva (`Data < @treinoAte`). Encurtar a janela de treino não deixa o modelo melhor, deixa-o honesto: não "otimize" esse corte, e não faça a recusa virar aviso.
+
+**Uma sessão em voo por rede, bloqueada no envio dos dados.** O Stage é por rede e cada import o **substitui inteiro**, então duas sessões em voo na mesma rede não competem por recurso — elas se destroem: na melhor hipótese o segundo envio apaga a sugestão que a primeira ia comparar e a primeira morre culpando um ZIP que estava certo; na pior, a sugestão nova cai no mesmo dia e método e a primeira pontua **a sugestão da segunda** contra o próprio modelo, produzindo um número plausível e falso. A recusa vive em `ComparacoesEndpoints.SessaoConcorrenteAsync`, no `POST /api/comparacoes/{id}/dados` e **não** na criação da sessão: criar sessão não escreve nada no Stage, e bloquear ali deixaria o botão "Nova comparação" quebrado por causa de uma sessão travada. "Em voo" quer dizer *viva* — `AtualizadoEm` dentro de `ComparacaoSessao.LimiteDeFaseSemProgresso` —, de propósito: um worker que morre não pode trancar a rede para sempre, e quem solta o bloqueio precisa usar o mesmo relógio que encerra a fase abandonada.
+
+**`ComparacaoSessaoItens` não tem `RedeId`** — o escopo é transitivo pela FK para a sessão. Todo endpoint que ler a tabela **tem** de juntar a sessão pai e filtrar pelo inquilino que vem do `IRedeContext`, num único round-trip: consultar por `SessaoId` sozinho entregaria o detalhe comercial de um inquilino a quem acertasse um Guid, e conferir o pai numa consulta à parte deixaria a janela entre as duas. É o que `ComparacoesEndpoints.ItensDaSessao` e `TotalDeItensAsync` fazem, e é por onde página, contagem e agregado passam. Quando a sessão não é da rede do chamador, responda **404 e não 403** — um 403 confirmaria a quem sondasse que a sessão existe em outra rede.
 
 **Object storage (MinIO):** recursos do tipo Container com `WithLifetime(Persistent) + WithDataVolume()`. Acesso via `CommunityToolkit.Aspire.Hosting.Minio` 13.3.0. Credenciais (access key + secret key) injetadas como `ParameterResource` Aspire (user-secrets para o secret). Usado para armazenar ZIPs de import.
 
@@ -94,7 +109,7 @@ Mesmo com instrução de autonomia, **pause e confirme** antes de:
 - Qualquer `git push`, criação de branch remoto, ou interação com Azure DevOps / GitHub.
 - Subir/derrubar containers que não façam parte do `AppHost.cs` atual.
 
-Repositório **não é git** ainda (verificado no bootstrap). Não rodar `git init` sem pedido — o usuário pode estar planejando hospedar em Azure DevOps com layout específico.
+Repositório **é git**, com remoto `origin` no GitHub (`cosmos-pro/MLDemandForcastPOC`) e `main` como base de PR. O trabalho acontece em branch por fase. `push`, criação de branch remoto e abertura de PR continuam exigindo pedido explícito — ver a lista acima.
 
 ---
 
@@ -120,7 +135,7 @@ Diga isso explicitamente e pergunte. Exemplos:
 
 ---
 
-## 8. Convenções de commit (quando virar repo git)
+## 8. Convenções de commit
 
 Padrão Conventional Commits em **inglês** no *subject*, corpo em pt-BR se contiver explicação de negócio:
 
