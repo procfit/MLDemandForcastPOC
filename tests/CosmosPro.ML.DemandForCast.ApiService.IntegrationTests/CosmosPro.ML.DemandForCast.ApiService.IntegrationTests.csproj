@@ -14,8 +14,8 @@
     </PackageReference>
     <PackageReference Include="FluentAssertions" Version="8.10.0" />
     <PackageReference Include="Aspire.Hosting.Testing" Version="13.3.4" />
-    <PackageReference Include="Refit" Version="10.1.6" />
-    <PackageReference Include="Refit.HttpClientFactory" Version="10.1.6" />
+    <PackageReference Include="Refit" Version="14.0.1" />
+    <PackageReference Include="Refit.HttpClientFactory" Version="14.0.1" />
   </ItemGroup>
 
   <ItemGroup>

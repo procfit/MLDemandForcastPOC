@@ -215,7 +215,9 @@ public sealed class SessaoGuardasIntegrationTests(AppHostFixture fixture)
             envio.StatusCode.Should().Be(HttpStatusCode.BadRequest,
                 "o envio apagaria o Stage que a outra sessão está usando");
 
-            var erro = envio.Error?.Content ?? "";
+            // Cast porque no Refit 14 `Error` é `ApiExceptionBase`, que só carrega o lado
+            // da requisição; o corpo da resposta desceu para `ApiException`.
+            var erro = (envio.Error as Refit.ApiException)?.Content ?? "";
             erro.Should().Contain("Comparacao de julho",
                 "a recusa tem de nomear a comparação que está ocupando a rede, senão não há o que esperar");
             erro.Should().Contain("comparando os dois métodos",
@@ -329,7 +331,7 @@ public sealed class SessaoGuardasIntegrationTests(AppHostFixture fixture)
 
         envio.StatusCode.Should().Be(HttpStatusCode.Accepted,
             because: "a rede não pode ficar trancada por uma sessão que morreu: " +
-                     (envio.Error?.Content ?? "sem detalhe na resposta"));
+                     ((envio.Error as Refit.ApiException)?.Content ?? "sem detalhe na resposta"));
 
         var seguinte = await AguardarTerminoAsync(outra.Content.Id, redeId);
         seguinte.Status.Should().Be("Inviavel",
