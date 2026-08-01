@@ -63,14 +63,32 @@ jobs:
           dotnet build tests/CosmosPro.ML.DemandForCast.Web.E2ETests/CosmosPro.ML.DemandForCast.Web.E2ETests.csproj --configuration Debug
 
       # Os fixtures conversam com apiservice e webfrontend pelos endpoints HTTPS do
-      # Aspire, então o Kestrel precisa de um certificado de desenvolvimento para
-      # sequer abrir a porta, e o HttpClient do teste precisa confiar nele. `--trust`
-      # em Linux depende do `certutil` do libnss3-tools.
+      # Aspire (`App.CreateHttpClient(..., endpointName: "https")`), então o Kestrel
+      # precisa de um certificado para sequer abrir a porta e o HttpClient do teste
+      # precisa confiar nele.
+      #
+      # `dotnet dev-certs https --trust` NÃO serve aqui: em Linux ele exporta para
+      # `$HOME/.aspnet/dev-certs/trust` e depois verifica se esse diretório está no
+      # `SSL_CERT_DIR`; como não está, ele avisa e sai com **código 4** — mesmo tendo
+      # criado o certificado. Sob `set -e` isso derruba o job inteiro.
+      #
+      # O caminho abaixo é o que a documentação da Microsoft prescreve para CI: cria o
+      # certificado, exporta em PEM para o armazenamento de CAs do sistema e roda
+      # `update-ca-certificates`. Confiança pelo sistema, sem depender do código de
+      # saída do `--trust`.
+      #
+      # Chromium não entra nesta conta: o fixture E2E abre as páginas com
+      # `IgnoreHTTPSErrors = true`, então o navegador não precisa confiar em nada.
       - name: Certificado de desenvolvimento HTTPS
         run: |
           sudo apt-get update
-          sudo apt-get install -y libnss3-tools
-          dotnet dev-certs https --trust
+          sudo apt-get install -y libnss3-tools openssl
+          dotnet dev-certs https
+          sudo -E dotnet dev-certs https \
+            -ep /usr/local/share/ca-certificates/aspnet/https.crt --format PEM
+          sudo update-ca-certificates
+          mkdir -p "$HOME/.aspnet/dev-certs/trust"
+          echo "SSL_CERT_DIR=$HOME/.aspnet/dev-certs/trust:/usr/lib/ssl/certs" >> "$GITHUB_ENV"
 
       # Primeiro os testes puros: são minutos, não dezenas de minutos, e falham por
       # motivos que não têm nada a ver com infraestrutura. Rodá-los antes evita pagar o
