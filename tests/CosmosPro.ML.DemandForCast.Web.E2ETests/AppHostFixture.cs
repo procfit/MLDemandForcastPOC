@@ -1,7 +1,6 @@
 using System.Data;
 
 using Aspire.Hosting;
-using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
@@ -76,8 +75,6 @@ public sealed class AppHostFixture : IAsyncLifetime
         // o IdentityBootstrapper falha de propósito no startup da Web.
         builder.Configuration["Parameters:poweruser-email"] = PowerUserEmail;
         builder.Configuration["Parameters:poweruser-password"] = PowerUserSenha;
-
-        OverrideSqlProjectWithBuiltDacpac(builder, "stage-schema");
 
         App = await builder.BuildAsync();
         await App.StartAsync();
@@ -522,36 +519,6 @@ public sealed class AppHostFixture : IAsyncLifetime
         }
 
         return id;
-    }
-
-    private static void OverrideSqlProjectWithBuiltDacpac(IDistributedApplicationTestingBuilder builder, string resourceName)
-    {
-        var resource = builder.Resources.OfType<SqlProjectResource>().Single(r => r.Name == resourceName);
-
-        var testBin = AppContext.BaseDirectory;
-        var repoRoot = Path.GetFullPath(Path.Combine(testBin, "..", "..", "..", "..", ".."));
-        var dacpacPath = Path.Combine(
-            repoRoot,
-            "CosmosPro.ML.DemandForCast.Database",
-            "bin", "Debug", "net10.0",
-            "CosmosPro.ML.DemandForCast.Database.dacpac");
-
-        if (!File.Exists(dacpacPath))
-        {
-            throw new FileNotFoundException(
-                $"DACPAC não encontrado em '{dacpacPath}'. Garanta `dotnet build` do projeto Database antes de rodar testes.",
-                dacpacPath);
-        }
-
-        var projectMetadataAnnotations = resource.Annotations
-            .Where(a => a.GetType().GetInterfaces().Any(i => i.Name == "IProjectMetadata"))
-            .ToList();
-        foreach (var anno in projectMetadataAnnotations)
-        {
-            resource.Annotations.Remove(anno);
-        }
-
-        builder.CreateResourceBuilder(resource).WithDacpac(dacpacPath);
     }
 
     public async ValueTask DisposeAsync()

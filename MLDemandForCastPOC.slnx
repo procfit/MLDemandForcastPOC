@@ -6,6 +6,7 @@
   <Project Path="CosmosPro.ML.DemandForCast.Extractor/CosmosPro.ML.DemandForCast.Extractor.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.Features/CosmosPro.ML.DemandForCast.Features.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.Forecasting/CosmosPro.ML.DemandForCast.Forecasting.csproj" />
+  <Project Path="CosmosPro.ML.DemandForCast.Migrator/CosmosPro.ML.DemandForCast.Migrator.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.OlapSchema/CosmosPro.ML.DemandForCast.OlapSchema.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.Purchasing/CosmosPro.ML.DemandForCast.Purchasing.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.ServiceDefaults/CosmosPro.ML.DemandForCast.ServiceDefaults.csproj" />

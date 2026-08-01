@@ -50,13 +50,12 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      # Debug, não Release, de propósito: os fixtures de integração e E2E procuram o
-      # DACPAC em `CosmosPro.ML.DemandForCast.Database/bin/Debug/net10.0` e lançam
-      # `FileNotFoundException` na hora se ele não estiver lá (eles substituem o
-      # SqlProject por um DACPAC já compilado, porque o MSBuild não resolve o .sqlproj
-      # em runtime sob `dotnet test`). Compilar os dois projetos de teste que sobem o
-      # AppHost já gera o DACPAC, porque o .sqlproj é ProjectReference da AppHost — e
-      # cobre, transitivamente, todos os projetos de produção multiplataforma.
+      # Debug, não Release, de propósito: é a mesma configuração em que os testes rodam
+      # logo abaixo (`dotnet test --configuration Debug`), e compilar em outra faria o
+      # `--no-build` dos passos de integração/E2E não achar binário. Compilar os dois
+      # projetos de teste que sobem o AppHost cobre, transitivamente, todos os projetos
+      # de produção multiplataforma — inclusive o `Migrator`, que carrega o DACPAC do
+      # próprio `bin` (o `.sqlproj` é ProjectReference dele).
       - name: Compilar (Debug)
         timeout-minutes: 20
         run: |

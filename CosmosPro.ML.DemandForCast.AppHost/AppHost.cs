@@ -55,8 +55,8 @@ var sqlServer = builder.AddSqlServer("sql")
 var stageDb = sqlServer.AddDatabase("Stage");
 
 // engine: metadados próprios do engine (cargas, experimentos, runs, modelos,
-// métricas). Schema será gerenciado via EF Core migrations quando o projeto
-// Engine for criado.
+// métricas) e as tabelas do ASP.NET Core Identity. Schema gerenciado por EF Core
+// migrations, aplicadas pelo `db-migrator` abaixo.
 var engineDb = sqlServer.AddDatabase("engine");
 
 // --- ClickHouse: desativado, código preservado -------------------------------
@@ -100,11 +100,29 @@ var minio = builder.AddMinioContainer("minio", minioAccessKey, minioSecretKey)
 
 // --- Schema deployment -------------------------------------------------------
 
-// SQL Server Project compilado em DACPAC e aplicado ao banco "Stage" a cada
-// F5. `WithReference` já registra OnResourceReady internamente — adicionar
-// `WaitFor` redundante prende o recurso em Waiting (descoberto em F1 debug).
-var stageSchema = builder.AddSqlProject<Projects.CosmosPro_ML_DemandForCast_Database>("stage-schema")
-                         .WithReference(stageDb);
+// Migrador único dos dois bancos: publica o DACPAC do projeto Database no `Stage`
+// e, na sequência, aplica as migrations do EF Core no `engine`. Sai com código != 0
+// se qualquer uma das duas etapas falhar — é isso que sustenta o
+// `condition: service_completed_successfully` no compose gerado.
+//
+// Antes daqui existiam dois recursos: `stage-schema` (`AddSqlProject`) e
+// `engine-migrations` (`AddEFMigrations` + `RunDatabaseUpdateOnStart`). Ambos são
+// one-shot que o Aspire só sabe executar em modo `run`: **nenhum dos dois aparecia no
+// docker-compose.yaml** do `aspire publish`, e o `docker compose up` subia com os dois
+// bancos vazios — sem tabela de Identity, portanto sem login possível. Um console
+// comum vira serviço de compose normal, então o mesmo mecanismo serve F5 e deploy;
+// manter os dois caminhos lado a lado só garantiria que o testado e o deployado
+// divergissem.
+//
+// Um projeto para os dois bancos, e não um por banco, porque num VPS o operador quer
+// uma coisa para checar e um log para ler — e não existe cenário em que se queira um
+// banco migrado sem o outro.
+var dbMigrator = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Migrator>("db-migrator")
+                        .WithReference(stageDb)
+                        .WithReference(engineDb)
+                        .WaitFor(stageDb)
+                        .WaitFor(engineDb)
+                        .WithContainerRegistry(registry);
 
 // --- Services ----------------------------------------------------------------
 
@@ -116,7 +134,7 @@ var apiService = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_ApiServi
     .WaitFor(stageDb)
     .WaitFor(engineDb)
     .WaitFor(minio)
-    .WaitForCompletion(stageSchema)
+    .WaitForCompletion(dbMigrator)
     .WithContainerRegistry(registry);
 
 // Ao reativar o ClickHouse, este é o único ponto do modelo que amarra o apiservice
@@ -125,15 +143,6 @@ var apiService = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_ApiServi
 // apiService.WithReference(vendasOlapDb)
 //           .WaitFor(vendasOlapDb)
 //           .WaitForCompletion(olapSchema);
-
-// EF Core migrations para o banco "engine" — runner one-shot orquestrado pelo
-// Aspire. Usa o DbContext registrado no apiservice (`AddSqlServerDbContext<EngineDbContext>`).
-// Pacote: Aspire.Hosting.EntityFrameworkCore (prerelease 13.3.4-preview).
-// `RunDatabaseUpdateOnStart` já faz o apiservice esperar implicitamente — não
-// adicionar `WaitForCompletion` em cima (criaria ciclo).
-apiService
-    .AddEFMigrations("engine-migrations", "CosmosPro.ML.DemandForCast.Engine.EngineDbContext")
-    .RunDatabaseUpdateOnStart();
 
 // Identity (login, papéis, PowerUser) vive na Web e persiste no banco `engine` —
 // por isso a referência a engineDb, que antes não existia aqui.
@@ -155,6 +164,11 @@ builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Web>("webfrontend")
     .WithEnvironment("PowerUser__Password", powerUserPassword)
     .WaitFor(engineDb)
     .WaitFor(apiService)
+    // A Web semeia o PowerUser no `engine` no primeiro start, então precisa das
+    // tabelas do Identity. Esperar só o apiservice bastaria em `run` (ele já espera o
+    // migrador), mas no compose cada `depends_on` é declarado por serviço — sem esta
+    // linha a Web subiria em paralelo ao migrador.
+    .WaitForCompletion(dbMigrator)
     .WithContainerRegistry(registry);
 
 // Worker que consome a fila engine.CargasStage e processa os ZIPs do MinIO
@@ -166,7 +180,7 @@ builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Worker>("worker")
     .WaitFor(stageDb)
     .WaitFor(engineDb)
     .WaitFor(minio)
-    .WaitForCompletion(stageSchema)
+    .WaitForCompletion(dbMigrator)
     .WithContainerRegistry(registry);
 #pragma warning restore ASPIRECOMPUTE003
 

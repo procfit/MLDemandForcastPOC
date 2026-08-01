@@ -54,14 +54,12 @@ public sealed class AppHostFixture : IAsyncLifetime
         builder.Configuration["Parameters:poweruser-email"] = "integracao@teste.local";
         builder.Configuration["Parameters:poweruser-password"] = "TesteIntegracao!2026";
 
-        // CommunityToolkit.Aspire.Hosting.SqlDatabaseProjects descobre o
-        // caminho do .dacpac avaliando o .sqlproj via Microsoft.Build em runtime.
-        // Sob `dotnet test`, MSBuild não está corretamente resolvido e a carga
-        // falha com "Microsoft.Common.props not found". Como o build do .sqlproj
-        // já gera o .dacpac no `bin\Debug\net10.0` da pasta do projeto, atalhamos
-        // o resource para apontar direto pro arquivo via `WithDacpac` (que
-        // adiciona uma DacpacMetadataAnnotation e bypassa o MSBuild evaluation).
-        OverrideSqlProjectWithBuiltDacpac(builder, "stage-schema");
+        // Aqui existia um remendo (`OverrideSqlProjectWithBuiltDacpac`): o
+        // `AddSqlProject` do CommunityToolkit descobria o caminho do .dacpac avaliando o
+        // .sqlproj via Microsoft.Build em runtime, e sob `dotnet test` isso falhava com
+        // "Microsoft.Common.props not found". Com o schema aplicado pelo projeto
+        // `db-migrator`, que carrega o .dacpac copiado para o próprio bin, não há mais
+        // avaliação de MSBuild em runtime e o remendo deixou de existir.
 
         App = await builder.BuildAsync();
         await App.StartAsync();
@@ -92,42 +90,6 @@ public sealed class AppHostFixture : IAsyncLifetime
         }
     }
 
-    private static void OverrideSqlProjectWithBuiltDacpac(IDistributedApplicationTestingBuilder builder, string resourceName)
-    {
-        var resource = builder.Resources.OfType<SqlProjectResource>().Single(r => r.Name == resourceName);
-
-        // bin do test = ...\tests\<TestProj>\bin\Debug\net10.0\
-        // dacpac     = ...\CosmosPro.ML.DemandForCast.Database\bin\Debug\net10.0\CosmosPro.ML.DemandForCast.Database.dacpac
-        var testBin = AppContext.BaseDirectory;
-        var repoRoot = Path.GetFullPath(Path.Combine(testBin, "..", "..", "..", "..", ".."));
-        var dacpacPath = Path.Combine(
-            repoRoot,
-            "CosmosPro.ML.DemandForCast.Database",
-            "bin", "Debug", "net10.0",
-            "CosmosPro.ML.DemandForCast.Database.dacpac");
-
-        if (!File.Exists(dacpacPath))
-        {
-            throw new FileNotFoundException(
-                $"DACPAC não encontrado em '{dacpacPath}'. Garanta `dotnet build` do projeto Database antes de rodar testes.",
-                dacpacPath);
-        }
-
-        // O SqlProjectResource criado por AddSqlProject<TProject> prioriza
-        // IProjectMetadata (que faz ele resolver o .sqlproj via MSBuild). Removemos
-        // essa anotação para forçar uso da DacpacMetadataAnnotation que WithDacpac
-        // adiciona em seguida.
-        var projectMetadataAnnotations = resource.Annotations
-            .Where(a => a.GetType().GetInterfaces().Any(i => i.Name == "IProjectMetadata"))
-            .ToList();
-        foreach (var anno in projectMetadataAnnotations)
-        {
-            resource.Annotations.Remove(anno);
-        }
-
-        builder.CreateResourceBuilder(resource).WithDacpac(dacpacPath);
-    }
-
     private async Task<string> CaptureResourceSnapshotAsync()
     {
         var states = new Dictionary<string, string>();
@@ -147,7 +109,7 @@ public sealed class AppHostFixture : IAsyncLifetime
     private async Task<string> CaptureFailedResourceLogsAsync()
     {
         var loggerService = App.Services.GetRequiredService<ResourceLoggerService>();
-        var failed = new[] { "stage-schema", "apiservice", "worker", "engine-migrations" };
+        var failed = new[] { "db-migrator", "apiservice", "worker" };
         var output = new List<string>();
 
         foreach (var name in failed)

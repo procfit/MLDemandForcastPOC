@@ -61,13 +61,15 @@ A cada `F5` o AppHost sobe os recursos abaixo lado a lado:
 │  dbgate (UI web de inspeção, volume persistente)                  │
 │   └─ conexão "sql" ← auto-wire (SqlServer.Extensions)             │
 │                                                                   │
-│  stage-schema (one-shot)                                          │
-│   └─ publica DACPAC do projeto Database no banco "Stage"          │
+│  db-migrator (one-shot, console .NET)                             │
+│   ├─ publica o DACPAC do projeto Database no banco "Stage"        │
+│   └─ aplica as EF Core migrations no banco "engine"               │
 │                                                                   │
 │  apiservice  ← .WaitFor(Stage, engine)                            │
-│              ← .WaitForCompletion(stage-schema)                   │
+│              ← .WaitForCompletion(db-migrator)                    │
 │                                                                   │
 │  webfrontend ← .WaitFor(apiservice)                               │
+│              ← .WaitForCompletion(db-migrator)                    │
 │                                                                   │
 │  [futuro] forecast-py — sidecar opcional para Croston/TSB         │
 └───────────────────────────────────────────────────────────────────┘
@@ -105,14 +107,37 @@ Projetos da solução (`MLDemandForCastPOC.slnx`):
 | [CosmosPro.ML.DemandForCast.AppHost](CosmosPro.ML.DemandForCast.AppHost/) | Orquestração Aspire. Declara recursos (DBs, serviços) e dependências. |
 | [CosmosPro.ML.DemandForCast.ApiService](CosmosPro.ML.DemandForCast.ApiService/) | HTTP API que expõe treino, forecast e métricas. Hospeda o engine ML.NET. |
 | [CosmosPro.ML.DemandForCast.Web](CosmosPro.ML.DemandForCast.Web/) | Blazor — UI de cockpit: disparar experimentos, inspecionar backtests, comparar modelos. |
-| [CosmosPro.ML.DemandForCast.Database](CosmosPro.ML.DemandForCast.Database/) | SQL Server Project (`MSBuild.Sdk.SqlProj/4.2.0`). Schema declarativo do banco `Stage`, deployado via DACPAC a cada F5. |
+| [CosmosPro.ML.DemandForCast.Database](CosmosPro.ML.DemandForCast.Database/) | SQL Server Project (`MSBuild.Sdk.SqlProj/4.2.0`). Fonte de verdade do schema declarativo do banco `Stage`; compila para um `.dacpac` que o `Migrator` publica. |
+| [CosmosPro.ML.DemandForCast.Migrator](CosmosPro.ML.DemandForCast.Migrator/) | Console .NET one-shot que aplica o schema dos **dois** bancos: DACPAC no `Stage` (via `Microsoft.SqlServer.DacFx`) e depois EF Core migrations no `engine`. Recurso `db-migrator` no AppHost — roda no F5 e vira serviço do compose publicado. |
 | [CosmosPro.ML.DemandForCast.OlapSchema](CosmosPro.ML.DemandForCast.OlapSchema/) | Console .NET one-shot. Aplicaria scripts SQL versionados (embedded em `Scripts/*.sql`) ao banco `vendas-olap` no ClickHouse, com controle de versão via tabela `__schema_migrations` — mas `Scripts/` está **vazio**, então nunca aplicou nenhum. **Dormente**: o recurso `vendas-olap-schema` que o executava está comentado em `AppHost.cs`, então hoje o projeto não roda em lugar nenhum (ver §ClickHouse acima). |
 | [CosmosPro.ML.DemandForCast.ServiceDefaults](CosmosPro.ML.DemandForCast.ServiceDefaults/) | OpenTelemetry, health checks, resilience. |
 
 ### Por que duas trilhas de migração de schema
 
-- **DACPAC (`Microsoft.Build.Sql` / `MSBuild.Sdk.SqlProj`)** para o banco `Stage` — schema **declarativo**, ideal para representar a fonte transacional consumida pelo engine. SqlPackage faz o diff e aplica ALTERs; ganhamos histórico de schema versionável, refactoring com detecção de rename, e scripts pre/post-deployment. Aplicado pelo Aspire via `AddSqlProject<Projects.X>(...)` (pacote `CommunityToolkit.Aspire.Hosting.SqlDatabaseProjects`).
-- **EF Core migrations** para o banco `engine` — schema **imperativo**, ideal para tabelas próprias do engine (`Experimento`, `BacktestRun`, `ModelArtifactRegistry`). Aplicado pelo Aspire via `AddEFMigrations(...)` + `RunDatabaseUpdateOnStart()` (pacote `Aspire.Hosting.EntityFrameworkCore`, anunciado no changelog 13.3 do Aspire mas ainda não publicado no NuGet — placeholder marcado no `AppHost.cs`).
+- **DACPAC (`MSBuild.Sdk.SqlProj`)** para o banco `Stage` — schema **declarativo**, ideal para representar a fonte transacional consumida pelo engine. O DacFx faz o diff e aplica ALTERs; ganhamos histórico de schema versionável, refactoring com detecção de rename, e scripts pre/post-deployment.
+- **EF Core migrations** para o banco `engine` — schema **imperativo**, ideal para tabelas próprias do engine (`CargasStage`, `TreinoJobs`, `SimulacoesCompra`) e para o Identity.
+
+**Quem aplica as duas:** o projeto [`CosmosPro.ML.DemandForCast.Migrator`](CosmosPro.ML.DemandForCast.Migrator/),
+um console .NET one-shot que roda o DACPAC no `Stage` e, em seguida, `Database.MigrateAsync()`
+no `engine` — recurso `db-migrator` no AppHost. Antes disso eram dois recursos de hosting
+(`AddSqlProject` e `AddEFMigrations().RunDatabaseUpdateOnStart()`); os dois só existiam em
+modo `run` e **sumiam do `docker-compose.yaml`** gerado, deixando o deploy com bancos vazios.
+Um console comum é publicado como serviço de compose normal, então o mesmo mecanismo cobre
+`F5` e deploy — dois mecanismos divergiriam.
+
+**Um projeto para os dois bancos** porque num VPS o operador quer uma coisa para checar e um
+log para ler, e não existe cenário em que se queira um banco migrado sem o outro. A ordem é
+fixa (`Stage` → `engine`) e qualquer falha em qualquer das duas etapas encerra o processo com
+**código de saída != 0**, dizendo no log qual banco e qual etapa falharam — é esse código que
+sustenta o `condition: service_completed_successfully` do compose. Os dois passos são
+idempotentes: o DACPAC é declarativo (segunda execução não gera delta) e o EF pula migrations
+já aplicadas, então rodar o container duas vezes é seguro. Os dois também **criam o banco** se
+ele não existir, que é o caso do primeiro `docker compose up`.
+
+O `.dacpac` viaja **dentro da imagem**: o `.csproj` do Migrator referencia o `.sqlproj`
+(`ReferenceOutputAssembly=false`, só pela ordem de build) e um target pergunta ao projeto
+`Database` o caminho da saída (`GetTargetPath`), copiando-a como `Content` para o `bin` e para
+o `publish`. Em produção não há `.sqlproj` para compilar.
 - **Runner customizado (.NET console one-shot)** para `vendas-olap` no ClickHouse — ClickHouse não tem DACPAC equivalente. O projeto `CosmosPro.ML.DemandForCast.OlapSchema` carrega scripts `.sql` versionados (embedded em `Scripts/`), mantém tabela `__schema_migrations` no próprio ClickHouse, e skipa scripts já aplicados. Convenção de nomes: `NNN_descricao.sql` (versão = nome sem extensão). **O mecanismo está pronto e sem uso: `Scripts/` não tem nenhum arquivo, então cada execução aplicaria zero scripts.** Hoje nem chega a executar — o recurso (`olapSchema`/`vendas-olap-schema`) e o `WaitForCompletion(olapSchema)` no `apiservice` estão comentados em `AppHost.cs`, desativados junto com o resto do ClickHouse (ver §3). **Detalhes completos: [Docs/olap-schema-migrations.md](Docs/olap-schema-migrations.md)**.
 
 ### Projetos previstos (próximas fases)
@@ -262,8 +287,8 @@ onde começar.
 | Job | Runner | O que faz |
 |---|---|---|
 | `windows-tests` | `windows-latest` | Só os testes do extrator. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele. Por isso a suíte é dividida por sistema operacional, e não por capricho de paralelismo. |
-| `linux-tests` | `ubuntu-latest` | Compila em **Debug** (os fixtures procuram o DACPAC em `bin/Debug/net10.0`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
-| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as três imagens) e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
+| `linux-tests` | `ubuntu-latest` | Compila em **Debug** (mesma configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
+| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as quatro imagens) e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
 
 Os testes de integração e E2E ficam em **passos separados e sequenciais** do mesmo job de
 propósito: eles se excluem mutuamente por um lock de arquivo entre processos
@@ -273,16 +298,16 @@ os 30 minutos de tolerância do lock.
 
 **Onde as imagens aparecem.** No GHCR, sob o próprio repositório —
 `ghcr.io/<organização>/<repositório>/…`, tudo **em minúsculas** (o GHCR rejeita maiúsculas
-no push, e o nome do repositório tem algumas; o workflow converte). São três:
-`apiservice`, `webfrontend` e `worker` (`vendas-olap-schema` saiu junto com o ClickHouse —
-§3). A referência exata, com a tag, sai no log dos passos `push-*` da execução — é de lá que
+no push, e o nome do repositório tem algumas; o workflow converte). São quatro:
+`apiservice`, `webfrontend`, `worker` e `db-migrator` (`vendas-olap-schema` saiu junto com o
+ClickHouse — §3). A referência exata, com a tag, sai no log dos passos `push-*` da execução — é de lá que
 se copia para o `.env`. A infraestrutura (SQL Server, MinIO, dashboard) **não** é construída
 aqui: vem de imagem pública, já referenciada no compose gerado.
 
 **O que o operador precisa preencher no `.env`.** O arquivo é enviado **em branco**, do
 jeito que o `aspire publish` gera — nenhuma credencial trafega pelo pipeline:
 
-- `APISERVICE_IMAGE`, `WEBFRONTEND_IMAGE`, `WORKER_IMAGE` — as
+- `APISERVICE_IMAGE`, `WEBFRONTEND_IMAGE`, `WORKER_IMAGE`, `DB_MIGRATOR_IMAGE` — as
   referências completas do parágrafo acima. Saem **vazias**: configurar o registry no
   AppHost afeta o `aspire do push`, não o `aspire publish`.
 - `APISERVICE_PORT`, `WEBFRONTEND_PORT` — as portas publicadas no host.
@@ -293,30 +318,30 @@ jeito que o `aspire publish` gera — nenhuma credencial trafega pelo pipeline:
 - `POWERUSER_EMAIL`, `POWERUSER_PASSWORD` — o administrador global semeado no primeiro
   start da Web. Sem eles a Web **falha no startup de propósito**.
 
-#### O compose não cria o schema de nenhum dos dois bancos
+#### O schema dos dois bancos, no compose (buraco fechado)
 
-Este é o buraco entre o `docker compose up` e uma aplicação utilizável, e é melhor lê-lo
-aqui do que descobri-lo no destino. **Dois recursos do AppHost simplesmente não aparecem no
-`docker-compose.yaml` gerado** — zero ocorrências, sem aviso do `aspire publish`:
+Houve um período em que `docker compose up` subia com os **dois bancos vazios**: os recursos
+`stage-schema` (`AddSqlProject`) e `engine-migrations` (`AddEFMigrations`) eram one-shot que o
+Aspire só sabia executar em modo `run` e **não apareciam no `docker-compose.yaml` gerado** —
+zero ocorrências, sem aviso do `aspire publish`. Sem tabela de Identity não há usuário, sem
+usuário não há login: não era degradação parcial, era aplicação inutilizável.
 
-- **`stage-schema`**, o SQL Server Project que publica o DACPAC no banco `Stage`.
-- **`engine-migrations`**, o runner de EF Core migrations do banco `engine`.
+Os dois foram substituídos pelo **`db-migrator`** — um console .NET comum, e por isso um
+serviço de compose comum. O YAML gerado expressa exatamente o padrão de init container:
 
-Os dois são recursos one-shot que o Aspire só sabe executar em modo `run`; o publisher de
-compose não tem para onde traduzi-los. (`vendas-olap-schema` também não aparece, mas por
-decisão explícita e sem consequência — §3.) O resultado concreto: `docker compose up` sobe SQL
-Server, MinIO, apiservice, webfrontend e worker **com os dois bancos vazios** —
-sem tabela nenhuma. Na prática isso significa que **não existe tabela de Identity, logo não
-existe usuário, logo o login é impossível** e nenhuma tela passa da porta de autenticação;
-o worker não tem `CargasStage` para consultar e a importação não tem para onde escrever.
-Não é degradação parcial, é aplicação inutilizável.
+```yaml
+apiservice:
+  depends_on:
+    db-migrator:
+      condition: "service_completed_successfully"
+```
 
-Enquanto isso não for resolvido, aplicar os dois schemas é **passo manual obrigatório**
-entre o `docker compose up` e o primeiro acesso: publicar o DACPAC do projeto
-`CosmosPro.ML.DemandForCast.Database` contra o banco `Stage` e rodar `dotnet ef database
-update` do `EngineDbContext` contra o banco `engine`, ambos apontando para o SQL Server do
-compose. Fechar o buraco de verdade exige um container de deploy de schema no modelo do
-AppHost — trabalho que ainda não foi feito, e que não deve ser improvisado no `.env`.
+`apiservice`, `webfrontend` e `worker` têm os três esse `depends_on`, então nenhum deles abre
+uma conexão antes de o schema estar aplicado. O migrador cria os bancos se não existirem,
+aplica o DACPAC no `Stage`, aplica as EF Core migrations no `engine` e **sai com código != 0**
+se qualquer etapa falhar — sem isso o gate do compose não teria efeito e os serviços subiriam
+contra um banco pela metade. Não há mais passo manual entre o `docker compose up` e o primeiro
+acesso; o único pré-requisito continua sendo preencher o `.env` (abaixo).
 
 ---
 

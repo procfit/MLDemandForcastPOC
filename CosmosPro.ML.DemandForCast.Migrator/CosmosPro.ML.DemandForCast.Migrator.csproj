@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>CosmosPro.ML.DemandForCast.Migrator</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Engine\CosmosPro.ML.DemandForCast.Engine.csproj" />
+    <ProjectReference Include="..\CosmosPro.ML.DemandForCast.ServiceDefaults\CosmosPro.ML.DemandForCast.ServiceDefaults.csproj" />
+
+    <!-- ReferenceOutputAssembly=false porque a saída do .sqlproj é um .dacpac, não um
+         assembly: o compilador não tem o que fazer com ele. A referência existe pela
+         ordem de build — garante que o .dacpac já esteja gerado quando o target
+         IncluiDacpacDoStage abaixo for perguntar onde ele está. -->
+    <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Database\CosmosPro.ML.DemandForCast.Database.sqlproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.4.3" />
+    <PackageReference Include="Microsoft.SqlServer.DacFx" Version="170.4.83" />
+  </ItemGroup>
+
+  <!-- O .dacpac precisa viajar dentro da imagem: em produção não há .sqlproj para compilar.
+       O caminho vem do próprio .sqlproj (target GetTargetPath), e não de um literal
+       `bin\Debug\net10.0\...`, para o migrador não quebrar em silêncio se o projeto
+       Database mudar de TFM ou de OutputPath.
+       A janela entre ResolveProjectReferences (o .dacpac já foi gerado) e
+       AssignTargetPaths (quando Content vira arquivo a copiar) é a única em que dá para
+       injetar um Content vindo de outro projeto e ainda assim ser copiado tanto pelo
+       build quanto pelo publish. -->
+  <Target Name="IncluiDacpacDoStage"
+          AfterTargets="ResolveProjectReferences"
+          BeforeTargets="AssignTargetPaths">
+    <MSBuild Projects="..\CosmosPro.ML.DemandForCast.Database\CosmosPro.ML.DemandForCast.Database.sqlproj"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_StageDatabaseOutput" />
+    </MSBuild>
+    <ItemGroup>
+      <_StageDacpac Include="@(_StageDatabaseOutput)" Condition="'%(Extension)' == '.dacpac'" />
+      <Content Include="@(_StageDacpac)">
+        <Link>%(Filename)%(Extension)</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
+    </ItemGroup>
+    <Error Condition="'@(_StageDacpac)' == ''"
+           Text="O projeto Database nao devolveu nenhum .dacpac em GetTargetPath. Sem ele o migrador nao tem o schema do Stage para publicar." />
+  </Target>
+
+</Project>
