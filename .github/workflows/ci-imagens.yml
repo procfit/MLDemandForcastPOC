@@ -38,7 +38,7 @@ jobs:
     name: Testes (Linux)
     runs-on: ubuntu-latest
     # Teto do job acima da soma dos passos: os dois projetos que sobem o AppHost real
-    # baixam SQL Server, ClickHouse e MinIO e esperam os bancos ficarem saudáveis, e num
+    # baixam SQL Server e MinIO e esperam os bancos ficarem saudáveis, e num
     # runner frio isso é medido em minutos, não em segundos.
     timeout-minutes: 120
 
@@ -84,6 +84,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libnss3-tools openssl
           dotnet dev-certs https
+          # O `-ep` não cria o diretório de destino: sem este mkdir ele sai com código 3
+          # ("Please create the target directory before exporting").
+          sudo mkdir -p /usr/local/share/ca-certificates/aspnet
           sudo -E dotnet dev-certs https \
             -ep /usr/local/share/ca-certificates/aspnet/https.crt --format PEM
           sudo update-ca-certificates
@@ -125,7 +128,6 @@ jobs:
         run: |
           for imagem in \
             mcr.microsoft.com/mssql/server:2022-latest \
-            docker.io/clickhouse/clickhouse-server:latest \
             docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
           do
             docker pull "$imagem" || true
