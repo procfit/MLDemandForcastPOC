@@ -94,28 +94,22 @@ internal sealed class ExtractionService
     }
 
     /// <summary>Lê as lojas disponíveis — usado só como sanidade em "Testar conexão".</summary>
-    public static IReadOnlyList<LojaOption> LoadLojas(string connectionString, CancellationToken ct)
-    {
-        const string sql = """
-            SELECT EMPRESA_USUARIA, COALESCE(NULLIF(LTRIM(RTRIM(NOME_FANTASIA)),''), NOME)
-            FROM dbo.EMPRESAS_USUARIAS
-            WHERE ATIVO = 'S'
-            ORDER BY EMPRESA_USUARIA;
-            """;
-
-        using var connection = new SqlConnection(connectionString);
-        connection.Open();
-        using var command = new SqlCommand(sql, connection);
-        using var reader = command.ExecuteReader();
-
-        var lojas = new List<LojaOption>();
-        while (reader.Read())
+    public static IReadOnlyList<LojaOption> LoadLojas(string connectionString, CancellationToken ct) =>
+        Step("lojas disponíveis (lojas_disponiveis.sql)", () =>
         {
-            ct.ThrowIfCancellationRequested();
-            lojas.Add(new LojaOption(Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture), reader.GetString(1)));
-        }
-        return lojas;
-    }
+            using var connection = new SqlConnection(connectionString);
+            connection.Open();
+            using var command = new SqlCommand(SqlResources.Load("lojas_disponiveis.sql"), connection);
+            using var reader = command.ExecuteReader();
+
+            var lojas = new List<LojaOption>();
+            while (reader.Read())
+            {
+                ct.ThrowIfCancellationRequested();
+                lojas.Add(new LojaOption(reader.GetInt32(0), reader.GetString(1)));
+            }
+            return (IReadOnlyList<LojaOption>)lojas;
+        });
 
     /// <summary>
     /// Catálogo para o usuário escolher a sugestão no grid do MainForm.
@@ -139,57 +133,101 @@ internal sealed class ExtractionService
         return MesclarCatalogo(cabecalhos, contagens);
     }
 
-    private static IReadOnlyList<SugestaoCatalogoCabecalho> LoadCabecalhosDoCatalogo(
-        SqlConnection connection, DateOnly dataInicio, CancellationToken ct)
+    /// <summary>
+    /// Cabeçalho de uma sugestão pelo id, para quem já sabe qual quer extrair.
+    /// <para>
+    /// Existe porque a extração não precisa de catálogo: carregar a lista inteira só
+    /// para achar uma sugestão passava de 8 minutos na instância real, e tudo o que a
+    /// extração consome do catálogo é a data e a cobertura — que vivem no cabeçalho.
+    /// Devolve <c>null</c> quando o id não existe ou a sugestão não tem método de
+    /// cálculo declarado.
+    /// </para>
+    /// </summary>
+    public static SugestaoCatalogo? LoadSugestaoPorId(string connectionString, long sugestaoId, CancellationToken ct)
     {
-        using var command = new SqlCommand(SqlResources.Load("catalogo_sugestoes.sql").Replace("{{DATA_INICIO}}", "@dataInicio"), connection)
+        var cabecalho = Step("cabeçalho da sugestão (sugestao_por_id.sql)", () =>
         {
-            CommandTimeout = CommandTimeoutSeconds,
-        };
-        command.Parameters.Add("@dataInicio", SqlDbType.Date).Value = dataInicio.ToDateTime(TimeOnly.MinValue);
-        using var cancelRegistration = ct.Register(command.Cancel);
-        using var reader = command.ExecuteReader();
+            using var connection = new SqlConnection(connectionString);
+            connection.Open();
 
-        var cabecalhos = new List<SugestaoCatalogoCabecalho>();
-        while (reader.Read())
-        {
-            ct.ThrowIfCancellationRequested();
-            cabecalhos.Add(new SugestaoCatalogoCabecalho(
-                reader.GetInt64(0),
-                reader.IsDBNull(1) ? null : reader.GetString(1),
-                reader.GetDateTime(2),
-                reader.GetByte(3),
-                // NULL quando os cinco DIAS_CURVA_* da sugestão são todos NULL (ex.:
-                // sugestão TipoCalculo=2 sem curva configurada). 0 é o fallback seguro:
-                // a janela derivada (ExtractionWindow.Derive) fica só até a data da
-                // sugestão, sem cobertura futura — o comprador vê uma janela degenerada
-                // e escolhe outra sugestão, em vez do catálogo inteiro travar.
-                reader.IsDBNull(4) ? 0 : reader.GetInt32(4)));
-        }
-        return cabecalhos;
-    }
-
-    private static IReadOnlyList<SugestaoContagem> LoadContagensDoCatalogo(
-        SqlConnection connection, IReadOnlyList<long> sugestaoIds, CancellationToken ct)
-    {
-        var sql = SqlResources.Load("catalogo_sugestoes_contagens.sql");
-        var contagens = new List<SugestaoContagem>();
-
-        foreach (var lote in LotesDeSugestoes(sugestaoIds))
-        {
-            using var command = CreateContagensCommand(connection, sql, lote);
+            using var command = new SqlCommand(
+                SqlResources.Load("sugestao_por_id.sql").Replace("{{SUGESTAO_ID}}", "@sugestaoId"), connection)
+            {
+                CommandTimeout = CommandTimeoutSeconds,
+            };
+            command.Parameters.Add("@sugestaoId", SqlDbType.BigInt).Value = sugestaoId;
             using var cancelRegistration = ct.Register(command.Cancel);
             using var reader = command.ExecuteReader();
 
+            return reader.Read() ? LerCabecalho(reader) : null;
+        });
+
+        // Contagens ficam zeradas: elas servem ao operador para dimensionar antes de
+        // escolher, e aqui a escolha já foi feita. Pagar a agregação seria refazer o
+        // custo que este caminho existe para evitar.
+        return cabecalho is null ? null : MesclarCatalogo([cabecalho], []).Single();
+    }
+
+    /// <summary>
+    /// Ordinais compartilhados por catalogo_sugestoes.sql e sugestao_por_id.sql —
+    /// as duas devolvem o mesmo cabeçalho, e ler em dois lugares deixaria uma
+    /// mudança de coluna aplicada só em um deles.
+    /// </summary>
+    private static SugestaoCatalogoCabecalho LerCabecalho(SqlDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.IsDBNull(1) ? null : reader.GetString(1),
+        reader.GetDateTime(2),
+        reader.GetByte(3),
+        // NULL quando os cinco DIAS_CURVA_* da sugestão são todos NULL (ex.:
+        // sugestão TipoCalculo=2 sem curva configurada). 0 é o fallback seguro:
+        // a janela derivada (ExtractionWindow.Derive) fica só até a data da
+        // sugestão, sem cobertura futura — o comprador vê uma janela degenerada
+        // e escolhe outra sugestão, em vez do catálogo inteiro travar.
+        reader.IsDBNull(4) ? 0 : reader.GetInt32(4));
+
+    private static IReadOnlyList<SugestaoCatalogoCabecalho> LoadCabecalhosDoCatalogo(
+        SqlConnection connection, DateOnly dataInicio, CancellationToken ct) =>
+        Step("catálogo de sugestões (catalogo_sugestoes.sql)", () =>
+        {
+            using var command = new SqlCommand(SqlResources.Load("catalogo_sugestoes.sql").Replace("{{DATA_INICIO}}", "@dataInicio"), connection)
+            {
+                CommandTimeout = CommandTimeoutSeconds,
+            };
+            command.Parameters.Add("@dataInicio", SqlDbType.Date).Value = dataInicio.ToDateTime(TimeOnly.MinValue);
+            using var cancelRegistration = ct.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
+
+            var cabecalhos = new List<SugestaoCatalogoCabecalho>();
             while (reader.Read())
             {
                 ct.ThrowIfCancellationRequested();
-                contagens.Add(new SugestaoContagem(reader.GetInt64(0), reader.GetInt32(1), reader.GetInt32(2)));
+                cabecalhos.Add(LerCabecalho(reader));
             }
-        }
+            return (IReadOnlyList<SugestaoCatalogoCabecalho>)cabecalhos;
+        });
 
-        return contagens;
-    }
+    private static IReadOnlyList<SugestaoContagem> LoadContagensDoCatalogo(
+        SqlConnection connection, IReadOnlyList<long> sugestaoIds, CancellationToken ct) =>
+        Step("contagens do catálogo (catalogo_sugestoes_contagens.sql)", () =>
+        {
+            var sql = SqlResources.Load("catalogo_sugestoes_contagens.sql");
+            var contagens = new List<SugestaoContagem>();
+
+            foreach (var lote in LotesDeSugestoes(sugestaoIds))
+            {
+                using var command = CreateContagensCommand(connection, sql, lote);
+                using var cancelRegistration = ct.Register(command.Cancel);
+                using var reader = command.ExecuteReader();
+
+                while (reader.Read())
+                {
+                    ct.ThrowIfCancellationRequested();
+                    contagens.Add(new SugestaoContagem(reader.GetInt64(0), reader.GetInt32(1), reader.GetInt32(2)));
+                }
+            }
+
+            return (IReadOnlyList<SugestaoContagem>)contagens;
+        });
 
     /// <summary>
     /// Teto de parâmetros por comando no SQL Server. Não é configuração: é limite
@@ -250,25 +288,22 @@ internal sealed class ExtractionService
     private static (IReadOnlyList<int> LojaIds, IReadOnlySet<string> Skus) LoadEscopoSugestao(
         SqlConnection connection, long sugestaoId, CancellationToken ct)
     {
-        const string sql = """
-            SELECT DISTINCT R.FILIAL, CONVERT(varchar(30), R.PRODUTO)
-            FROM dbo.SUGESTOES_COMPRAS_RESULTADO R
-            WHERE R.SUGESTAO_COMPRA = @sugestao;
-            """;
-
-        using var command = new SqlCommand(sql, connection) { CommandTimeout = CommandTimeoutSeconds };
-        command.Parameters.Add("@sugestao", SqlDbType.BigInt).Value = sugestaoId;
-        using var cancelRegistration = ct.Register(command.Cancel);
-        using var reader = command.ExecuteReader();
-
-        var lojaIds = new HashSet<int>();
-        var skus = new HashSet<string>(StringComparer.Ordinal);
-        while (reader.Read())
+        var (lojaIds, skus) = Step("escopo da sugestão (escopo_sugestao.sql)", () =>
         {
-            ct.ThrowIfCancellationRequested();
-            lojaIds.Add(reader.GetInt32(0));
-            skus.Add(reader.GetString(1));
-        }
+            using var command = CreateSugestaoCommand(connection, SqlResources.Load("escopo_sugestao.sql"), sugestaoId);
+            using var cancelRegistration = ct.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
+
+            var ids = new HashSet<int>();
+            var achados = new HashSet<string>(StringComparer.Ordinal);
+            while (reader.Read())
+            {
+                ct.ThrowIfCancellationRequested();
+                ids.Add(reader.GetInt32(0));
+                achados.Add(reader.GetString(1));
+            }
+            return (ids, achados);
+        });
 
         if (lojaIds.Count == 0)
         {
@@ -282,51 +317,53 @@ internal sealed class ExtractionService
     /// Conta linhas com EMPRESA != FILIAL (ver Queries/sugestoes_compra_diagnostico.sql):
     /// sinal de que LojaId = FILIAL pode não valer nesta instalação do PBS.
     /// </summary>
-    private static void AvisarDivergenciaEmpresaFilial(SqlConnection connection, long sugestaoId, List<string> warnings, CancellationToken ct)
-    {
-        using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra_diagnostico.sql"), sugestaoId);
-        using var cancelRegistration = ct.Register(command.Cancel);
-        using var reader = command.ExecuteReader();
-        if (reader.Read() && !reader.IsDBNull(0))
+    private static void AvisarDivergenciaEmpresaFilial(SqlConnection connection, long sugestaoId, List<string> warnings, CancellationToken ct) =>
+        Step("diagnóstico EMPRESA vs FILIAL (sugestoes_compra_diagnostico.sql)", () =>
         {
-            var divergencias = reader.GetInt32(0);
-            if (divergencias > 0)
+            using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra_diagnostico.sql"), sugestaoId);
+            using var cancelRegistration = ct.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
+            if (reader.Read() && !reader.IsDBNull(0))
             {
-                warnings.Add(
-                    $"{divergencias} linha(s) desta sugestão têm EMPRESA diferente de FILIAL — " +
-                    "a suposição LojaId = FILIAL pode estar incorreta nesta instalação do PBS.");
+                var divergencias = reader.GetInt32(0);
+                if (divergencias > 0)
+                {
+                    warnings.Add(
+                        $"{divergencias} linha(s) desta sugestão têm EMPRESA diferente de FILIAL — " +
+                        "a suposição LojaId = FILIAL pode estar incorreta nesta instalação do PBS.");
+                }
             }
-        }
-    }
+        });
 
     /// <summary>Escreve sugestoes_compra.csv (uma linha) e devolve os campos que o manifesto precisa.</summary>
     private static SugestaoCabecalho? CopySugestaoHeader(
         SqlConnection connection, CsvZipWriter zip, long sugestaoId,
-        int fileIndex, int fileCount, IProgress<ExtractionProgress> progress, CancellationToken ct)
-    {
-        var header = StageContract.Headers[StageContract.SugestoesCompra];
-        using var entry = zip.CreateEntry(StageContract.SugestoesCompra, header);
-        using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra.sql"), sugestaoId);
-        using var cancelRegistration = ct.Register(command.Cancel);
-        using var reader = command.ExecuteReader();
-
-        EnsureShape(reader, header, StageContract.SugestoesCompra);
-
-        SugestaoCabecalho? cabecalho = null;
-        if (reader.Read())
+        int fileIndex, int fileCount, IProgress<ExtractionProgress> progress, CancellationToken ct) =>
+        Step($"{StageContract.SugestoesCompra} (sugestoes_compra.sql)", () =>
         {
-            // Ordinais na ordem de StageContract.Headers[SugestoesCompra]:
-            // 0 SugestaoId, 1 Descricao, 2 DataHora, 3 TipoCalculo.
-            cabecalho = new SugestaoCabecalho(
-                reader.IsDBNull(1) ? null : reader.GetString(1),
-                reader.GetDateTime(2),
-                reader.GetByte(3));
-            entry.WriteRow(reader);
-        }
+            var header = StageContract.Headers[StageContract.SugestoesCompra];
+            using var entry = zip.CreateEntry(StageContract.SugestoesCompra, header);
+            using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra.sql"), sugestaoId);
+            using var cancelRegistration = ct.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
 
-        progress.Report(new ExtractionProgress(StageContract.SugestoesCompra, fileIndex, fileCount, entry.RowCount));
-        return cabecalho;
-    }
+            EnsureShape(reader, header, StageContract.SugestoesCompra);
+
+            SugestaoCabecalho? cabecalho = null;
+            if (reader.Read())
+            {
+                // Ordinais na ordem de StageContract.Headers[SugestoesCompra]:
+                // 0 SugestaoId, 1 Descricao, 2 DataHora, 3 TipoCalculo.
+                cabecalho = new SugestaoCabecalho(
+                    reader.IsDBNull(1) ? null : reader.GetString(1),
+                    reader.GetDateTime(2),
+                    reader.GetByte(3));
+                entry.WriteRow(reader);
+            }
+
+            progress.Report(new ExtractionProgress(StageContract.SugestoesCompra, fileIndex, fileCount, entry.RowCount));
+            return cabecalho;
+        });
 
     private sealed record SugestaoCabecalho(string? Descricao, DateTime DataHora, byte TipoCalculo);
 
@@ -339,48 +376,49 @@ internal sealed class ExtractionService
     private static (long RowCount, int SkusFabricados) CopyProdutosGarantindoUniao(
         SqlConnection connection, CsvZipWriter zip, IReadOnlySet<string> skusDaSugestao,
         int fileIndex, int fileCount, IProgress<ExtractionProgress> progress, CancellationToken ct,
-        List<string> warnings)
-    {
-        var header = StageContract.Headers[StageContract.Produtos];
-        using var entry = zip.CreateEntry(StageContract.Produtos, header);
-        using var command = new SqlCommand(SqlResources.Load("produtos.sql"), connection) { CommandTimeout = CommandTimeoutSeconds };
-        using var cancelRegistration = ct.Register(command.Cancel);
-        using var reader = command.ExecuteReader();
-
-        EnsureShape(reader, header, StageContract.Produtos);
-
-        var vistos = new HashSet<string>(StringComparer.Ordinal);
-        while (reader.Read())
+        List<string> warnings) =>
+        Step($"{StageContract.Produtos} (produtos.sql)", () =>
         {
-            ct.ThrowIfCancellationRequested();
-            vistos.Add(reader.GetString(0)); // Sku é a primeira coluna do header
-            entry.WriteRow(reader);
-            if (entry.RowCount % ProgressRowInterval == 0)
-            {
-                progress.Report(new ExtractionProgress(StageContract.Produtos, fileIndex, fileCount, entry.RowCount));
-            }
-        }
+            var header = StageContract.Headers[StageContract.Produtos];
+            using var entry = zip.CreateEntry(StageContract.Produtos, header);
+            using var command = new SqlCommand(SqlResources.Load("produtos.sql"), connection) { CommandTimeout = CommandTimeoutSeconds };
+            using var cancelRegistration = ct.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
 
-        var faltantes = SkusSemCadastro(skusDaSugestao, vistos);
-        if (faltantes.Count > 0)
-        {
-            foreach (var sku in faltantes)
-            {
-                // Categoria com sentinela (não NULL) para a fabricação ficar visível e
-                // filtrável nos drill-downs e na tabela comparativa por item que o
-                // comprador usa — sem isto o SKU órfão passa por dado real perdido no
-                // bucket NULL de categoria.
-                entry.WriteRow(sku, $"(SKU {sku} não encontrado no cadastro do PBS)",
-                    "(não cadastrado)", null, null, null, null, null, null, null, null, false);
-            }
-            warnings.Add(
-                $"{faltantes.Count} SKU(s) citados pela sugestão não estão cadastrados em PRODUTOS no PBS; " +
-                $"foram incluídos em produtos.csv com nome genérico para o import não travar na FK: {string.Join(", ", faltantes)}.");
-        }
+            EnsureShape(reader, header, StageContract.Produtos);
 
-        progress.Report(new ExtractionProgress(StageContract.Produtos, fileIndex, fileCount, entry.RowCount));
-        return (entry.RowCount, faltantes.Count);
-    }
+            var vistos = new HashSet<string>(StringComparer.Ordinal);
+            while (reader.Read())
+            {
+                ct.ThrowIfCancellationRequested();
+                vistos.Add(reader.GetString(0)); // Sku é a primeira coluna do header
+                entry.WriteRow(reader);
+                if (entry.RowCount % ProgressRowInterval == 0)
+                {
+                    progress.Report(new ExtractionProgress(StageContract.Produtos, fileIndex, fileCount, entry.RowCount));
+                }
+            }
+
+            var faltantes = SkusSemCadastro(skusDaSugestao, vistos);
+            if (faltantes.Count > 0)
+            {
+                foreach (var sku in faltantes)
+                {
+                    // Categoria com sentinela (não NULL) para a fabricação ficar visível e
+                    // filtrável nos drill-downs e na tabela comparativa por item que o
+                    // comprador usa — sem isto o SKU órfão passa por dado real perdido no
+                    // bucket NULL de categoria.
+                    entry.WriteRow(sku, $"(SKU {sku} não encontrado no cadastro do PBS)",
+                        "(não cadastrado)", null, null, null, null, null, null, null, null, false);
+                }
+                warnings.Add(
+                    $"{faltantes.Count} SKU(s) citados pela sugestão não estão cadastrados em PRODUTOS no PBS; " +
+                    $"foram incluídos em produtos.csv com nome genérico para o import não travar na FK: {string.Join(", ", faltantes)}.");
+            }
+
+            progress.Report(new ExtractionProgress(StageContract.Produtos, fileIndex, fileCount, entry.RowCount));
+            return (entry.RowCount, faltantes.Count);
+        });
 
     /// <summary>
     /// SKUs citados pela sugestão que não apareceram no cadastro (PRODUTOS) e por
@@ -425,7 +463,7 @@ internal sealed class ExtractionService
         Action<IDataRecord>? inspect = null)
     {
         using var command = CreateJanelaCommand(connection, SqlResources.Load(queryFile), lojaIds, dataInicial, dataFinal);
-        return CopyQueryCore(entryName, zip, command, fileIndex, fileCount, progress, ct, inspect);
+        return CopyQueryCore(entryName, queryFile, zip, command, fileIndex, fileCount, progress, ct, inspect);
     }
 
     private static long CopyQuery(
@@ -440,40 +478,42 @@ internal sealed class ExtractionService
         CancellationToken ct)
     {
         using var command = CreateSugestaoCommand(connection, SqlResources.Load(queryFile), sugestaoId);
-        return CopyQueryCore(entryName, zip, command, fileIndex, fileCount, progress, ct, inspect: null);
+        return CopyQueryCore(entryName, queryFile, zip, command, fileIndex, fileCount, progress, ct, inspect: null);
     }
 
     private static long CopyQueryCore(
         string entryName,
+        string queryFile,
         CsvZipWriter zip,
         SqlCommand command,
         int fileIndex,
         int fileCount,
         IProgress<ExtractionProgress> progress,
         CancellationToken ct,
-        Action<IDataRecord>? inspect)
-    {
-        var header = StageContract.Headers[entryName];
-        using var entry = zip.CreateEntry(entryName, header);
-        using var cancelRegistration = ct.Register(command.Cancel);
-        using var reader = command.ExecuteReader();
-
-        EnsureShape(reader, header, entryName);
-
-        while (reader.Read())
+        Action<IDataRecord>? inspect) =>
+        Step($"{entryName} ({queryFile})", () =>
         {
-            ct.ThrowIfCancellationRequested();
-            inspect?.Invoke(reader);
-            entry.WriteRow(reader);
-            if (entry.RowCount % ProgressRowInterval == 0)
-            {
-                progress.Report(new ExtractionProgress(entryName, fileIndex, fileCount, entry.RowCount));
-            }
-        }
+            var header = StageContract.Headers[entryName];
+            using var entry = zip.CreateEntry(entryName, header);
+            using var cancelRegistration = ct.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
 
-        progress.Report(new ExtractionProgress(entryName, fileIndex, fileCount, entry.RowCount));
-        return entry.RowCount;
-    }
+            EnsureShape(reader, header, entryName);
+
+            while (reader.Read())
+            {
+                ct.ThrowIfCancellationRequested();
+                inspect?.Invoke(reader);
+                entry.WriteRow(reader);
+                if (entry.RowCount % ProgressRowInterval == 0)
+                {
+                    progress.Report(new ExtractionProgress(entryName, fileIndex, fileCount, entry.RowCount));
+                }
+            }
+
+            progress.Report(new ExtractionProgress(entryName, fileIndex, fileCount, entry.RowCount));
+            return entry.RowCount;
+        });
 
     private static long CopyEstoques(
         SqlConnection connection,
@@ -484,27 +524,28 @@ internal sealed class ExtractionService
         int fileIndex,
         int fileCount,
         IProgress<ExtractionProgress> progress,
-        CancellationToken ct)
-    {
-        var header = StageContract.Headers[StageContract.EstoquesDiarios];
-        using var entry = zip.CreateEntry(StageContract.EstoquesDiarios, header);
-        using var command = CreateJanelaCommand(connection, SqlResources.Load("estoques_movimentos.sql"), lojaIds, dataInicial, dataFinal);
-        using var cancelRegistration = ct.Register(command.Cancel);
-        using var reader = command.ExecuteReader();
-
-        foreach (var linha in StockCarryForward.Densify(ReadMovements(reader, ct), dataFinal))
+        CancellationToken ct) =>
+        Step($"{StageContract.EstoquesDiarios} (estoques_movimentos.sql)", () =>
         {
-            ct.ThrowIfCancellationRequested();
-            entry.WriteRow(linha.Data, linha.LojaId, linha.Sku, linha.Saldo);
-            if (entry.RowCount % ProgressRowInterval == 0)
-            {
-                progress.Report(new ExtractionProgress(StageContract.EstoquesDiarios, fileIndex, fileCount, entry.RowCount));
-            }
-        }
+            var header = StageContract.Headers[StageContract.EstoquesDiarios];
+            using var entry = zip.CreateEntry(StageContract.EstoquesDiarios, header);
+            using var command = CreateJanelaCommand(connection, SqlResources.Load("estoques_movimentos.sql"), lojaIds, dataInicial, dataFinal);
+            using var cancelRegistration = ct.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
 
-        progress.Report(new ExtractionProgress(StageContract.EstoquesDiarios, fileIndex, fileCount, entry.RowCount));
-        return entry.RowCount;
-    }
+            foreach (var linha in StockCarryForward.Densify(ReadMovements(reader, ct), dataFinal))
+            {
+                ct.ThrowIfCancellationRequested();
+                entry.WriteRow(linha.Data, linha.LojaId, linha.Sku, linha.Saldo);
+                if (entry.RowCount % ProgressRowInterval == 0)
+                {
+                    progress.Report(new ExtractionProgress(StageContract.EstoquesDiarios, fileIndex, fileCount, entry.RowCount));
+                }
+            }
+
+            progress.Report(new ExtractionProgress(StageContract.EstoquesDiarios, fileIndex, fileCount, entry.RowCount));
+            return entry.RowCount;
+        });
 
     private static IEnumerable<StockMovement> ReadMovements(SqlDataReader reader, CancellationToken ct)
     {
@@ -592,6 +633,35 @@ internal sealed class ExtractionService
     }
 
     /// <summary>
+    /// Marca a etapa em curso para que uma falha diga onde quebrou. Sem isto o
+    /// operador recebe só a mensagem do driver — "Unable to cast object of type
+    /// 'System.Decimal' to type 'System.Int32'" — que não nomeia query nem coluna,
+    /// e a única saída é adivinhar entre uma dúzia de consultas.
+    /// <para>
+    /// Cancelamento passa sem embrulho: quem cancelou não teve falha, e o modo
+    /// linha de comando distingue os dois pelo código de saída.
+    /// </para>
+    /// </summary>
+    internal static T Step<T>(string etapa, Func<T> acao)
+    {
+        try
+        {
+            return acao();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not ExtractionStepException)
+        {
+            throw new ExtractionStepException(etapa, ex);
+        }
+    }
+
+    internal static void Step(string etapa, Action acao) =>
+        Step<object?>(etapa, () =>
+        {
+            acao();
+            return null;
+        });
+
+    /// <summary>
     /// Falha cedo se a query divergir do header do Stage — sem isso um erro de
     /// ordem de coluna só apareceria no import, com o dado já embaralhado.
     /// </summary>
@@ -624,6 +694,17 @@ internal sealed class ExtractionService
             // Arquivo travado por antivírus/indexador: o erro original é o que importa.
         }
     }
+}
+
+/// <summary>
+/// Falha ocorrida dentro de uma etapa nomeada da extração. O nome da etapa cita a
+/// query e o arquivo de destino, que é a informação que faltava quando a extração
+/// morria com uma mensagem de conversão de tipo sem dizer onde.
+/// </summary>
+internal sealed class ExtractionStepException(string etapa, Exception causa)
+    : InvalidOperationException($"Falha na etapa '{etapa}': {causa.Message}", causa)
+{
+    public string Etapa { get; } = etapa;
 }
 
 internal static class SqlResources

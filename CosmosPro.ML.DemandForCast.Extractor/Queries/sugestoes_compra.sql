@@ -5,7 +5,7 @@
 -- Docs/extracao-pbs-stage.md).
 SELECT
     SugestaoId                = CONVERT(bigint, S.SUGESTAO_COMPRA),
-    Descricao                 = LEFT(S.DESCRICAO, 100),
+    Descricao                 = CONVERT(varchar(100), LEFT(S.DESCRICAO, 100)),
     DataHora                  = CONVERT(datetime2(0), S.DATA_HORA),
     TipoCalculo               = CONVERT(tinyint, S.TIPO_CALCULO),
     LeadTimeDias              = CONVERT(smallint, S.LEADTIME),

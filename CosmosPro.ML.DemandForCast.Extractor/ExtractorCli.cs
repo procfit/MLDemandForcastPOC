@@ -45,7 +45,7 @@ internal static class ExtractorCli
             Console.Error.WriteLine("Cancelando...");
         };
 
-        if (AbrirConexao(connectionString) is { } erroDeConexao)
+        if (AbrirConexao(connectionString, options.StackTrace) is { } erroDeConexao)
         {
             Console.Error.WriteLine(erroDeConexao);
             return CliExitCode.FalhaDeConexao;
@@ -64,7 +64,7 @@ internal static class ExtractorCli
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine(MensagemDeFalha(ex));
+            Console.Error.WriteLine(MensagemDeFalha(ex, options.StackTrace));
             return CliExitCode.FalhaNaExtracao;
         }
     }
@@ -74,7 +74,7 @@ internal static class ExtractorCli
     /// "não consegui falar com o SQL Server" de "a extração quebrou" no código de
     /// saída — depois de aberta, um <c>SqlException</c> pode ser qualquer coisa.
     /// </summary>
-    private static string? AbrirConexao(string connectionString)
+    private static string? AbrirConexao(string connectionString, bool comStackTrace)
     {
         try
         {
@@ -84,7 +84,7 @@ internal static class ExtractorCli
         }
         catch (Exception ex) when (ex is SqlException or InvalidOperationException or ArgumentException)
         {
-            return MensagemDeFalha(ex);
+            return MensagemDeFalha(ex, comStackTrace);
         }
     }
 
@@ -116,14 +116,16 @@ internal static class ExtractorCli
     private static int Extrair(CliOptions options, string connectionString, CancellationToken ct)
     {
         var hoje = DateOnly.FromDateTime(DateTime.Today);
-        var catalogo = ExtractionService.LoadCatalogoSugestoes(connectionString, hoje.AddMonths(-options.MesesRetroativos), ct);
-        var sugestao = catalogo.FirstOrDefault(c => c.SugestaoId == options.SugestaoId);
+        // Busca direta pelo id, sem passar pelo catálogo: quem chega aqui já escolheu, e
+        // varrer a lista inteira para achar uma sugestão custava minutos na instância
+        // real. Por isso também não há mais limite de meses retroativos nesta rota.
+        var sugestao = ExtractionService.LoadSugestaoPorId(connectionString, options.SugestaoId, ct);
 
         if (sugestao is null)
         {
             Console.Error.WriteLine(
-                $"Sugestão {options.SugestaoId} não encontrada nos últimos {options.MesesRetroativos} meses. " +
-                "Confira o id com --list, ou aumente --months-back se ela for mais antiga.");
+                $"Sugestão {options.SugestaoId} não existe no PBS, ou não tem método de cálculo declarado. " +
+                "Confira o id com --list.");
             return CliExitCode.SugestaoNaoEncontrada;
         }
 
@@ -227,15 +229,37 @@ internal static class ExtractorCli
         texto.Length <= limite ? texto : texto[..(limite - 1)] + "…";
 
     /// <summary>
+    /// Mensagem de falha do modo linha de comando. A primeira linha já nomeia a
+    /// etapa quando o erro veio de dentro da extração (ver
+    /// <see cref="ExtractionStepException"/>); depois vem o tipo do erro, que
+    /// distingue um problema de dado de um problema de conversão, e por fim a
+    /// pilha — só sob pedido, porque ela sepulta a mensagem que interessa.
+    /// <para>
     /// Erro 17892 = logon trigger recusou a sessão; no PBS costuma ser filtro por
     /// APP_NAME(), e a mensagem crua do SQL Server não diz isso.
+    /// </para>
     /// </summary>
-    private static string MensagemDeFalha(Exception ex) =>
-        ex is SqlException { Number: 17892 }
-            ? ex.Message + Environment.NewLine
-              + "O servidor tem um logon trigger que recusou a conexão — normalmente por causa do "
-              + "nome da aplicação. Tente de novo com --app-name <nome>."
-            : ex.Message;
+    internal static string MensagemDeFalha(Exception ex, bool comStackTrace)
+    {
+        var linhas = new List<string> { ex.Message };
+
+        if (ex is SqlException { Number: 17892 })
+        {
+            linhas.Add(
+                "O servidor tem um logon trigger que recusou a conexão — normalmente por causa do "
+                + "nome da aplicação. Tente de novo com --app-name <nome>.");
+        }
+
+        // O tipo da causa, não o do embrulho: InvalidCastException aponta para
+        // coluna sem CONVERT na query, e é isso que o operador precisa reportar.
+        linhas.Add($"Tipo do erro: {(ex.InnerException ?? ex).GetType().FullName}");
+
+        linhas.Add(comStackTrace
+            ? ex.ToString()
+            : $"Rode de novo com {CliParser.FlagStackTrace} para ver a pilha de chamadas.");
+
+        return string.Join(Environment.NewLine, linhas);
+    }
 
     /// <summary>
     /// Escreve na thread que reportou, e não via <see cref="Progress{T}"/>: sem

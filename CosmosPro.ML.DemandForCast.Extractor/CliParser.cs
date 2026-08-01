@@ -36,6 +36,9 @@ internal sealed record CliOptions
     public bool Tsv { get; init; }
     public long SugestaoId { get; init; }
     public string OutputDirectory { get; init; } = string.Empty;
+
+    /// <summary>Diagnóstico: acrescenta tipo e pilha de chamadas à saída de erro.</summary>
+    public bool StackTrace { get; init; }
 }
 
 internal sealed record CliParseResult(CliOptions? Options, string? Erro);
@@ -43,6 +46,12 @@ internal sealed record CliParseResult(CliOptions? Options, string? Erro);
 internal static class CliParser
 {
     public const int MesesRetroativosPadrao = 12;
+
+    /// <summary>
+    /// Nome da flag em um lugar só: ajuda, parser e a mensagem que sugere usá-la
+    /// precisam concordar, senão a saída de erro aponta para uma flag inexistente.
+    /// </summary>
+    public const string FlagStackTrace = "--stack-trace";
 
     public static CliParseResult Parse(IReadOnlyList<string> args)
     {
@@ -53,6 +62,7 @@ internal static class CliParser
         var integratedSecurity = false;
         var meses = MesesRetroativosPadrao;
         var tsv = false;
+        var stackTrace = false;
         long? sugestaoId = null;
         string? output = null;
 
@@ -78,6 +88,10 @@ internal static class CliParser
 
                 case "--tsv":
                     tsv = true;
+                    break;
+
+                case FlagStackTrace:
+                    stackTrace = true;
                     break;
 
                 case "--suggestion-id":
@@ -167,6 +181,7 @@ internal static class CliParser
                 IntegratedSecurity = integratedSecurity,
                 MesesRetroativos = meses,
                 Tsv = tsv,
+                StackTrace = stackTrace,
                 SugestaoId = sugestaoId ?? 0,
                 OutputDirectory = output ?? string.Empty,
             },
@@ -227,6 +242,9 @@ internal static class CliParser
               --months-back <n>       Quantos meses para trás procurar sugestões no PBS.
                                       Padrão: {MesesRetroativosPadrao}. Vale para --list e para --extract.
               --tsv                   Sai em TSV com cabeçalho, para script. Só com --list.
+              {FlagStackTrace}           Diagnóstico: acrescenta o tipo do erro e a pilha de
+                                      chamadas à mensagem de falha. Sem ele a saída já nomeia
+                                      a etapa (query e arquivo de destino) que quebrou.
               --env-prefix <prefixo>  Prefixo das variáveis de ambiente de conexão.
                                       Padrão: {CliEnvironment.PrefixoPadrao}
               --port <n>              Porta do SQL Server. Precede a variável de ambiente.

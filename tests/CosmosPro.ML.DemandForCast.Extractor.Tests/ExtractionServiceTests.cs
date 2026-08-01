@@ -67,4 +67,48 @@ public sealed class ExtractionServiceTests
 
         faltantes.Should().Equal("0123");
     }
+
+    [Fact]
+    public void Etapa_sem_erro_devolve_o_valor_intacto()
+    {
+        ExtractionService.Step("lojas.csv (lojas.sql)", () => 42).Should().Be(42);
+    }
+
+    [Fact]
+    public void Falha_dentro_da_etapa_ganha_o_nome_da_etapa_e_preserva_a_causa()
+    {
+        // O caso real: a extração morria com "Unable to cast object of type
+        // 'System.Decimal' to type 'System.Int32'" e nada mais — nem a query, nem
+        // o arquivo de destino. Sem isso, achar a coluna é adivinhação.
+        var causa = new InvalidCastException("Unable to cast object of type 'System.Decimal' to type 'System.Int32'.");
+
+        var acao = () => ExtractionService.Step<int>("escopo da sugestão (escopo_sugestao.sql)", () => throw causa);
+
+        acao.Should().Throw<ExtractionStepException>()
+            .Where(ex => ex.Etapa == "escopo da sugestão (escopo_sugestao.sql)")
+            .Where(ex => ReferenceEquals(ex.InnerException, causa))
+            .WithMessage("*escopo_sugestao.sql*")
+            .WithMessage("*System.Decimal*");
+    }
+
+    [Fact]
+    public void Etapa_aninhada_nao_embrulha_duas_vezes()
+    {
+        // A etapa mais interna é a que sabe onde quebrou; embrulhar de novo a cada
+        // nível deixaria a mensagem com uma trilha de prefixos e a causa no fim.
+        var acao = () => ExtractionService.Step<int>("externa", () =>
+            ExtractionService.Step<int>("interna", () => throw new InvalidOperationException("raiz")));
+
+        acao.Should().Throw<ExtractionStepException>().Where(ex => ex.Etapa == "interna");
+    }
+
+    [Fact]
+    public void Cancelamento_atravessa_a_etapa_sem_embrulho()
+    {
+        // O modo linha de comando separa cancelamento de falha pelo código de
+        // saída, e essa separação é feita pelo tipo da exceção.
+        var acao = () => ExtractionService.Step<int>("vendas.csv (vendas.sql)", () => throw new OperationCanceledException());
+
+        acao.Should().Throw<OperationCanceledException>();
+    }
 }

@@ -5,9 +5,12 @@
 -- segunda ida ao banco: agregar a tabela de resultado (dezenas de milhoes de
 -- linhas) por faixa de datas do cabecalho custava minutos na instancia real,
 -- enquanto agregar por uma lista fechada de ids responde instantaneamente.
+-- Toda coluna daqui é lida de forma tipada pelo consumidor, então toda coluna
+-- declara o tipo: numérico do PBS é sempre numeric(p,s) e chega como
+-- System.Decimal quando falta o CONVERT.
 SELECT
     SugestaoId        = CONVERT(bigint, S.SUGESTAO_COMPRA),
-    Descricao         = LEFT(S.DESCRICAO, 100),
+    Descricao         = CONVERT(varchar(100), LEFT(S.DESCRICAO, 100)),
     DataHora          = CONVERT(datetime2(0), S.DATA_HORA),
     TipoCalculo       = CONVERT(tinyint, S.TIPO_CALCULO),
     DiasCoberturaMax  = CONVERT(int, (SELECT MAX(v) FROM (VALUES

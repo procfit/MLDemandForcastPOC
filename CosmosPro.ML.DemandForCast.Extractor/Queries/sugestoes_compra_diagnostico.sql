@@ -4,7 +4,7 @@
 -- validado na Retiro (item aberto do plano F12). QtdDivergencias > 0 é o sinal
 -- para o extrator avisar o usuário em vez de seguir em silêncio.
 SELECT
-    QtdDivergencias = COUNT(*)
+    QtdDivergencias = CONVERT(int, COUNT(*))
 FROM dbo.SUGESTOES_COMPRAS_RESULTADO R
 WHERE R.SUGESTAO_COMPRA = {{SUGESTAO}}
   AND R.EMPRESA <> R.FILIAL;

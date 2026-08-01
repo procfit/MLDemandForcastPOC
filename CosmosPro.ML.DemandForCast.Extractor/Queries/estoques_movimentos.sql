@@ -47,7 +47,7 @@ Reconstruido AS (
 SELECT
     LojaId              = CONVERT(int, R.Empresa),
     Sku                 = CONVERT(varchar(30), R.Produto),
-    Data                = R.Dia,
+    Data                = CONVERT(date, R.Dia),
     QuantidadeEmEstoque = CONVERT(decimal(12,3), R.Saldo)
 FROM Reconstruido R
 WHERE R.Dia <= @dataFinal

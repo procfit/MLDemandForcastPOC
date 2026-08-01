@@ -107,6 +107,17 @@ public sealed class CliParserTests
     }
 
     [Fact]
+    public void Stack_trace_vale_nos_dois_modos_e_e_desligada_por_padrao()
+    {
+        // Diagnóstico não é modo de operação: a falha que se quer investigar pode
+        // estar tanto na listagem quanto na extração.
+        CliParser.Parse(["--list"]).Options!.StackTrace.Should().BeFalse();
+        CliParser.Parse(["--list", CliParser.FlagStackTrace]).Options!.StackTrace.Should().BeTrue();
+        CliParser.Parse(["--extract", "--suggestion-id", "1", "--output", @"C:\x", CliParser.FlagStackTrace])
+            .Options!.StackTrace.Should().BeTrue();
+    }
+
+    [Fact]
     public void Integrated_security_e_tsv_sao_chaves_sem_valor()
     {
         var o = CliParser.Parse(["--list", "--integrated-security", "--tsv"]).Options!;
@@ -126,6 +137,7 @@ public sealed class CliParserTests
     [InlineData("--port")]
     [InlineData("--app-name")]
     [InlineData("--integrated-security")]
+    [InlineData("--stack-trace")]
     public void Toda_flag_aceita_aparece_no_help(string flag)
     {
         // A ajuda é o único lugar onde o operador descobre a flag; flag nova sem
