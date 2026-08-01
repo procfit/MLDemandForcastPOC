@@ -92,7 +92,7 @@ internal sealed class TreinoWorker(
             UPDATE cte
                 SET Status = 'Processando',
                     DataInicioProcessamento = SYSDATETIMEOFFSET()
-                OUTPUT INSERTED.Id, INSERTED.MaxSkus;
+                OUTPUT INSERTED.Id, INSERTED.MaxSkus, INSERTED.RedeId, INSERTED.TreinoAte;
             """;
 
         await using var conn = new SqlConnection(connStr);
@@ -105,6 +105,11 @@ internal sealed class TreinoWorker(
         {
             Id = reader.GetGuid(0),
             MaxSkus = reader.GetInt32(1),
+            // RedeId e TreinoAte não vinham no OUTPUT: o processor recebia RedeId 0 e
+            // treinava sobre o Stage de rede nenhuma. Tudo que o TreinoProcessor lê do
+            // job precisa estar aqui — o claim é a única leitura da linha.
+            RedeId = reader.GetInt32(2),
+            TreinoAte = reader.IsDBNull(3) ? null : reader.GetFieldValue<DateOnly>(3),
             Status = TreinoStatus.Processando,
         };
     }

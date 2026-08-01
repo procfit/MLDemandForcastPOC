@@ -2,11 +2,19 @@ namespace CosmosPro.ML.DemandForCast.Features.Models;
 
 /// <summary>
 /// Linha de features pronta para treino/inferência, referente a um dia-alvo D
-/// de um SKU em uma loja. Todas as features numéricas respeitam o lead time:
-/// usam apenas informação disponível até D - <c>LeadTimeDias</c> (ver
-/// <see cref="FeatureConfig"/>), exceto calendário/promoção/preço do próprio D
-/// que são conhecidos antecipadamente (a compra é planejada sabendo o dia da
-/// semana, a promoção agendada e o preço de tabela).
+/// de um SKU em uma loja. As features de histórico (lags/rolling) respeitam o lead
+/// time: usam apenas informação disponível até D - <c>LeadTimeDias</c> (ver
+/// <see cref="FeatureConfig"/>). Calendário e promoção do próprio D são conhecidos
+/// antecipadamente (a compra é planejada sabendo o dia da semana e a promoção
+/// agendada).
+///
+/// <para>
+/// <b>Preço é a exceção honesta:</b> <see cref="PrecoUnitario"/> e
+/// <see cref="PrecoRelativoMedia"/> vêm do preço médio REALIZADO da venda de D, não
+/// de um preço de tabela — remarcação não planejada entra neles. Para treino isso é
+/// aceitável; para avaliar contra um baseline que não tinha essa informação, gere as
+/// features com <see cref="FeatureConfig.PrecoCongeladoAPartirDe"/>.
+/// </para>
 /// </summary>
 public sealed record FeatureVector
 {
@@ -44,12 +52,23 @@ public sealed record FeatureVector
     public bool FimDeSemana { get; init; }
     public bool Feriado { get; init; }
 
-    // --- Promoção / preço do dia-alvo D (planejados, conhecidos) --------------
+    // --- Promoção (planejada, conhecida) do dia-alvo D ------------------------
     public bool EmPromocao { get; init; }
     public int DiasDesdeUltimaPromo { get; init; }
+
+    // --- Preço do dia-alvo D (realizado, salvo se congelado) ------------------
+
+    /// <summary>
+    /// Preço praticado em D. Realizado por padrão; com
+    /// <c>FeatureConfig.PrecoCongeladoAPartirDe</c>, o último preço conhecido antes
+    /// do corte.
+    /// </summary>
     public decimal PrecoUnitario { get; init; }
 
-    /// <summary>Preço de D relativo à média de preço da janela rolling (1.0 = igual).</summary>
+    /// <summary>
+    /// <see cref="PrecoUnitario"/> relativo à média de preço da janela rolling
+    /// (1.0 = igual). Herda o congelamento de <see cref="PrecoUnitario"/>.
+    /// </summary>
     public decimal PrecoRelativoMedia { get; init; }
 
     // --- Hierarquia (categóricas) ---------------------------------------------

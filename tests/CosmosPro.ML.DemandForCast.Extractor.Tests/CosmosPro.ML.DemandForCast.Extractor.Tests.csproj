@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <!-- Sobrescreve o net10.0 do Directory.Build.props: o extrator é WinForms. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>CosmosPro.ML.DemandForCast.Extractor.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="8.10.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\CosmosPro.ML.DemandForCast.Extractor\CosmosPro.ML.DemandForCast.Extractor.csproj" />
+    <ProjectReference Include="..\..\CosmosPro.ML.DemandForCast.Worker\CosmosPro.ML.DemandForCast.Worker.csproj" />
+    <ProjectReference Include="..\..\CosmosPro.ML.DemandForCast.ApiService\CosmosPro.ML.DemandForCast.ApiService.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="FluentAssertions" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

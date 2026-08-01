@@ -1,0 +1,23 @@
+{
+  "name": "mldemandforcastpoc",
+  "version": "1.0.0",
+  "description": "POC de um **engine de previsão de demanda** para apoiar o processo de **sugestão de compra** no varejo farmacêutico. Construído sobre .NET 10 + .NET Aspire, com fontes de dados em **SQL Server** e/ou **ClickHouse**.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cosmos-pro/MLDemandForcastPOC.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/cosmos-pro/MLDemandForcastPOC/issues"
+  },
+  "homepage": "https://github.com/cosmos-pro/MLDemandForcastPOC#readme"
+}

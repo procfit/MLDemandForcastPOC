@@ -1,6 +1,28 @@
-<RadzenPanelMenu>
-    <RadzenPanelMenuItem Text="Importação" Icon="cloud_upload" Path="/" Match="NavLinkMatch.All" />
-    <RadzenPanelMenuItem Text="Dados de treinamento" Icon="table_view" Path="/dados" />
-    <RadzenPanelMenuItem Text="Treinamento" Icon="model_training" Path="/treinamento" />
-    <RadzenPanelMenuItem Text="Sugestão de compra" Icon="shopping_cart" Path="/sugestao-compra" />
-</RadzenPanelMenu>
+@* Esconder item de menu é cosmético — o controle real é o [Authorize] na página.
+   Os dois existem: o menu apenas evita oferecer o que seria negado. *@
+<AuthorizeView>
+    <Authorized>
+        <RadzenPanelMenu>
+            <RadzenPanelMenuItem Text="Comparações" Icon="compare_arrows" Path="/" Match="NavLinkMatch.All" />
+
+            <AuthorizeView Roles="@Papeis.PowerUser" Context="admin">
+                <Authorized>
+                    <RadzenPanelMenuItem Text="Administração" Icon="admin_panel_settings" Expanded="true">
+                        <RadzenPanelMenuItem Text="Redes" Icon="store" Path="/admin/redes" />
+                        <RadzenPanelMenuItem Text="Usuários" Icon="group" Path="/admin/usuarios" />
+                    </RadzenPanelMenuItem>
+                </Authorized>
+            </AuthorizeView>
+
+            @* Etapas técnicas da engenharia — o comprador entra pelas Comparações;
+               isto fica recolhido para quem precisa inspecionar o pipeline direto. *@
+            <RadzenPanelMenuItem Text="Técnico" Icon="build">
+                <RadzenPanelMenuItem Text="Importação manual" Icon="cloud_upload" Path="/tecnico/importar" />
+                <RadzenPanelMenuItem Text="Dados de treinamento" Icon="table_view" Path="/dados" />
+                <RadzenPanelMenuItem Text="Treinamento" Icon="model_training" Path="/treinamento" />
+                <RadzenPanelMenuItem Text="Sugestão de compra" Icon="shopping_cart" Path="/sugestao-compra" />
+                <RadzenPanelMenuItem Text="Comparativo ERP × ML" Icon="balance" Path="/comparacao" />
+            </RadzenPanelMenuItem>
+        </RadzenPanelMenu>
+    </Authorized>
+</AuthorizeView>

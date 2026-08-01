@@ -60,6 +60,9 @@ internal static class PurchasingEndpoints
         var job = new SimulacaoCompra
         {
             Id = Guid.CreateVersion7(),
+            // Herdada do treino, não recebida do request: garante que a simulação
+            // roda sobre a mesma rede cujos dados treinaram o modelo.
+            RedeId = treino.RedeId,
             Status = SimulacaoStatus.Pendente,
             DataAgendamento = DateTimeOffset.UtcNow,
             TreinoJobId = req.TreinoJobId,
@@ -77,10 +80,11 @@ internal static class PurchasingEndpoints
     }
 
     private static async Task<IResult> ListAsync(
-        EngineDbContext db, CancellationToken ct, [FromQuery] int take = 50)
+        EngineDbContext db, CancellationToken ct, [FromQuery] int take = 50, [FromQuery] int redeId = 1)
     {
         var jobs = await db.SimulacoesCompra
             .AsNoTracking()
+            .Where(j => j.RedeId == redeId)
             .OrderByDescending(j => j.DataAgendamento)
             .Take(Math.Clamp(take, 1, 200))
             .Select(j => new SimulacaoView(

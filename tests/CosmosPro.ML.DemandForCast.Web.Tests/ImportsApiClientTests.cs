@@ -3,11 +3,26 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
 using CosmosPro.ML.DemandForCast.Web;
+using CosmosPro.ML.DemandForCast.Web.Services;
 
 namespace CosmosPro.ML.DemandForCast.Web.Tests;
 
 public sealed class ImportsApiClientTests
 {
+    private const int RedeDeTeste = 7;
+
+    /// <summary>
+    /// Escopo de rede fixo. O que importa nestes testes é que o client <b>envie</b>
+    /// o redeId na query — a resolução real (claim, papel) é coberta em RedeContextTests.
+    /// </summary>
+    private sealed class RedeContextFixo(int redeId) : IRedeContext
+    {
+        public Task<int> GetRedeIdAtualAsync() => Task.FromResult(redeId);
+        public Task<Guid> GetUsuarioIdAtualAsync() => Task.FromResult(Guid.Empty);
+        public Task<bool> EhPowerUserAsync() => Task.FromResult(false);
+        public Task<bool> PodeAcessarAsync(int id) => Task.FromResult(id == redeId);
+    }
+
     private static ImportsApiClient ClientReturning(HttpStatusCode status, string jsonBody)
     {
         var handler = new StubHttpMessageHandler(req =>
@@ -19,7 +34,7 @@ public sealed class ImportsApiClientTests
             return resp;
         });
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://api.test/") };
-        return new ImportsApiClient(http);
+        return new ImportsApiClient(http, new RedeContextFixo(RedeDeTeste));
     }
 
     [Fact]
@@ -68,12 +83,14 @@ public sealed class ImportsApiClientTests
             };
         });
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://api.test/") };
-        var client = new ImportsApiClient(http);
+        var client = new ImportsApiClient(http, new RedeContextFixo(RedeDeTeste));
 
         var result = await client.ListAsync(take: 25);
 
         captured.Should().NotBeNull();
-        captured!.RequestUri!.PathAndQuery.Should().Be("/api/imports?take=25");
+        captured!.RequestUri!.PathAndQuery.Should().Be(
+            $"/api/imports?take=25&redeId={RedeDeTeste}",
+            "o client tem de enviar o escopo de rede resolvido pelo IRedeContext");
         result.Should().ContainSingle();
         result[0].LinhasImportadas.Should().Be(18);
     }

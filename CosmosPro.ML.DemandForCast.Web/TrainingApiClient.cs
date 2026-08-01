@@ -2,15 +2,25 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 
+using CosmosPro.ML.DemandForCast.Web.Services;
+
 namespace CosmosPro.ML.DemandForCast.Web;
 
-public class TrainingApiClient(HttpClient httpClient)
+/// <summary>redeId sempre do <see cref="IRedeContext"/> — ver ImportsApiClient.</summary>
+public class TrainingApiClient(HttpClient httpClient, IRedeContext redeContext)
 {
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
-    public async Task<TreinoJobView?> EnqueueAsync(int maxSkus, CancellationToken ct = default)
+    /// <param name="treinoAte">
+    /// Corte de informação do treino (opcional) — ver <c>TreinoJob.TreinoAte</c>.
+    /// Nulo treina sobre todo o histórico, que é o comportamento histórico da tela.
+    /// </param>
+    public async Task<TreinoJobView?> EnqueueAsync(
+        int maxSkus, DateOnly? treinoAte = null, CancellationToken ct = default)
     {
-        var resp = await httpClient.PostAsJsonAsync("/api/training/run", new { MaxSkus = maxSkus }, ct);
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        var resp = await httpClient.PostAsJsonAsync(
+            $"/api/training/run?redeId={redeId}", new { MaxSkus = maxSkus, TreinoAte = treinoAte }, ct);
         if (resp.StatusCode is HttpStatusCode.Accepted)
             return await resp.Content.ReadFromJsonAsync<TreinoJobView>(JsonOpts, ct);
         return null;
@@ -18,7 +28,8 @@ public class TrainingApiClient(HttpClient httpClient)
 
     public async Task<IReadOnlyList<TreinoJobView>> ListAsync(int take = 50, CancellationToken ct = default)
     {
-        var r = await httpClient.GetFromJsonAsync<List<TreinoJobView>>($"/api/training?take={take}", JsonOpts, ct);
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        var r = await httpClient.GetFromJsonAsync<List<TreinoJobView>>($"/api/training?take={take}&redeId={redeId}", JsonOpts, ct);
         return r ?? [];
     }
 
@@ -46,6 +57,7 @@ public sealed record TreinoJobView(
     DateTimeOffset? DataInicioProcessamento,
     DateTimeOffset? DataConclusao,
     int MaxSkus,
+    DateOnly? TreinoAte,
     long? FeaturesGeradas,
     string? ModeloBlobKey,
     string? MensagemErro,
@@ -59,7 +71,9 @@ public sealed record TrainingResult(
     int Folds,
     int TestWindowDias,
     IReadOnlyList<EngineResult> Engines,
-    string MelhorEngine);
+    string MelhorEngine,
+    DateOnly? TreinoAte = null,
+    DateOnly? UltimaDataTreinada = null);
 
 public sealed record EngineResult(
     string Engine,

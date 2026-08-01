@@ -1,0 +1,202 @@
+@page "/"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ComparacoesApiClient ComparacoesApi
+@inject NotificationService Notifications
+@inject NavigationManager Nav
+@implements IAsyncDisposable
+
+<PageTitle>Comparações</PageTitle>
+
+<RadzenStack Orientation="Orientation.Vertical" Gap="1.5rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Comparações</RadzenText>
+        <HelpTip Position="TooltipPosition.Bottom" Text="Cada comparação confronta, para UMA sugestão de compra do PBS, o que o ERP mandou comprar com o que o ML teria sugerido para o mesmo período. Crie uma comparação, extraia os dados no ERP com o extrator e acompanhe as fases aqui." />
+        <div style="flex: 1"></div>
+        <RadzenButton Click="@NovaComparacaoAsync"
+                      Icon="@(_criando ? "hourglass_empty" : "add")"
+                      Text="@(_criando ? "Criando…" : "Nova comparação")"
+                      ButtonStyle="ButtonStyle.Primary"
+                      Disabled="@_criando" />
+        <RadzenButton Click="@RefreshAsync" Icon="refresh" Variant="Variant.Text" Disabled="@_loading" />
+    </RadzenStack>
+
+    @if (_erroCarregamento is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+            @_erroCarregamento
+        </RadzenAlert>
+    }
+    else if (!_loading && _sessoes.Count == 0)
+    {
+        <RadzenCard Variant="Variant.Outlined">
+            <RadzenStack Gap="0.75rem" AlignItems="AlignItems.Center" Style="padding: 2rem 1rem">
+                <RadzenIcon Icon="compare_arrows" Style="font-size: 3rem; color: var(--rz-text-tertiary-color)" />
+                <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Nenhuma comparação ainda</RadzenText>
+                <RadzenText TextStyle="TextStyle.Body1" Style="max-width: 480px; text-align: center; color: var(--rz-text-secondary-color)">
+                    Uma comparação confronta, para uma sugestão de compra que o ERP calculou, o que ele mandou
+                    comprar com o que o ML teria sugerido. Clique em "Nova comparação" para começar: você vai
+                    extrair os dados no ERP com o extrator e trazer de volta um arquivo.
+                </RadzenText>
+                <RadzenButton Click="@NovaComparacaoAsync" Text="Nova comparação" Icon="add"
+                              ButtonStyle="ButtonStyle.Primary" Disabled="@_criando" />
+            </RadzenStack>
+        </RadzenCard>
+    }
+    else
+    {
+        <RadzenCard Variant="Variant.Outlined">
+            <RadzenDataGrid TItem="SessaoView" Data="@_sessoes" AllowPaging="true" PageSize="10"
+                            AllowSorting="true" Density="Density.Compact"
+                            IsLoading="@(_loading && _sessoes.Count == 0)"
+                            RowSelect="@(s => Nav.NavigateTo($"/comparacoes/{s.Id}"))">
+                <Columns>
+                    <RadzenDataGridColumn TItem="SessaoView" Property="Nome" Title="Nome">
+                        <Template Context="s">@(s.Nome ?? $"Comparação {s.Id.ToString()[..8]}…")</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="SessaoView" Title="Sugestão (PBS)" Sortable="false">
+                        <Template Context="s">
+                            @if (s.SugestaoId is null)
+                            {
+                                <small style="color: var(--rz-text-secondary-color)">aguardando extração</small>
+                            }
+                            else
+                            {
+                                <span>@s.SugestaoDescricao</span>
+                                <br /><small>@s.SugestaoDataHora?.ToString("dd/MM/yyyy")</small>
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="SessaoView" Property="SugestaoTipoCalculo" Title="Método" Width="140px">
+                        <Template Context="s">@MetodoLabel(s.SugestaoTipoCalculo)</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="SessaoView" Property="Status" Title="Estado" Width="160px">
+                        <Template Context="s">
+                            <RadzenBadge Text="@SessaoView.EstadoLabel(s.Status)" BadgeStyle="@SessaoView.BadgeFor(s.Status)" Shade="Shade.Lighter" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="SessaoView" Title="Resumo" Sortable="false">
+                        <Template Context="s"><small>@ResumoLabel(s)</small></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="SessaoView" Property="CriadoEm" Title="Criada em" Width="150px">
+                        <Template Context="s"><small>@s.CriadoEm.ToLocalTime().ToString("dd/MM HH:mm")</small></Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="SessaoView" Title="" Width="56px" Sortable="false">
+                        <Template Context="s">
+                            <RadzenButton Icon="chevron_right" Variant="Variant.Text"
+                                          Click="@(() => Nav.NavigateTo($"/comparacoes/{s.Id}"))" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    }
+</RadzenStack>
+
+@code {
+    private List<SessaoView> _sessoes = [];
+    private bool _loading;
+    private bool _criando;
+    private string? _erroCarregamento;
+    private Timer? _timer;
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        _timer = new Timer(async _ =>
+        {
+            try
+            {
+                await InvokeAsync(RefreshAsync);
+            }
+            catch
+            {
+                // Tick pode disparar durante/depois do teardown do circuito (navegação
+                // no meio de um refresh); nunca deixe escapar pro thread pool como
+                // async void não tratado.
+            }
+        }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_loading) return;
+        _loading = true;
+        // StateHasChanged no finally (não no try) — mesmo motivo das outras páginas:
+        // se disparado dentro do try, a UI renderiza o snapshot com _loading=true e o
+        // botão de refresh nunca volta a ficar habilitado.
+        try
+        {
+            _sessoes = [.. await ComparacoesApi.ListAsync(50, _cts.Token)];
+            _erroCarregamento = null;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            // Ao contrário do padrão "silencia" de Imports/Sessao: aqui uma falha comum
+            // é o IRedeContext lançando com texto acionável (ex.: "nenhuma rede ativa
+            // cadastrada"). Se isso for engolido, a tela mostra o empty state genérico
+            // e o usuário só descobre o problema real ao clicar em "Nova comparação".
+            _erroCarregamento = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task NovaComparacaoAsync()
+    {
+        _criando = true;
+        StateHasChanged();
+        try
+        {
+            var sessao = await ComparacoesApi.CreateAsync(null, _cts.Token);
+            Nav.NavigateTo($"/comparacoes/{sessao.Id}");
+        }
+        catch (Exception ex)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Falha ao criar comparação",
+                Detail = ex.Message,
+                Duration = 8000,
+            });
+        }
+        finally
+        {
+            _criando = false;
+        }
+    }
+
+    private static string MetodoLabel(byte? tipoCalculo) => tipoCalculo switch
+    {
+        1 => "eMax/eSeg",
+        2 => "Dias de Reposição",
+        _ => "—",
+    };
+
+    private static string ResumoLabel(SessaoView s) => s.Status switch
+    {
+        "Inviavel" => s.MotivoInviabilidade ?? "Inviável.",
+        "Falha" => s.MensagemErro ?? "Falhou.",
+        "Concluida" => "Resultado disponível.",
+        _ => "—",
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_timer is not null)
+        {
+            // DisposeAsync espera um callback em andamento terminar antes de retornar
+            // (Dispose síncrono não espera) — só então é seguro cancelar o _cts que o
+            // callback usa.
+            await _timer.DisposeAsync();
+        }
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

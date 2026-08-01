@@ -5,7 +5,8 @@ using Refit;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 
-public sealed class ImportsIntegrationTests(AppHostFixture fixture) : IClassFixture<AppHostFixture>
+[Collection(AspireCollection.Name)]
+public sealed class ImportsIntegrationTests(AppHostFixture fixture)
 {
     [Fact]
     public async Task Upload_de_ZIP_valido_retorna_202_e_aparece_na_listagem()
@@ -30,7 +31,7 @@ public sealed class ImportsIntegrationTests(AppHostFixture fixture) : IClassFixt
 
         // Act
         var streamPart = new StreamPart(zip, "test.zip", "application/zip");
-        var uploadResp = await fixture.ImportsApi.UploadAsync(streamPart);
+        var uploadResp = await fixture.ImportsApi.UploadAsync(streamPart, AppHostFixture.RedeDemoId);
 
         // Assert — upload
         uploadResp.StatusCode.Should().Be(HttpStatusCode.Accepted);
@@ -66,7 +67,7 @@ public sealed class ImportsIntegrationTests(AppHostFixture fixture) : IClassFixt
 
         // Act
         var streamPart = new StreamPart(zip, "incompleto.zip", "application/zip");
-        var resp = await fixture.ImportsApi.UploadAsync(streamPart);
+        var resp = await fixture.ImportsApi.UploadAsync(streamPart, AppHostFixture.RedeDemoId);
 
         // Assert
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);

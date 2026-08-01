@@ -35,6 +35,37 @@
       "type": "stdio",
       "command": "aspire",
       "args": ["agent", "mcp"]
+    },
+    "mssql-pensfarma-pbs-prod": {
+      "command": "npx",
+      "args": [
+        "-y", "@bluspace/mssql-mcp-server",
+        "--server", "${PENSEFARMA_PBS_PROD_MSSQL_SERVER}",
+        "--database", "${PENSEFARMA_PBS_PROD_MSSQL_DATABASE}",
+        "--user", "${PENSEFARMA_PBS_PROD_MSSQL_USER}",
+        "--password", "${PENSEFARMA_PBS_PROD_MSSQL_PASSWORD}",
+        "--permissions", "read"
+      ]
+    },
+    "mssql-natusfarma-pbs-prod": {
+      "command": "npx",
+      "args": [
+        "-y", "@bluspace/mssql-mcp-server",
+        "--server", "${NATUSFARMA_PBS_PROD_MSSQL_SERVER}",
+        "--database", "${NATUSFARMA_PBS_PROD_MSSQL_DATABASE}",
+        "--user", "${NATUSFARMA_PBS_PROD_MSSQL_USER}",
+        "--password", "${NATUSFARMA_PBS_PROD_MSSQL_PASSWORD}",
+        "--port","1435",
+        "--permissions", "read"
+      ]
+    },
+    "dokploy-julio-bozzo": {
+      "command": "npx",
+      "args": ["-y", "@dokploy/mcp"],
+      "env": {
+        "DOKPLOY_URL": "http://srv1868981.hstgr.cloud:3000",
+        "DOKPLOY_API_KEY": "${DOKPLOY_JULIO_BOZZOO_API_KEY}"
+      }
     }
   }
 }

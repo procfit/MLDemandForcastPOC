@@ -1,0 +1,276 @@
+@page "/admin/usuarios"
+@attribute [Authorize(Roles = Papeis.PowerUser)]
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Identity
+@inject IServiceScopeFactory Escopos
+@inject NotificationService Notificacao
+
+<PageTitle>Usuários — Administração</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+        <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-mb-0">Usuários</RadzenText>
+        <HelpTip Text="Papéis: usuário da rede vê apenas os dados da rede dele. PowerUser é administrador global — vê todas as redes e é o único que acessa esta área." />
+        <div style="flex: 1"></div>
+        <RadzenButton Text="Novo usuário" Icon="person_add" Click="@AbrirNovo" />
+    </RadzenStack>
+
+    <RadzenDataGrid Data="@_usuarios" TItem="LinhaUsuario" AllowSorting="true" AllowPaging="true"
+                    PageSize="20" EmptyText="Nenhum usuário cadastrado.">
+        <Columns>
+            <RadzenDataGridColumn TItem="LinhaUsuario" Property="NomeCompleto" Title="Nome" />
+            <RadzenDataGridColumn TItem="LinhaUsuario" Property="Email" Title="E-mail" />
+            <RadzenDataGridColumn TItem="LinhaUsuario" Title="Papel" Width="150px" Sortable="false">
+                <Template Context="u">
+                    <RadzenBadge Text="@(u.EhPowerUser ? "PowerUser" : "Usuário da rede")"
+                                 BadgeStyle="@(u.EhPowerUser ? BadgeStyle.Warning : BadgeStyle.Info)" />
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LinhaUsuario" Property="NomeRede" Title="Rede" Width="200px" />
+            <RadzenDataGridColumn TItem="LinhaUsuario" Title="Situação" Width="110px" Sortable="false">
+                <Template Context="u">
+                    <RadzenBadge Text="@(u.Ativo ? "Ativo" : "Inativo")"
+                                 BadgeStyle="@(u.Ativo ? BadgeStyle.Success : BadgeStyle.Light)" />
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LinhaUsuario" Title="" Width="230px" Sortable="false">
+                <Template Context="u">
+                    <RadzenButton Icon="@(u.Ativo ? "block" : "check_circle")" Size="ButtonSize.Small"
+                                  ButtonStyle="@(u.Ativo ? ButtonStyle.Warning : ButtonStyle.Success)"
+                                  Click="@(() => AlternarAtivoAsync(u))"
+                                  title="@(u.Ativo ? "Desativar" : "Reativar")" />
+                    <RadzenButton Icon="key" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light"
+                                  Click="@(() => AbrirResetSenha(u))" title="Redefinir senha" class="rz-ml-1" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenStack>
+
+@if (_novo is not null)
+{
+    <RadzenCard Variant="Variant.Outlined" class="rz-mt-4">
+        <RadzenTemplateForm TItem="FormUsuario" Data="@_novo" Submit="@CriarAsync">
+            <RadzenStack Gap="1rem">
+                <RadzenText TextStyle="TextStyle.H6">Novo usuário</RadzenText>
+
+                <RadzenFormField Text="Nome completo" Variant="Variant.Outlined">
+                    <RadzenTextBox @bind-Value="_novo.NomeCompleto" Name="Nome" MaxLength="160" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Nome" Text="Nome é obrigatório." Popup="false" />
+
+                <RadzenFormField Text="E-mail" Variant="Variant.Outlined">
+                    <RadzenTextBox @bind-Value="_novo.Email" Name="Email" MaxLength="200" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Email" Text="E-mail é obrigatório." Popup="false" />
+                <RadzenEmailValidator Component="Email" Text="E-mail inválido." Popup="false" />
+
+                <RadzenFormField Text="Senha inicial (mínimo 10 caracteres)" Variant="Variant.Outlined">
+                    <RadzenPassword @bind-Value="_novo.Senha" Name="Senha" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Senha" Text="Senha é obrigatória." Popup="false" />
+
+                <RadzenFormField Text="Papel" Variant="Variant.Outlined">
+                    <RadzenDropDown @bind-Value="_novo.EhPowerUser" Name="Papel"
+                                    Data="@(new[] {
+                                        new { Texto = "Usuário da rede", Valor = false },
+                                        new { Texto = "PowerUser (acesso global)", Valor = true } })"
+                                    TextProperty="Texto" ValueProperty="Valor" />
+                </RadzenFormField>
+
+                @if (!_novo.EhPowerUser)
+                {
+                    <RadzenFormField Text="Rede" Variant="Variant.Outlined">
+                        <RadzenDropDown @bind-Value="_novo.RedeId" Name="Rede" Data="@_redesAtivas"
+                                        TextProperty="Nome" ValueProperty="Id"
+                                        Placeholder="Selecione a rede" />
+                    </RadzenFormField>
+                    <RadzenText TextStyle="TextStyle.Caption" class="rz-color-on-surface-variant">
+                        Usuário da rede precisa estar vinculado a uma rede. PowerUser não tem rede — ele vê todas.
+                    </RadzenText>
+                }
+
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                    <RadzenButton ButtonType="ButtonType.Submit" Text="Criar" Icon="person_add" />
+                    <RadzenButton Text="Cancelar" ButtonStyle="ButtonStyle.Light"
+                                  Click="@(() => _novo = null)" />
+                </RadzenStack>
+            </RadzenStack>
+        </RadzenTemplateForm>
+    </RadzenCard>
+}
+
+@if (_resetando is not null)
+{
+    <RadzenCard Variant="Variant.Outlined" class="rz-mt-4">
+        <RadzenStack Gap="1rem">
+            <RadzenText TextStyle="TextStyle.H6">Redefinir senha de @_resetando.Email</RadzenText>
+            <RadzenFormField Text="Nova senha (mínimo 10 caracteres)" Variant="Variant.Outlined">
+                <RadzenPassword @bind-Value="_novaSenha" />
+            </RadzenFormField>
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                <RadzenButton Text="Redefinir" Icon="key" Click="@ResetarSenhaAsync" />
+                <RadzenButton Text="Cancelar" ButtonStyle="ButtonStyle.Light"
+                              Click="@(() => { _resetando = null; _novaSenha = ""; })" />
+            </RadzenStack>
+        </RadzenStack>
+    </RadzenCard>
+}
+
+@code {
+    private List<LinhaUsuario> _usuarios = [];
+    private List<Rede> _redesAtivas = [];
+    private FormUsuario? _novo;
+    private LinhaUsuario? _resetando;
+    private string _novaSenha = "";
+
+    private sealed record LinhaUsuario(
+        Guid Id, string Email, string NomeCompleto, bool EhPowerUser,
+        int? RedeId, string NomeRede, bool Ativo);
+
+    private sealed class FormUsuario
+    {
+        public string NomeCompleto { get; set; } = "";
+        public string Email { get; set; } = "";
+        public string Senha { get; set; } = "";
+        public bool EhPowerUser { get; set; }
+        public int? RedeId { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync() => await CarregarAsync();
+
+    /// <summary>Escopo por operação — ver comentário equivalente em Redes.razor.</summary>
+    private async Task ComEscopoAsync(Func<EngineDbContext, UserManager<Usuario>, Task> acao)
+    {
+        await using var escopo = Escopos.CreateAsyncScope();
+        await acao(
+            escopo.ServiceProvider.GetRequiredService<EngineDbContext>(),
+            escopo.ServiceProvider.GetRequiredService<UserManager<Usuario>>());
+    }
+
+    private async Task CarregarAsync() => await ComEscopoAsync(async (db, users) =>
+    {
+        _redesAtivas = await db.Redes.AsNoTracking().Where(r => r.Ativo).OrderBy(r => r.Nome).ToListAsync();
+        var nomes = _redesAtivas.ToDictionary(r => r.Id, r => r.Nome);
+
+        var todos = await db.Users.AsNoTracking().OrderBy(u => u.NomeCompleto).ToListAsync();
+        var powerIds = (await users.GetUsersInRoleAsync(Papeis.PowerUser)).Select(u => u.Id).ToHashSet();
+
+        _usuarios = todos.Select(u => new LinhaUsuario(
+            u.Id,
+            u.Email ?? "",
+            u.NomeCompleto,
+            powerIds.Contains(u.Id),
+            u.RedeId,
+            u.RedeId is { } rid ? nomes.GetValueOrDefault(rid, $"#{rid}") : "— todas —",
+            u.Ativo)).ToList();
+    });
+
+    private void AbrirNovo() => _novo = new FormUsuario();
+
+    private void AbrirResetSenha(LinhaUsuario u)
+    {
+        _resetando = u;
+        _novaSenha = "";
+    }
+
+    private async Task CriarAsync()
+    {
+        if (_novo is null) return;
+
+        // Invariante que o banco não guarda (papéis vivem em tabela de junção do
+        // Identity, fora do alcance de um CHECK): usuário de rede exige rede.
+        if (!_novo.EhPowerUser && _novo.RedeId is null)
+        {
+            Avisar("Selecione a rede do usuário.", NotificationSeverity.Error);
+            return;
+        }
+
+        var erro = (string?)null;
+        await ComEscopoAsync(async (db, users) =>
+        {
+            var usuario = new Usuario
+            {
+                Id = Guid.CreateVersion7(),
+                UserName = _novo!.Email.Trim(),
+                Email = _novo.Email.Trim(),
+                EmailConfirmed = true,
+                NomeCompleto = _novo.NomeCompleto.Trim(),
+                RedeId = _novo.EhPowerUser ? null : _novo.RedeId,
+                Ativo = true,
+                CriadoEm = DateTimeOffset.UtcNow,
+            };
+
+            var criado = await users.CreateAsync(usuario, _novo.Senha);
+            if (!criado.Succeeded)
+            {
+                erro = string.Join("; ", criado.Errors.Select(e => e.Description));
+                return;
+            }
+
+            var papel = _novo.EhPowerUser ? Papeis.PowerUser : Papeis.UsuarioRede;
+            var atribuido = await users.AddToRoleAsync(usuario, papel);
+            if (!atribuido.Succeeded)
+            {
+                erro = string.Join("; ", atribuido.Errors.Select(e => e.Description));
+            }
+        });
+
+        if (erro is not null)
+        {
+            Avisar(erro, NotificationSeverity.Error);
+            return;
+        }
+
+        _novo = null;
+        await CarregarAsync();
+        Avisar("Usuário criado.", NotificationSeverity.Success);
+    }
+
+    private async Task AlternarAtivoAsync(LinhaUsuario u)
+    {
+        var ativoDepois = false;
+        await ComEscopoAsync(async (db, _) =>
+        {
+            var atual = await db.Users.FirstAsync(x => x.Id == u.Id);
+            atual.Ativo = !atual.Ativo;
+            ativoDepois = atual.Ativo;
+            await db.SaveChangesAsync();
+        });
+
+        await CarregarAsync();
+        Avisar(ativoDepois ? "Usuário reativado." : "Usuário desativado.", NotificationSeverity.Success);
+    }
+
+    private async Task ResetarSenhaAsync()
+    {
+        if (_resetando is null) return;
+
+        var erro = (string?)null;
+        await ComEscopoAsync(async (_, users) =>
+        {
+            var usuario = await users.FindByIdAsync(_resetando!.Id.ToString());
+            if (usuario is null) { erro = "Usuário não encontrado."; return; }
+
+            var token = await users.GeneratePasswordResetTokenAsync(usuario);
+            var r = await users.ResetPasswordAsync(usuario, token, _novaSenha);
+            if (!r.Succeeded)
+            {
+                erro = string.Join("; ", r.Errors.Select(e => e.Description));
+            }
+        });
+
+        if (erro is not null)
+        {
+            Avisar(erro, NotificationSeverity.Error);
+            return;
+        }
+
+        _resetando = null;
+        _novaSenha = "";
+        Avisar("Senha redefinida.", NotificationSeverity.Success);
+    }
+
+    private void Avisar(string msg, NotificationSeverity sev) =>
+        Notificacao.Notify(new NotificationMessage { Severity = sev, Summary = msg, Duration = 5000 });
+}

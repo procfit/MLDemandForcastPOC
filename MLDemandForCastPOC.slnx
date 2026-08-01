@@ -3,8 +3,10 @@
   <Project Path="CosmosPro.ML.DemandForCast.AppHost/CosmosPro.ML.DemandForCast.AppHost.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.Database/CosmosPro.ML.DemandForCast.Database.sqlproj" />
   <Project Path="CosmosPro.ML.DemandForCast.Engine/CosmosPro.ML.DemandForCast.Engine.csproj" />
+  <Project Path="CosmosPro.ML.DemandForCast.Extractor/CosmosPro.ML.DemandForCast.Extractor.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.Features/CosmosPro.ML.DemandForCast.Features.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.Forecasting/CosmosPro.ML.DemandForCast.Forecasting.csproj" />
+  <Project Path="CosmosPro.ML.DemandForCast.Migrator/CosmosPro.ML.DemandForCast.Migrator.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.OlapSchema/CosmosPro.ML.DemandForCast.OlapSchema.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.Purchasing/CosmosPro.ML.DemandForCast.Purchasing.csproj" />
   <Project Path="CosmosPro.ML.DemandForCast.ServiceDefaults/CosmosPro.ML.DemandForCast.ServiceDefaults.csproj" />
@@ -14,6 +16,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/CosmosPro.ML.DemandForCast.Tests.Shared/CosmosPro.ML.DemandForCast.Tests.Shared.csproj" />
     <Project Path="tests/CosmosPro.ML.DemandForCast.Engine.Tests/CosmosPro.ML.DemandForCast.Engine.Tests.csproj" />
+    <Project Path="tests/CosmosPro.ML.DemandForCast.Extractor.Tests/CosmosPro.ML.DemandForCast.Extractor.Tests.csproj" />
     <Project Path="tests/CosmosPro.ML.DemandForCast.OlapSchema.Tests/CosmosPro.ML.DemandForCast.OlapSchema.Tests.csproj" />
     <Project Path="tests/CosmosPro.ML.DemandForCast.ApiService.Tests/CosmosPro.ML.DemandForCast.ApiService.Tests.csproj" />
     <Project Path="tests/CosmosPro.ML.DemandForCast.Worker.Tests/CosmosPro.ML.DemandForCast.Worker.Tests.csproj" />

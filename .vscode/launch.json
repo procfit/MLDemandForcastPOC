@@ -15,6 +15,19 @@
           "logging": { "moduleLoad": false }
         }
       }
+    },
+    {
+      // Utilitário standalone que roda na máquina do cliente — de propósito NÃO
+      // é um recurso do AppHost. Selecione esta configuração no dropdown do
+      // Run and Debug para depurá-lo sem subir a stack Aspire.
+      "name": "Extrator PBS (WinForms)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build extrator",
+      "program": "${workspaceFolder}/CosmosPro.ML.DemandForCast.Extractor/bin/Debug/net10.0-windows/CosmosPro.ML.DemandForCast.Extractor.exe",
+      "cwd": "${workspaceFolder}/CosmosPro.ML.DemandForCast.Extractor",
+      "console": "internalConsole",
+      "stopAtEntry": false
     }
   ]
 }

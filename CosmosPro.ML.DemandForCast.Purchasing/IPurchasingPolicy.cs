@@ -10,10 +10,10 @@ namespace CosmosPro.ML.DemandForCast.Purchasing;
 /// </list>
 ///
 /// <para>
-/// Duas implementações comparadas no TCC:
-/// <see cref="Policies.EMaxESegPolicy"/> (média histórica × LT — regra clássica do
-/// varejo farma) e <see cref="Policies.ForecastRopPolicy"/> (forecast LightGBM
-/// acumulado no LT + safety por desvio do erro).
+/// Única implementação no repo: <see cref="Policies.ForecastRopPolicy"/> (forecast
+/// LightGBM acumulado no LT + safety por desvio do erro). A regra clássica eMax/eSeg
+/// deixou de ser reimplementada aqui — o baseline do TCC agora vem do próprio ERP
+/// (PBS), que já grava sua própria eMax/eSeg e sua própria previsão de demanda (F13).
 /// </para>
 /// </summary>
 public interface IPurchasingPolicy

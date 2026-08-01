@@ -26,5 +26,9 @@ internal static class ImportSchemas
     public static readonly IReadOnlyDictionary<string, string[]> OptionalFiles = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
     {
         ["sinais_externos.csv"] = ["Data", "Geografia", "Tipo", "Valor"],
+        // Sugestões do ERP: só quem extrai do PBS traz. O dataset sintético e os
+        // ZIPs anteriores à F12 não têm, e o import precisa seguir funcionando.
+        ["sugestoes_compra.csv"] = ["SugestaoId", "DataHora", "TipoCalculo"],
+        ["sugestoes_compra_itens.csv"] = ["SugestaoId", "LojaId", "Sku", "DemandaDia", "CompraSugerida", "CompraAutorizada"],
     };
 }

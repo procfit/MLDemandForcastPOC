@@ -17,8 +17,14 @@ namespace CosmosPro.ML.DemandForCast.Worker.Purchasing;
 /// <summary>
 /// Executa um job de <see cref="SimulacaoCompra"/>: carrega o TreinoJob origem
 /// (modelo LightGBM + parâmetros), reusa o <see cref="StageObservationLoader"/>
-/// para puxar as mesmas SKUs do treino, faz o replay com duas políticas
-/// (eMax/eSeg clássica vs ROP+forecast) e grava o resultado JSON.
+/// para puxar as mesmas SKUs do treino, faz o replay com a política ROP+forecast
+/// e grava o resultado JSON.
+///
+/// <para>
+/// Ferramenta secundária desde F13: não compara mais contra uma reimplementação
+/// nossa da regra eMax/eSeg (removida — ver <see cref="CosmosPro.ML.DemandForCast.Purchasing.IPurchasingPolicy"/>).
+/// O comparativo do TCC contra o baseline real do ERP vive em outro fluxo (F13).
+/// </para>
 /// </summary>
 internal sealed class SimulacaoProcessor(
     IMinioClient minio,
@@ -46,7 +52,10 @@ internal sealed class SimulacaoProcessor(
 
         // 2) Observações (mesmas regras do treino: top MaxSkus, ABC dinâmica, ruptura marcada).
         var loader = new StageObservationLoader(connStr, logger);
-        var observations = await loader.LoadAsync(treino.MaxSkus, ct);
+        // Sem o corte do treino de propósito: a simulação precisa justamente dos dias
+        // que o modelo não viu — são a verdade contra a qual a política é medida.
+        // Aplicar `treino.TreinoAte` aqui apagaria a janela simulada.
+        var observations = await loader.LoadAsync(job.RedeId, treino.MaxSkus, treinoAte: null, ct);
         if (observations.Count == 0)
             throw new InvalidOperationException("Sem observações no Stage para simular.");
 
@@ -58,7 +67,7 @@ internal sealed class SimulacaoProcessor(
         // 3) Estoque inicial no dia anterior à janela.
         var skus = observations.Select(o => o.Sku).Distinct().ToArray();
         var estoqueLoader = new StageEstoqueInicialLoader(connStr, logger);
-        var estoqueInicialRaw = await estoqueLoader.LoadAsync(skus, inicio, ct);
+        var estoqueInicialRaw = await estoqueLoader.LoadAsync(job.RedeId, skus, inicio, ct);
         var estoqueInicial = estoqueInicialRaw.ToDictionary(
             kv => new PurchasingSimulator.SerieKey(kv.Key.Sku, kv.Key.LojaId),
             kv => kv.Value);
@@ -83,7 +92,7 @@ internal sealed class SimulacaoProcessor(
         using var model = await DownloadModelAsync(treino.ModeloBlobKey!, ct);
         var forecaster = new LightGbmForecaster(model, features);
 
-        // 7) Simula as duas políticas.
+        // 7) Simula a política ROP+forecast (única — ver nota na doc da classe).
         var options = new SimulationOptions
         {
             DataInicio = inicio,
@@ -95,7 +104,6 @@ internal sealed class SimulacaoProcessor(
 
         var policies = new IPurchasingPolicy[]
         {
-            new EMaxESegPolicy { JanelaDias = options.JanelaHistoricoDias },
             new ForecastRopPolicy(),
         };
 
@@ -103,7 +111,7 @@ internal sealed class SimulacaoProcessor(
         var result = simulator.Run(options, observations, estoqueInicial, atributos, policies, forecaster);
 
         // Nome dos produtos (só dos SKUs simulados) para a lista de compra na UI.
-        var nomes = await LoadNomesAsync(connStr, skus, ct);
+        var nomes = await LoadNomesAsync(connStr, job.RedeId, skus, ct);
 
         var output = new SimulationOutput(DateTimeOffset.UtcNow, treino.Id, nomes, result);
         var json = JsonSerializer.Serialize(output);
@@ -123,8 +131,13 @@ internal sealed class SimulacaoProcessor(
         return LightGbmForecastModel.Load(ms);
     }
 
+    /// <summary>
+    /// Nome dos produtos simulados. O filtro por rede não é cosmético: <c>Produtos</c> tem
+    /// PK <c>(RedeId, Sku)</c> porque o mesmo código de SKU existe em redes diferentes, e
+    /// sem ele o dicionário ficaria com o nome que a última rede lida tiver gravado.
+    /// </summary>
     private static async Task<Dictionary<string, string>> LoadNomesAsync(
-        string connStr, IReadOnlyCollection<string> skus, CancellationToken ct)
+        string connStr, int redeId, IReadOnlyCollection<string> skus, CancellationToken ct)
     {
         var nomes = new Dictionary<string, string>(skus.Count, StringComparer.OrdinalIgnoreCase);
         if (skus.Count == 0) return nomes;
@@ -140,7 +153,9 @@ internal sealed class SimulacaoProcessor(
             names.Add(p);
             cmd.Parameters.AddWithValue(p, sku);
         }
-        cmd.CommandText = $"SELECT Sku, Nome FROM dbo.Produtos WHERE Sku IN ({string.Join(", ", names)})";
+        cmd.Parameters.AddWithValue("@redeId", redeId);
+        cmd.CommandText =
+            $"SELECT Sku, Nome FROM dbo.Produtos WHERE RedeId = @redeId AND Sku IN ({string.Join(", ", names)})";
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
             nomes[r.GetString(0)] = r.IsDBNull(1) ? "" : r.GetString(1);

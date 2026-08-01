@@ -18,6 +18,16 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.Worker.Tests" />
+    <!-- O extrator duplica o contrato de colunas do Stage; o teste de contrato
+         compara os dois para que não divirjam. -->
+    <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.Extractor.Tests" />
+    <!-- StageObservationLoader fala com SQL Server: só o projeto que sobe o AppHost
+         real consegue exercitar o corte de treino contra um Stage de verdade. -->
+    <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.ApiService.IntegrationTests" />
+    <!-- O E2E da tela do comparativo semeia uma execução concluída: o ResultadoJson é
+         montado com ComparacaoOutput, para que a página seja exercitada contra o contrato
+         real e não contra um JSON de mentira que envelheceria sozinho. -->
+    <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.Web.E2ETests" />
   </ItemGroup>
 
   <ItemGroup>

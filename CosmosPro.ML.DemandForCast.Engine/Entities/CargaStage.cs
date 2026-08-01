@@ -8,6 +8,13 @@ public sealed class CargaStage
 {
     public Guid Id { get; set; }
 
+    /// <summary>
+    /// Rede dona dos dados desta carga. O Worker injeta este valor em toda linha
+    /// carregada no Stage — RedeId nunca trafega nos CSVs, para o cliente não poder
+    /// reivindicar a rede de outro.
+    /// </summary>
+    public int RedeId { get; set; }
+
     public CargaStageStatus Status { get; set; }
 
     /// <summary>Quando o usuário fez o upload via API.</summary>

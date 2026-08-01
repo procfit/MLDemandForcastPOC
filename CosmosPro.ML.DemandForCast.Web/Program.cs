@@ -1,6 +1,21 @@
+using System.Globalization;
+using System.Security.Claims;
+
+using CosmosPro.ML.DemandForCast.Engine;
+using CosmosPro.ML.DemandForCast.Engine.Entities;
 using CosmosPro.ML.DemandForCast.Web;
 using CosmosPro.ML.DemandForCast.Web.Components;
+using CosmosPro.ML.DemandForCast.Web.Services;
+using Microsoft.AspNetCore.Identity;
 using Radzen;
+
+// Esta tela mostra dinheiro para um comprador brasileiro (N2/N0/P0 sem cultura
+// explícita seguem a cultura ambiente do host). Um host de container com
+// globalização invariante formataria R$ 1.234,50 como R$ 1,234.50 — erro de três
+// ordens de grandeza para quem lê. Fixado uma vez aqui em vez de em cada call site.
+var culturaPadrao = new CultureInfo("pt-BR");
+CultureInfo.DefaultThreadCurrentCulture = culturaPadrao;
+CultureInfo.DefaultThreadCurrentUICulture = culturaPadrao;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,6 +25,65 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 builder.Services.AddOutputCache();
+
+// Identity vive na Web, não na ApiService: é aqui que o cookie do navegador chega.
+// A ApiService continua sem endpoint externo — ver comentário no Program.cs dela.
+builder.AddSqlServerDbContext<EngineDbContext>("engine");
+
+builder.Services
+    .AddIdentity<Usuario, IdentityRole<Guid>>(o =>
+    {
+        o.User.RequireUniqueEmail = true;
+        o.Password.RequiredLength = 10;
+        o.Lockout.MaxFailedAccessAttempts = 5;
+        o.SignIn.RequireConfirmedEmail = false;
+    })
+    .AddEntityFrameworkStores<EngineDbContext>()
+    .AddDefaultTokenProviders();
+
+builder.Services.ConfigureApplicationCookie(o =>
+{
+    o.LoginPath = "/login";
+    o.LogoutPath = "/logout";
+    o.AccessDeniedPath = "/acesso-negado";
+    o.ExpireTimeSpan = TimeSpan.FromHours(8);
+    o.SlidingExpiration = true;
+});
+
+// O SecurityStampValidator revalida o cookie a cada 30 min e, ao revalidar, recria o
+// principal a partir do banco — o que descartaria a rede escolhida pelo PowerUser no meio
+// da sessão, sem erro nenhum e sem que a barra parecesse errada até a próxima consulta.
+// Este gancho carrega o claim de escolha para o principal novo.
+builder.Services.Configure<SecurityStampValidatorOptions>(o =>
+{
+    o.OnRefreshingPrincipal = contexto =>
+    {
+        var escolha = contexto.CurrentPrincipal?.FindFirst(RedeContext.ClaimRedeSelecionada);
+
+        // O papel é reconferido aqui, e não só no leitor, para o gancho não depender de
+        // ninguém mais barrar um principal que ele mesmo montou: se o usuário perdeu o
+        // papel PowerUser entre uma revalidação e outra (ex.: rebaixado pelo admin), o
+        // claim não atravessa. A checagem de posse evita duplicar o claim caso ele um dia
+        // passe a vir de uma claims factory — dois claims do mesmo tipo fariam
+        // FindFirstValue escolher entre eles por ordem arbitrária.
+        if (escolha is not null
+            && contexto.NewPrincipal?.Identity is ClaimsIdentity identidade
+            && contexto.NewPrincipal.IsInRole(Papeis.PowerUser)
+            && identidade.FindFirst(RedeContext.ClaimRedeSelecionada) is null)
+        {
+            identidade.AddClaim(new Claim(escolha.Type, escolha.Value));
+        }
+
+        return Task.CompletedTask;
+    };
+});
+
+// Faz o AuthenticationState fluir para os componentes (AuthorizeView/AuthorizeRouteView).
+builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddAuthorization();
+
+builder.Services.AddScoped<IRedeContext, RedeContext>();
+builder.Services.AddHostedService<IdentityBootstrapper>();
 
 // Radzen services: dialog, notification, tooltip, context-menu, theme.
 builder.Services.AddRadzenComponents();
@@ -35,6 +109,25 @@ builder.Services.AddHttpClient<PurchasingApiClient>(client =>
     client.BaseAddress = new("https+http://apiservice");
 });
 
+builder.Services.AddHttpClient<ComparisonApiClient>(client =>
+{
+    client.BaseAddress = new("https+http://apiservice");
+});
+
+builder.Services.AddHttpClient<ComparacoesApiClient>(client =>
+{
+    client.BaseAddress = new("https+http://apiservice");
+    client.Timeout = TimeSpan.FromMinutes(10);
+});
+
+builder.Services.AddHttpClient<ExtratorApiClient>(client =>
+{
+    client.BaseAddress = new("https+http://apiservice");
+    // O .exe tem dezenas de MB; o download precisa do mesmo teto generoso do upload,
+    // não do default de 100s do HttpClient.
+    client.Timeout = TimeSpan.FromMinutes(10);
+});
+
 const long MaxUploadBytes = 500L * 1024 * 1024;
 builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(o =>
     o.Limits.MaxRequestBodySize = MaxUploadBytes);
@@ -53,9 +146,14 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseAntiforgery();
 app.UseOutputCache();
 app.MapStaticAssets();
+
+app.MapLoginEndpoints();
+app.MapExtratorEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

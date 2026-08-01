@@ -1,0 +1,159 @@
+@* Bloco FIXO, nunca aba: média global esconde regressão local (CLAUDE.md §6), e o
+   comprador não pode ter de clicar para achar a notícia ruim. *@
+
+<RadzenCard Variant="Variant.Outlined">
+    <RadzenStack Gap="0.75rem">
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger)" />
+            <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">Onde o ML foi pior</RadzenText>
+        </RadzenStack>
+
+        @if (Analise is null)
+        {
+            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                Não foi possível ler o detalhe desta comparação agora, então este bloco está sem números.
+                Ausência de resposta não é ausência de item pior — recarregue a página.
+            </RadzenText>
+        }
+        else
+        {
+            @* --- Arma da compra: quanto o ML teria deixado encalhado a mais ------------ *@
+            @if (Analise.ItensComDecisaoMl == 0)
+            {
+                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                    <strong>Na quantidade a comprar não há como apontar onde o ML foi pior nesta sugestão.</strong>
+                    Nenhum item teve quantidade calculada pelo método de ML, então não existe compra dele para
+                    confrontar com a sua item a item. Isto não significa que ele empatou nem que acertou: significa
+                    que a conta não foi feita.
+                </RadzenText>
+            }
+            else if (Analise.ItensComSobraMlMaior == 0)
+            {
+                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                    Nos @Analise.ItensComDecisaoMl.ToString("N0") item(ns) em que os dois métodos foram calculados,
+                    o ML não deixou mais unidades encalhadas que a compra do seu ERP em nenhum deles.
+                </RadzenText>
+            }
+            else
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                    Em <strong>@Analise.ItensComSobraMlMaior.ToString("N0") de
+                    @Analise.ItensComDecisaoMl.ToString("N0")</strong> item(ns) comparados, o método de ML teria
+                    deixado <strong>@Analise.SobraExtraMlUnidades.ToString("N0") unidade(s)</strong> a mais
+                    encalhadas que a sua compra — @($"R$ {Analise.SobraExtraMlValor.ToString("N2")}") somados só
+                    nesses itens. Este número não desconta os itens em que o ML foi melhor, de propósito: ele
+                    responde quanto o ML piora onde ele piora, e é justamente isso que uma média apaga.
+                    @if (Resultado?.ValoresSubestimados == true)
+                    {
+                        <text>
+                            O valor em reais aqui também está incompleto, pelo mesmo motivo da manchete:
+                            @Resultado.ItensSemPrecoCompra.ToString("N0") item(ns) desta sugestão não têm preço de
+                            compra cadastrado e ficam de fora da conta em dinheiro.
+                        </text>
+                    }
+                </RadzenAlert>
+
+                @if (Analise.PioresNaCompra is { Count: > 0 } piores)
+                {
+                    <RadzenDataGrid TItem="ItemPior" Data="@piores" AllowPaging="false" Density="Density.Compact">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="ItemPior" Property="Sku" Title="Código" Width="110px" />
+                            <RadzenDataGridColumn TItem="ItemPior" Property="NomeProduto" Title="Produto">
+                                <Template Context="p">@(string.IsNullOrWhiteSpace(p.NomeProduto) ? "sem cadastro no ERP" : p.NomeProduto)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ItemPior" Property="LojaId" Title="Loja" Width="90px" TextAlign="TextAlign.Right" />
+                            <RadzenDataGridColumn TItem="ItemPior" Title="Sobrou (PBS)" Width="130px" TextAlign="TextAlign.Right">
+                                <Template Context="p">@Num(p.SobraPbsUnidades)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ItemPior" Title="Sobraria (ML)" Width="140px" TextAlign="TextAlign.Right">
+                                <Template Context="p">@Num(p.SobraMlUnidades)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ItemPior" Title="Ressalva" Width="160px" Sortable="false">
+                                <Template Context="p">
+                                    @if (p.JanelaAlemDoHistorico)
+                                    {
+                                        <span style="color: var(--rz-warning)">período incompleto</span>
+                                    }
+                                </Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                }
+            }
+
+            @* --- Arma da previsão: onde a estimativa de venda do ML errou mais --------- *@
+            @if (Analise.ItensComPrevisaoMl == 0)
+            {
+                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                    Também não há como comparar as previsões de venda: nenhum item desta sugestão recebeu
+                    estimativa de venda diária do método de ML.
+                </RadzenText>
+            }
+            else if (Analise.VitoriasPbs == 0)
+            {
+                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                    Na previsão de quanto sairia por dia, o ML não errou mais que o seu ERP em nenhum dos
+                    @Analise.ItensComPrevisaoMl.ToString("N0") item(ns) medidos.
+                </RadzenText>
+            }
+            else
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                    Na previsão de quanto sairia por dia, o ML errou mais que o seu ERP em
+                    <strong>@Analise.VitoriasPbs.ToString("N0") de
+                    @Analise.ItensComPrevisaoMl.ToString("N0")</strong> item(ns) medidos
+                    @if (Analise.Global.MlPerde)
+                    {
+                        <text>— e no conjunto todo ele também erra mais.</text>
+                    }
+                    else
+                    {
+                        <text>— mesmo o ML errando menos no conjunto todo. São exatamente os itens que um número
+                        único esconderia.</text>
+                    }
+                </RadzenAlert>
+
+                @if (Analise.PioresNaPrevisao is { Count: > 0 } pioresPrev)
+                {
+                    <RadzenDataGrid TItem="ItemPior" Data="@pioresPrev" AllowPaging="false" Density="Density.Compact">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="ItemPior" Property="Sku" Title="Código" Width="110px" />
+                            <RadzenDataGridColumn TItem="ItemPior" Property="NomeProduto" Title="Produto">
+                                <Template Context="p">@(string.IsNullOrWhiteSpace(p.NomeProduto) ? "sem cadastro no ERP" : p.NomeProduto)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ItemPior" Property="LojaId" Title="Loja" Width="90px" TextAlign="TextAlign.Right" />
+                            <RadzenDataGridColumn TItem="ItemPior" Title="Erro do PBS (un./dia)" Width="170px" TextAlign="TextAlign.Right">
+                                <Template Context="p">@Taxa(p.ErroPbs)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ItemPior" Title="Erro do ML (un./dia)" Width="170px" TextAlign="TextAlign.Right">
+                                <Template Context="p">@Taxa(p.ErroMl)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ItemPior" Title="Ressalva" Width="160px" Sortable="false">
+                                <Template Context="p">
+                                    @if (p.JanelaAlemDoHistorico)
+                                    {
+                                        <span style="color: var(--rz-warning)">período incompleto</span>
+                                    }
+                                </Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                }
+            }
+        }
+    </RadzenStack>
+</RadzenCard>
+
+@code {
+    [Parameter] public SessaoAnalise? Analise { get; set; }
+
+    /// <summary>
+    /// Só para qualificar a figura em R$ deste bloco: itens sem preço de compra ficam de fora
+    /// dela, e a subestimação precisa ser declarada aqui também, não só na manchete.
+    /// </summary>
+    [Parameter] public SessaoResultadoView? Resultado { get; set; }
+
+    private static string Num(decimal? valor) => valor is { } v ? v.ToString("N0") : "sem cálculo do ML";
+
+    private static string Taxa(decimal? valor) => valor is { } v ? v.ToString("N2") : "não apurado";
+}

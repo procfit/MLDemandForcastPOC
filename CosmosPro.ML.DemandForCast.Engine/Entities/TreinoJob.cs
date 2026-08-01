@@ -10,6 +10,9 @@ public sealed class TreinoJob
 {
     public Guid Id { get; set; }
 
+    /// <summary>Rede cujos dados serão treinados. Modelo é sempre por rede, nunca cruzando.</summary>
+    public int RedeId { get; set; }
+
     public TreinoStatus Status { get; set; }
 
     public DateTimeOffset DataAgendamento { get; set; }
@@ -21,6 +24,29 @@ public sealed class TreinoJob
     /// de treino do POC sob controle — o backtest retreina o LightGBM a cada fold.
     /// </summary>
     public int MaxSkus { get; set; }
+
+    /// <summary>
+    /// Corte de informação do treino: nenhuma observação com data igual ou posterior
+    /// a esta pode entrar no ajuste do modelo. <c>null</c> = sem corte, treina sobre
+    /// todo o histórico importado da rede.
+    ///
+    /// <para>
+    /// É um controle anti-vazamento, não um parâmetro de desempenho — encurtar a
+    /// janela de treino não deixa o modelo melhor, deixa-o honesto. O import da
+    /// comparação traz de propósito os dias <b>posteriores</b> à sugestão do ERP,
+    /// porque são o gabarito contra o qual os dois braços são pontuados. Treinar sem
+    /// corte faz o modelo aprender sobre esses mesmos dias, e a comparação deixa de
+    /// medir previsão para medir memória.
+    /// </para>
+    ///
+    /// <para>
+    /// Quem monta a população da comparação declara
+    /// <c>ComparisonItem.ModeloTreinadoAte</c>, que o comparador exige ser
+    /// estritamente anterior à data da sugestão. Este campo é o que torna essa
+    /// declaração verificável em vez de adivinhada.
+    /// </para>
+    /// </summary>
+    public DateOnly? TreinoAte { get; set; }
 
     /// <summary>Chave no MinIO (bucket de modelos) do .zip do modelo LightGBM treinado.</summary>
     public string? ModeloBlobKey { get; set; }

@@ -13,9 +13,9 @@
 | [01 — Dataset sintético farma](01-dataset-sintetico.md) | Curva ABC, sazonalidade, promoções, ruptura, IQVIA, Poisson, geração reproduzível | **F4** |
 | [02 — Feature Engineering](02-feature-engineering.md) | O que é "feature", lags, rolling, calendário, hierarquia, **anti-leakage por lead time** | **F5** |
 | [03 — Engines de previsão](03-engines-previsao.md) | Baselines (naïve sazonal, média móvel) e **LightGBM** (gradient boosted trees) | **F6.1 / F6.2** |
-| [04 — Avaliação e métricas](04-avaliacao-metricas.md) | MAE, RMSE, WAPE, MAPE; **walk-forward**; drill-down por hierarquia e regressões locais | **F6.1 / F7** |
+| [04 — Avaliação e métricas](04-avaliacao-metricas.md) | MAE, RMSE, WAPE, MAPE; **walk-forward**; drill-down por hierarquia e regressões locais; **comparativo contra o ERP real** (três camadas, duas regras, limitações declaradas) | **F6.1 / F7 / F13** |
 | [05 — Pipeline de treino completo](05-pipeline-treino-completo.md) | Modelo global, ABC por Pareto, masking de ruptura, fluxo Worker → Stage → Features → LightGBM → MinIO | **F6.3** |
-| [07 — Sugestão de compra](07-sugestao-compra.md) | Política eMax/eSeg vs ROP+forecast; simulador de compras; KPIs de inventário; comparativo central do TCC | **F8** |
+| [07 — Sugestão de compra](07-sugestao-compra.md) | Política eMax/eSeg vs ROP+forecast; simulador de compras; KPIs de inventário. **Anterior à F13** — a `EMaxESegPolicy` descrita ali foi apagada e o comparativo do TCC migrou para [04 §Comparativo contra o ERP real](04-avaliacao-metricas.md#comparativo-erp). Ler pelos KPIs de inventário, não pelo comparativo. | **F8** |
 | [06 — Glossário](06-glossario.md) | Termos-chave em ordem alfabética |
 
 ---
@@ -32,7 +32,7 @@ flowchart LR
     D -->|"Engines (naïve, MA, LightGBM)"| E[Forecast]
     E -->|Backtest walk-forward| F[Métricas WAPE/MAE]
     E -->|F8 — ROP + safety| G[Sugestão de compra]
-    H["Política eMax/eSeg<br/>clássica"] -.->|comparativo do TCC| G
+    H["ERP real PBS<br/>DemandaDia + CompraSugerida"] -.->|comparativo do TCC F13| E
     G -->|Simulador de compras| K[KPIs: NS, cobertura, custo]
     style A fill:#eef
     style E fill:#dfd
@@ -41,7 +41,7 @@ flowchart LR
     style K fill:#dfd
 ```
 
-A grande pergunta do TCC é: **a sugestão de compra derivada do forecast ML (caminho de baixo, em verde) é melhor que a regra eMax/eSeg clássica (caminho lateral)?** O F8 responde via replay determinístico das duas políticas sobre o mesmo histórico — [doc 07](07-sugestao-compra.md) detalha.
+A grande pergunta do TCC é: **a previsão de demanda do ML é melhor que a do ERP que a rede usa hoje?** Desde a F13 o baseline é o **ERP real (PBS)** — que grava a própria previsão (`DemandaDia`) e a própria sugestão —, e não uma reimplementação nossa da regra eMax/eSeg, que foi apagada. O protocolo está em [doc 04 §Comparativo contra o ERP real](04-avaliacao-metricas.md#comparativo-erp); o [doc 07](07-sugestao-compra.md) segue válido pelos KPIs de inventário do simulador, não pelo comparativo que descreve.
 
 ---
 

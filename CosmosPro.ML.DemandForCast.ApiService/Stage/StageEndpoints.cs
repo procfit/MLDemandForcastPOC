@@ -27,8 +27,10 @@ internal static class StageEndpoints
     private static async Task<IResult> BrowseAsync(
         string table,
         SqlConnection connection,
+        CosmosPro.ML.DemandForCast.Engine.EngineDbContext db,
         ILogger<Program> logger,
         CancellationToken ct,
+        [FromQuery] int redeId = 1,
         [FromQuery] int skip = 0,
         [FromQuery] int take = 25,
         [FromQuery] string? orderBy = null,
@@ -37,10 +39,12 @@ internal static class StageEndpoints
         if (!StageBrowser.TryGetTable(table, out var info))
             return Results.NotFound(new { error = $"Tabela '{table}' não reconhecida." });
 
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
         try
         {
             var browser = new StageBrowser(connection);
-            var page = await browser.QueryAsync(info, skip, take, orderBy, desc, ct);
+            var page = await browser.QueryAsync(info, redeId, skip, take, orderBy, desc, ct);
             return Results.Ok(new StagePageResponse(page.Total, page.Columns, page.Rows));
         }
         catch (SqlException ex)

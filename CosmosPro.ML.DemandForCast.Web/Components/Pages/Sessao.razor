@@ -1,0 +1,414 @@
+@page "/comparacoes/{Id:guid}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ComparacoesApiClient ComparacoesApi
+@inject ExtratorApiClient ExtratorApi
+@inject NotificationService Notifications
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>@(_sessao?.Nome ?? "Comparação")</PageTitle>
+
+<RadzenStack Orientation="Orientation.Vertical" Gap="1.5rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenButton Icon="arrow_back" Variant="Variant.Text" Click="@(() => Nav.NavigateTo("/"))" />
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">@(_sessao?.Nome ?? "Comparação")</RadzenText>
+        @if (_sessao is not null)
+        {
+            <RadzenBadge Text="@SessaoView.EstadoLabel(_sessao.Status)" BadgeStyle="@SessaoView.BadgeFor(_sessao.Status)" Shade="Shade.Lighter" />
+        }
+    </RadzenStack>
+
+    @if (!_carregou && _erroCarregamento is null)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+            <RadzenText TextStyle="TextStyle.Body2">Carregando…</RadzenText>
+        </RadzenStack>
+    }
+    else if (_sessao is null && _erroCarregamento is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+            Falha ao carregar a comparação: @_erroCarregamento
+        </RadzenAlert>
+    }
+    else if (_sessao is null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+            Comparação não encontrada.
+        </RadzenAlert>
+    }
+    else
+    {
+        @if (_sessao.SugestaoId is { } sugestaoId)
+        {
+            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                Sugestão @sugestaoId — @_sessao.SugestaoDescricao — @_sessao.SugestaoDataHora?.ToString("dd/MM/yyyy")
+            </RadzenText>
+        }
+
+        @if (_erroCarregamento is not null)
+        {
+            @* _sessao não é nulo aqui (esse caso já saiu pelo ramo de cima), então uma
+               falha de atualização — por exemplo em GetAnaliseAsync — não pode ficar muda só
+               porque a página ainda tem dados antigos para mostrar. *@
+            <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">
+                Nem tudo nesta página pôde ser atualizado agora: @_erroCarregamento
+            </RadzenAlert>
+        }
+
+        @if (_sessao.Status == "Inviavel")
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">
+                <strong>Esta sugestão não pôde ser comparada.</strong>
+                <div style="margin-top: 0.5rem">@_sessao.MotivoInviabilidade</div>
+            </RadzenAlert>
+        }
+        else if (_sessao.Status == "Falha")
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+                <strong>Algo deu errado nesta comparação.</strong>
+                <div style="margin-top: 0.5rem">@_sessao.MensagemErro</div>
+            </RadzenAlert>
+        }
+
+        @if (MostraUpload(_sessao.Status))
+        {
+            <RadzenCard Variant="Variant.Outlined">
+                <RadzenStack Gap="1rem">
+                    <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">@TituloUpload(_sessao.Status)</RadzenText>
+                    <ol style="margin: 0; padding-left: 1.25rem; line-height: 1.8">
+                        <li>Baixe o <strong>extrator</strong> e execute-o na máquina com acesso ao PBS.</li>
+                        <li>No extrator, escolha a sugestão de compra do PBS que você quer comparar.</li>
+                        <li>Volte aqui e envie o arquivo .zip gerado pelo extrator.</li>
+                    </ol>
+
+                    @if (_sessao.Status == "AguardandoDados")
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem" Wrap="FlexWrap.Wrap">
+                            <RadzenButton Click="@BaixarExtrator" Icon="download" Text="Baixar extrator"
+                                          ButtonStyle="ButtonStyle.Secondary" Disabled="@_extratorNaoPublicado" />
+                            @if (_extratorVersao is { } versao)
+                            {
+                                <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                    Versão @versao.Versao — checksum SHA-256: @versao.Sha256
+                                </RadzenText>
+                            }
+                            else if (_extratorNaoPublicado)
+                            {
+                                <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                    O extrator ainda não foi publicado. Fale com o suporte técnico.
+                                </RadzenText>
+                            }
+                        </RadzenStack>
+                    }
+
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+                        <InputFile id="sessao-zip-input" OnChange="OnFileSelected" accept=".zip"
+                                   style="display: none" disabled="@_uploading" />
+                        <RadzenButton Click="@TriggerFilePicker"
+                                      Icon="@(_uploading ? "hourglass_empty" : "cloud_upload")"
+                                      Text="@(_uploading ? "Enviando…" : "Enviar ZIP")"
+                                      ButtonStyle="ButtonStyle.Primary"
+                                      Disabled="@_uploading" />
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenCard>
+        }
+        else if (_sessao.Status is "ProcessandoDados" or "Treinando" or "Comparando")
+        {
+            var (icon, titulo, descricao) = FaseInfo(_sessao.Status);
+            <RadzenCard Variant="Variant.Outlined">
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.Center">
+                    <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Medium" />
+                    <RadzenIcon Icon="@icon" Style="font-size: 2rem; color: var(--rz-primary)" />
+                    <RadzenStack Gap="0.25rem">
+                        <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">@titulo</RadzenText>
+                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">@descricao</RadzenText>
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenCard>
+        }
+        else if (_sessao.Status == "Concluida")
+        {
+            @if (Resultado is not { } resultado)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">
+                    <strong>A comparação terminou, mas o resultado dela não pôde ser lido.</strong>
+                    <div style="margin-top: 0.5rem">
+                        Nenhum número é exibido, porque um resultado ilegível não é um resultado zero. Envie os
+                        dados novamente para refazer a comparação; se acontecer de novo, procure o suporte.
+                    </div>
+                </RadzenAlert>
+            }
+            else
+            {
+                <ManchetesComparacao Resultado="@resultado" />
+
+                @* Bloco fixo, acima das abas: a notícia ruim não pode depender de um clique. *@
+                <OndeOMlFoiPior Analise="@_analise" Resultado="@resultado" />
+
+                <RadzenCard Variant="Variant.Outlined">
+                    <RadzenTabs RenderMode="TabRenderMode.Client">
+                        <Tabs>
+                            <RadzenTabsItem Text="Itens comparados">
+                                <TabelaItensComparacao SessaoId="@Id" />
+                            </RadzenTabsItem>
+                            <RadzenTabsItem Text="Área técnica">
+                                <AreaTecnicaComparacao Analise="@_analise" Resultado="@resultado" />
+                            </RadzenTabsItem>
+                        </Tabs>
+                    </RadzenTabs>
+                </RadzenCard>
+            }
+        }
+    }
+</RadzenStack>
+
+@code {
+    private const long MaxBytes = 500L * 1024 * 1024;
+
+    [Parameter] public Guid Id { get; set; }
+
+    private SessaoView? _sessao;
+    private bool _loading;
+    private bool _uploading;
+
+    /// <summary>
+    /// Se a primeira leitura já respondeu. Separado de <c>_loading</c> porque o prerender
+    /// não carrega nada: sem esta distinção, o primeiro render mostraria "Comparação não
+    /// encontrada" para uma sessão que existe e ainda não foi buscada.
+    /// </summary>
+    private bool _carregou;
+    private string? _erroCarregamento;
+    private Timer? _timer;
+    private readonly CancellationTokenSource _cts = new();
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Agregados da manchete, desserializados uma vez por payload. Sem a memoização o
+    /// render refaria o parse do <c>ResultadoJson</c> a cada <c>StateHasChanged</c>, em cada
+    /// aba de navegador aberta.
+    /// </summary>
+    private string? _resultadoJsonLido;
+    private SessaoResultadoView? _resultado;
+
+    private SessaoResultadoView? Resultado
+    {
+        get
+        {
+            var json = _sessao?.ResultadoJson;
+            if (json is null) return null;
+            if (!ReferenceEquals(json, _resultadoJsonLido))
+            {
+                _resultadoJsonLido = json;
+                var lido = ComparacoesApiClient.ParseResultado(json);
+
+                // Payload antigo pode não ter gravado SkusSemCadastro dentro do
+                // ResultadoJson; GET /{id} projeta o mesmo número à parte
+                // (SessaoView.SkusSemCadastro), e sem este fallback o aviso "N itens sem
+                // cadastro" sumiria da manchete em silêncio para uma sessão que o tem.
+                _resultado = lido is not null && lido.SkusSemCadastro is null && _sessao?.SkusSemCadastro is { } n
+                    ? lido with { SkusSemCadastro = n }
+                    : lido;
+            }
+            return _resultado;
+        }
+    }
+
+    private SessaoAnalise? _analise;
+
+    private ExtratorVersaoView? _extratorVersao;
+
+    /// <summary>
+    /// Só verdadeiro quando a apiservice respondeu 404 (bucket/manifesto ausente) — nunca
+    /// numa falha de leitura, que é problema transitório e diferente de "ninguém publicou
+    /// ainda". Nesse outro caso o botão continua ativo: o download pode funcionar mesmo
+    /// que esta consulta de versão/checksum tenha falhado.
+    /// </summary>
+    private bool _extratorNaoPublicado;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Prerender roda OnInitializedAsync antes do circuito interativo; sem este guard a
+        // carga acontece duas vezes e o Timer é agendado num componente que será
+        // descartado (mesmo motivo de Comparacao.razor).
+        if (!RendererInfo.IsInteractive) return;
+
+        await RefreshAsync();
+        await CarregarExtratorVersaoAsync();
+        _timer = new Timer(async _ =>
+        {
+            try
+            {
+                await InvokeAsync(RefreshAsync);
+            }
+            catch
+            {
+                // Tick pode disparar durante/depois do teardown do circuito (navegação
+                // no meio de um refresh); nunca deixe escapar pro thread pool como
+                // async void não tratado.
+            }
+        }, null, PollInterval, PollInterval);
+        AtualizarPolling();
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_loading) return;
+        _loading = true;
+        try
+        {
+            _sessao = await ComparacoesApi.GetAsync(Id, _cts.Token);
+            // GetAsync devolve null tanto num 404 real quanto após capturar uma
+            // exceção — só limpamos o erro quando a chamada de fato respondeu, para
+            // "não encontrada" (404) e "falha ao carregar" (exceção) renderizarem
+            // mensagens distintas.
+            _erroCarregamento = null;
+            _carregou = true;
+
+            // A análise só existe depois da materialização, e só é buscada uma vez: ela
+            // varre a população inteira no servidor e não muda mais num estado terminal.
+            if (_sessao is { Status: "Concluida" } && _analise is null)
+            {
+                _analise = await ComparacoesApi.GetAnaliseAsync(Id, _cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _erroCarregamento = ex.Message;
+            _carregou = true;
+        }
+        finally
+        {
+            _loading = false;
+            AtualizarPolling();
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Para de fazer poll quando a sessão chega num estado terminal — senão o timer
+    /// roda pra sempre mesmo com nada mais a atualizar. Reativa automaticamente se um
+    /// novo upload (a partir de Inviavel/Falha) tirar a sessão do terminal de novo.
+    /// </summary>
+    private void AtualizarPolling()
+    {
+        if (_timer is null) return;
+        var terminal = _sessao?.EstadoTerminal ?? false;
+        var due = terminal ? Timeout.InfiniteTimeSpan : PollInterval;
+        _timer.Change(due, PollInterval);
+    }
+
+    /// <summary>
+    /// Buscada uma vez, não a cada tick do poll de 3s: a versão publicada não muda durante
+    /// a vida da sessão, e reconsultar a cada tick só gastaria uma chamada à toa.
+    /// </summary>
+    private async Task CarregarExtratorVersaoAsync()
+    {
+        try
+        {
+            _extratorVersao = await ExtratorApi.GetVersaoAsync(_cts.Token);
+            _extratorNaoPublicado = _extratorVersao is null;
+        }
+        catch (OperationCanceledException) { }
+        catch
+        {
+            // Falha na consulta de versão não é "não publicado" — só deixamos de mostrar
+            // versão/checksum ao lado do botão; o botão em si continua ativo.
+        }
+    }
+
+    private void BaixarExtrator() => Nav.NavigateTo("/extrator/download", forceLoad: true);
+
+    private async Task TriggerFilePicker() =>
+        await JS.InvokeVoidAsync("clickElementById", "sessao-zip-input");
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        if (e.FileCount == 0) return;
+        var file = e.File;
+        if (file is null) return;
+
+        _uploading = true;
+        StateHasChanged();
+        try
+        {
+            await using var stream = file.OpenReadStream(MaxBytes);
+            var result = await ComparacoesApi.UploadDadosAsync(Id, stream, file.Name, _cts.Token);
+
+            if (result.Success)
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Dados enviados",
+                    Detail = "Seu ZIP foi enfileirado para processamento.",
+                    Duration = 5000,
+                });
+                await RefreshAsync();
+            }
+            else
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Error,
+                    Summary = "Falha no envio",
+                    Detail = string.Join(" · ", result.Errors ?? []),
+                    Duration = 8000,
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Erro inesperado",
+                Detail = ex.Message,
+                Duration = 8000,
+            });
+        }
+        finally
+        {
+            _uploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private static bool MostraUpload(string status) =>
+        status is "AguardandoDados" or "Inviavel" or "Falha";
+
+    private static string TituloUpload(string status) => status switch
+    {
+        "Inviavel" => "Envie outra sugestão",
+        "Falha" => "Tente novamente com um novo ZIP",
+        _ => "Envie os dados para começar",
+    };
+
+    private static (string Icon, string Titulo, string Descricao) FaseInfo(string status) => status switch
+    {
+        "ProcessandoDados" => ("autorenew", "Importando seus dados",
+            "Estamos lendo o arquivo que você enviou e carregando vendas, estoques, compras e promoções no banco."),
+        "Treinando" => ("model_training", "Aprendendo o padrão de venda das suas lojas",
+            "O modelo está estudando o histórico para aprender sazonalidade, promoções e o comportamento de cada SKU e loja."),
+        "Comparando" => ("compare_arrows", "Comparando os dois métodos",
+            "Estamos confrontando a sugestão do ERP com a que o ML calcularia para o mesmo período."),
+        _ => ("hourglass_empty", "Processando", ""),
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_timer is not null)
+        {
+            // DisposeAsync espera um callback em andamento terminar antes de retornar
+            // (Dispose síncrono não espera) — só então é seguro cancelar o _cts que o
+            // callback usa.
+            await _timer.DisposeAsync();
+        }
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

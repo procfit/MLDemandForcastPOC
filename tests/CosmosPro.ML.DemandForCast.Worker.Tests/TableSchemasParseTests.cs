@@ -76,17 +76,32 @@ public sealed class TableSchemasParseTests
 public sealed class TableSchemasBuildEmptyTests
 {
     [Fact]
-    public void BuildEmpty_Vendas_cria_DataTable_com_6_colunas_tipadas()
+    public void BuildEmpty_Vendas_cria_DataTable_com_7_colunas_tipadas()
     {
         var dt = TableSchemas.BuildEmpty("Vendas");
 
         dt.TableName.Should().Be("Vendas");
-        dt.Columns.Count.Should().Be(6);
+        // 6 colunas do CSV + RedeId, que o Worker injeta (não vem no arquivo).
+        dt.Columns.Count.Should().Be(7);
+        dt.Columns["RedeId"]!.DataType.Should().Be(typeof(int));
         dt.Columns["Data"]!.DataType.Should().Be(typeof(DateTime));
         dt.Columns["LojaId"]!.DataType.Should().Be(typeof(int));
         dt.Columns["Sku"]!.DataType.Should().Be(typeof(string));
         dt.Columns["Quantidade"]!.DataType.Should().Be(typeof(decimal));
         dt.Rows.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void RedeId_e_ServerSupplied_em_todas_as_tabelas()
+    {
+        foreach (var (tabela, colunas) in TableSchemas.ByTable)
+        {
+            var redeId = colunas.SingleOrDefault(c => c.Name == "RedeId");
+            redeId.Should().NotBeNull($"{tabela} precisa de RedeId para o isolamento por rede");
+            redeId!.ServerSupplied.Should().BeTrue(
+                $"{tabela}.RedeId não pode vir do CSV — o cliente reivindicaria a rede de outro");
+            redeId.Nullable.Should().BeFalse();
+        }
     }
 
     [Fact]

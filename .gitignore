@@ -58,3 +58,6 @@ appsettings.*.local.json
 
 # ---- Screenshots de desenvolvimento (raiz) ----
 /*.png
+
+# Artefatos de publicacao do Aspire (compose + .env) — gerados, nunca versionados
+aspire-output/

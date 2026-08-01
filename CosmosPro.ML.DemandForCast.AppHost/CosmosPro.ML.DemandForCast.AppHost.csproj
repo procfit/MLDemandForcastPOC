@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Docker" Version="13.4.6" />
     <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.4.3" />
     <PackageReference Include="Aspire.Hosting.ClickHouse" Version="13.3.5" />
     <PackageReference Include="CommunityToolkit.Aspire.Hosting.SqlDatabaseProjects" Version="13.1.1" />
@@ -21,6 +22,7 @@
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.ApiService\CosmosPro.ML.DemandForCast.ApiService.csproj" />
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Web\CosmosPro.ML.DemandForCast.Web.csproj" />
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Database\CosmosPro.ML.DemandForCast.Database.sqlproj" />
+    <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Migrator\CosmosPro.ML.DemandForCast.Migrator.csproj" />
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.OlapSchema\CosmosPro.ML.DemandForCast.OlapSchema.csproj" />
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Worker\CosmosPro.ML.DemandForCast.Worker.csproj" />
   </ItemGroup>

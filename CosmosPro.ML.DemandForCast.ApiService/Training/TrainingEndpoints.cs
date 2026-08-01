@@ -33,8 +33,11 @@ internal static class TrainingEndpoints
         [FromBody] EnqueueTrainingRequest? req,
         EngineDbContext db,
         ILogger<Program> logger,
-        CancellationToken ct)
+        CancellationToken ct,
+        [FromQuery] int redeId = 1)
     {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
         var maxSkus = req?.MaxSkus ?? 80;
         if (maxSkus is < 1 or > 5000)
             return Results.BadRequest(new ValidationErrorResponse(["MaxSkus deve estar entre 1 e 5000."]));
@@ -42,28 +45,33 @@ internal static class TrainingEndpoints
         var job = new TreinoJob
         {
             Id = Guid.CreateVersion7(),
+            RedeId = redeId,
             Status = TreinoStatus.Pendente,
             DataAgendamento = DateTimeOffset.UtcNow,
             MaxSkus = maxSkus,
+            TreinoAte = req?.TreinoAte,
         };
         db.TreinoJobs.Add(job);
         await db.SaveChangesAsync(ct);
 
-        logger.LogInformation("Treino {Id} enfileirado (maxSkus={MaxSkus}).", job.Id, maxSkus);
+        logger.LogInformation(
+            "Treino {Id} enfileirado (maxSkus={MaxSkus}, treinoAte={TreinoAte}).",
+            job.Id, maxSkus, job.TreinoAte?.ToString("yyyy-MM-dd") ?? "sem corte");
         return Results.Accepted($"/api/training/{job.Id}", ToView(job));
     }
 
     private static async Task<IResult> ListAsync(
-        EngineDbContext db, CancellationToken ct, [FromQuery] int take = 50)
+        EngineDbContext db, CancellationToken ct, [FromQuery] int take = 50, [FromQuery] int redeId = 1)
     {
         var jobs = await db.TreinoJobs
             .AsNoTracking()
+            .Where(j => j.RedeId == redeId)
             .OrderByDescending(j => j.DataAgendamento)
             .Take(Math.Clamp(take, 1, 200))
             // ResultadoJson pode ser grande — não traz na listagem.
             .Select(j => new TreinoJobView(
                 j.Id, j.Status.ToString(), j.DataAgendamento, j.DataInicioProcessamento,
-                j.DataConclusao, j.MaxSkus, j.FeaturesGeradas, j.ModeloBlobKey, j.MensagemErro, null))
+                j.DataConclusao, j.MaxSkus, j.TreinoAte, j.FeaturesGeradas, j.ModeloBlobKey, j.MensagemErro, null))
             .ToListAsync(ct);
         return Results.Ok(jobs);
     }
@@ -76,10 +84,16 @@ internal static class TrainingEndpoints
 
     private static TreinoJobView ToView(TreinoJob j) => new(
         j.Id, j.Status.ToString(), j.DataAgendamento, j.DataInicioProcessamento,
-        j.DataConclusao, j.MaxSkus, j.FeaturesGeradas, j.ModeloBlobKey, j.MensagemErro, j.ResultadoJson);
+        j.DataConclusao, j.MaxSkus, j.TreinoAte, j.FeaturesGeradas, j.ModeloBlobKey,
+        j.MensagemErro, j.ResultadoJson);
 }
 
-internal sealed record EnqueueTrainingRequest(int? MaxSkus);
+/// <param name="TreinoAte">
+/// Corte de informação do treino — ver <see cref="TreinoJob.TreinoAte"/>. Opcional:
+/// omitir mantém o comportamento de treinar sobre todo o histórico. Quem for comparar
+/// contra o ERP precisa informá-lo, sob pena de treinar sobre o próprio gabarito.
+/// </param>
+internal sealed record EnqueueTrainingRequest(int? MaxSkus, DateOnly? TreinoAte = null);
 
 internal sealed record TreinoJobView(
     Guid Id,
@@ -88,6 +102,7 @@ internal sealed record TreinoJobView(
     DateTimeOffset? DataInicioProcessamento,
     DateTimeOffset? DataConclusao,
     int MaxSkus,
+    DateOnly? TreinoAte,
     long? FeaturesGeradas,
     string? ModeloBlobKey,
     string? MensagemErro,

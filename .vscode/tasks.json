@@ -24,6 +24,26 @@
       }
     },
     {
+      // Build só do extrator: a solução inteira inclui o SQL Project (DACPAC) e
+      // é lenta demais para o ciclo de depuração desse utilitário.
+      "label": "build extrator",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/CosmosPro.ML.DemandForCast.Extractor/CosmosPro.ML.DemandForCast.Extractor.csproj",
+        "-c",
+        "Debug",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary;ForceNoAlign"
+      ],
+      "problemMatcher": "$msCompile",
+      "presentation": {
+        "reveal": "silent",
+        "clear": true
+      }
+    },
+    {
       "label": "clean",
       "type": "process",
       "command": "dotnet",

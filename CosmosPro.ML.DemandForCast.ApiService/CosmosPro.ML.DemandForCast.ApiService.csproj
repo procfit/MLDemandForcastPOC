@@ -14,6 +14,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.ApiService.Tests" />
+    <!-- Idem: o teste de contrato do extrator confere os nomes dos CSVs esperados. -->
+    <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.Extractor.Tests" />
   </ItemGroup>
 
   <ItemGroup>

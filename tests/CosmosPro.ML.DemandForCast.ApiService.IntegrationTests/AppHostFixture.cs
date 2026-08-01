@@ -1,37 +1,65 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
+using CosmosPro.ML.DemandForCast.Tests.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Minio;
 using Refit;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 
 /// <summary>
-/// Sobe o AppHost real (com SQL Server, ClickHouse, MinIO, Worker) uma vez
+/// Sobe o AppHost real (com SQL Server, MinIO, Worker) uma vez
 /// por classe de teste via <c>IClassFixture</c>. Subir leva ~60-90s por causa
 /// dos containers persistentes — não use por método (`IAsyncLifetime` direto).
 /// </summary>
 public sealed class AppHostFixture : IAsyncLifetime
 {
+    /// <summary>
+    /// Impede que este AppHost coexista com o do projeto E2E — ver
+    /// <see cref="AppHostExclusiveLock"/>. Os containers são persistentes e
+    /// compartilhados, então dois AppHosts simultâneos são um só ambiente sendo
+    /// escrito por dois donos.
+    /// </summary>
+    private AppHostExclusiveLock? _exclusividade;
+
     public DistributedApplication App { get; private set; } = null!;
     public IImportsApi ImportsApi { get; private set; } = null!;
+    public IRedesApi RedesApi { get; private set; } = null!;
+    public IStageApi StageApi { get; private set; } = null!;
+    public IComparacoesApi ComparacoesApi { get; private set; } = null!;
+    public IComparisonApi ComparisonApi { get; private set; } = null!;
+    public ITrainingApi TrainingApi { get; private set; } = null!;
+    public IPurchasingApi PurchasingApi { get; private set; } = null!;
+    public IExtratorApi ExtratorApi { get; private set; } = null!;
+
+    /// <summary>Rede semeada pela migration AddRedes — usada pelos testes que não criam rede própria.</summary>
+    public const int RedeDemoId = 1;
 
     public async ValueTask InitializeAsync()
     {
+        _exclusividade = await AppHostExclusiveLock.AcquireAsync();
+
         var builder = await DistributedApplicationTestingBuilder
             .CreateAsync<Projects.CosmosPro_ML_DemandForCast_AppHost>();
 
         builder.Services.AddLogging(l => l.SetMinimumLevel(LogLevel.Warning));
 
-        // CommunityToolkit.Aspire.Hosting.SqlDatabaseProjects descobre o
-        // caminho do .dacpac avaliando o .sqlproj via Microsoft.Build em runtime.
-        // Sob `dotnet test`, MSBuild não está corretamente resolvido e a carga
-        // falha com "Microsoft.Common.props not found". Como o build do .sqlproj
-        // já gera o .dacpac no `bin\Debug\net10.0` da pasta do projeto, atalhamos
-        // o resource para apontar direto pro arquivo via `WithDacpac` (que
-        // adiciona uma DacpacMetadataAnnotation e bypassa o MSBuild evaluation).
-        OverrideSqlProjectWithBuiltDacpac(builder, "stage-schema");
+        // 'poweruser-password' é parâmetro secreto sem valor no AppHost (vem de
+        // user-secrets em desenvolvimento). Sem injetar aqui, a Web não sobe.
+        // E-mail próprio, diferente do admin de debug (`admin@local`): o banco engine é
+        // persistente e compartilhado, e reusar o e-mail fazia teste e inner loop
+        // disputarem a senha do mesmo usuário.
+        builder.Configuration["Parameters:poweruser-email"] = "integracao@teste.local";
+        builder.Configuration["Parameters:poweruser-password"] = "TesteIntegracao!2026";
+
+        // Aqui existia um remendo (`OverrideSqlProjectWithBuiltDacpac`): o
+        // `AddSqlProject` do CommunityToolkit descobria o caminho do .dacpac avaliando o
+        // .sqlproj via Microsoft.Build em runtime, e sob `dotnet test` isso falhava com
+        // "Microsoft.Common.props not found". Com o schema aplicado pelo projeto
+        // `db-migrator`, que carrega o .dacpac copiado para o próprio bin, não há mais
+        // avaliação de MSBuild em runtime e o remendo deixou de existir.
 
         App = await builder.BuildAsync();
         await App.StartAsync();
@@ -39,6 +67,13 @@ public sealed class AppHostFixture : IAsyncLifetime
         var httpClient = App.CreateHttpClient("apiservice", endpointName: "https");
         httpClient.Timeout = TimeSpan.FromMinutes(2);
         ImportsApi = RestService.For<IImportsApi>(httpClient);
+        RedesApi = RestService.For<IRedesApi>(httpClient);
+        StageApi = RestService.For<IStageApi>(httpClient);
+        ComparacoesApi = RestService.For<IComparacoesApi>(httpClient);
+        ComparisonApi = RestService.For<IComparisonApi>(httpClient);
+        TrainingApi = RestService.For<ITrainingApi>(httpClient);
+        PurchasingApi = RestService.For<IPurchasingApi>(httpClient);
+        ExtratorApi = RestService.For<IExtratorApi>(httpClient);
 
         using var healthyCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         try
@@ -53,42 +88,6 @@ public sealed class AppHostFixture : IAsyncLifetime
                 $"apiservice não ficou saudável.\n\nEstado dos recursos:\n{snapshot}\n\nLogs:\n{failedLogs}",
                 ex);
         }
-    }
-
-    private static void OverrideSqlProjectWithBuiltDacpac(IDistributedApplicationTestingBuilder builder, string resourceName)
-    {
-        var resource = builder.Resources.OfType<SqlProjectResource>().Single(r => r.Name == resourceName);
-
-        // bin do test = ...\tests\<TestProj>\bin\Debug\net10.0\
-        // dacpac     = ...\CosmosPro.ML.DemandForCast.Database\bin\Debug\net10.0\CosmosPro.ML.DemandForCast.Database.dacpac
-        var testBin = AppContext.BaseDirectory;
-        var repoRoot = Path.GetFullPath(Path.Combine(testBin, "..", "..", "..", "..", ".."));
-        var dacpacPath = Path.Combine(
-            repoRoot,
-            "CosmosPro.ML.DemandForCast.Database",
-            "bin", "Debug", "net10.0",
-            "CosmosPro.ML.DemandForCast.Database.dacpac");
-
-        if (!File.Exists(dacpacPath))
-        {
-            throw new FileNotFoundException(
-                $"DACPAC não encontrado em '{dacpacPath}'. Garanta `dotnet build` do projeto Database antes de rodar testes.",
-                dacpacPath);
-        }
-
-        // O SqlProjectResource criado por AddSqlProject<TProject> prioriza
-        // IProjectMetadata (que faz ele resolver o .sqlproj via MSBuild). Removemos
-        // essa anotação para forçar uso da DacpacMetadataAnnotation que WithDacpac
-        // adiciona em seguida.
-        var projectMetadataAnnotations = resource.Annotations
-            .Where(a => a.GetType().GetInterfaces().Any(i => i.Name == "IProjectMetadata"))
-            .ToList();
-        foreach (var anno in projectMetadataAnnotations)
-        {
-            resource.Annotations.Remove(anno);
-        }
-
-        builder.CreateResourceBuilder(resource).WithDacpac(dacpacPath);
     }
 
     private async Task<string> CaptureResourceSnapshotAsync()
@@ -110,7 +109,7 @@ public sealed class AppHostFixture : IAsyncLifetime
     private async Task<string> CaptureFailedResourceLogsAsync()
     {
         var loggerService = App.Services.GetRequiredService<ResourceLoggerService>();
-        var failed = new[] { "stage-schema", "apiservice", "worker", "engine-migrations" };
+        var failed = new[] { "db-migrator", "apiservice", "worker" };
         var output = new List<string>();
 
         foreach (var name in failed)
@@ -137,12 +136,87 @@ public sealed class AppHostFixture : IAsyncLifetime
         return string.Join("\n", output);
     }
 
+    /// <summary>
+    /// Espera o Worker terminar de processar a carga. Faz polling no GET por id
+    /// porque não há sinal push — é o mesmo mecanismo que a UI usa.
+    /// Devolve a carga em estado terminal (Concluida ou Falha); o teste decide
+    /// se o estado é o esperado.
+    /// </summary>
+    public async Task<CargaStageView> WaitForCargaAsync(
+        Guid id, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        var limite = timeout ?? TimeSpan.FromMinutes(3);
+        var deadline = DateTimeOffset.UtcNow + limite;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var resp = await ImportsApi.GetAsync(id, ct);
+            if (resp.Content is { } carga && carga.Status is "Concluida" or "Falha")
+            {
+                return carga;
+            }
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        }
+
+        throw new TimeoutException(
+            $"Carga {id} não atingiu estado terminal em {limite.TotalSeconds:F0}s. " +
+            "Verifique os logs do worker.");
+    }
+
+    /// <summary>
+    /// Connection string do banco Stage tal como o Worker a recebe. Testes que
+    /// exercitam um loader diretamente (em vez de passar pela API) precisam dela.
+    /// </summary>
+    public async Task<string> GetStageConnectionStringAsync(CancellationToken ct = default)
+        => await App.GetConnectionStringAsync("Stage", ct)
+           ?? throw new InvalidOperationException("Recurso 'Stage' sem connection string.");
+
+    /// <summary>
+    /// Connection string do banco <c>engine</c>. Necessária para os testes que precisam plantar
+    /// um estado que a API não sabe produzir — sessão apontando para um job abandonado, por
+    /// exemplo — e depois observar o Worker reagir a ele.
+    /// </summary>
+    public async Task<string> GetEngineConnectionStringAsync(CancellationToken ct = default)
+        => await App.GetConnectionStringAsync("engine", ct)
+           ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+    /// <summary>
+    /// Cliente MinIO direto do teste, para semear/limpar o bucket <c>extrator</c> — a
+    /// apiservice só lê (publicação é manual, fora do processo). A connection string do
+    /// recurso vem no formato <c>Endpoint=http://host:port;AccessKey=..;SecretKey=..</c>
+    /// (CommunityToolkit.Aspire.Hosting.Minio); parseado aqui em vez de reusar
+    /// <c>AddMinioClient</c> porque este é o processo de teste, não a apiservice.
+    /// </summary>
+    public async Task<IMinioClient> GetMinioClientAsync(CancellationToken ct = default)
+    {
+        var cs = await App.GetConnectionStringAsync("minio", ct)
+                  ?? throw new InvalidOperationException("Recurso 'minio' sem connection string.");
+
+        var partes = cs.Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Split('=', 2))
+            .Where(p => p.Length == 2)
+            .ToDictionary(p => p[0], p => p[1]);
+
+        var endpoint = new Uri(partes["Endpoint"]);
+        return new MinioClient()
+            .WithEndpoint(endpoint.Host, endpoint.Port)
+            .WithCredentials(partes["AccessKey"], partes["SecretKey"])
+            .Build();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (App is not null)
         {
             await App.StopAsync();
             await App.DisposeAsync();
+        }
+
+        // Só depois do AppHost realmente parado: soltar antes deixaria o próximo
+        // processo subir enquanto apiservice/worker daqui ainda escrevem.
+        if (_exclusividade is not null)
+        {
+            await _exclusividade.DisposeAsync();
         }
     }
 }

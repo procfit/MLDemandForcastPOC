@@ -1,6 +1,21 @@
-﻿<Router AppAssembly="typeof(Program).Assembly">
+@* Autorização é resolvida na rota. Páginas de dados declaram [Authorize] e as
+   administrativas [Authorize(Roles = PowerUser)]; o login declara [AllowAnonymous].
+   Anônimo é redirecionado; autenticado sem permissão vê "Acesso negado" — são casos
+   diferentes e a UI não deve confundi-los. *@
+<Router AppAssembly="typeof(Program).Assembly">
     <Found Context="routeData">
-        <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+            <NotAuthorized>
+                @if (context.User.Identity?.IsAuthenticated != true)
+                {
+                    <RedirectToLogin />
+                }
+                else
+                {
+                    <AcessoNegado />
+                }
+            </NotAuthorized>
+        </AuthorizeRouteView>
         <FocusOnNavigate RouteData="routeData" Selector="h1" />
     </Found>
 </Router>

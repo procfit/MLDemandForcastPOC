@@ -2,6 +2,8 @@
 
 > Fase **F8** do roadmap · projeto [CosmosPro.ML.DemandForCast.Purchasing](../CosmosPro.ML.DemandForCast.Purchasing/) · UI em `/sugestao-compra`
 
+> **Documento anterior à F13, desatualizado no essencial.** Ele apresenta como comparativo central do TCC a comparação entre a `EMaxESegPolicy` (reimplementação nossa da regra clássica) e a `ForecastRopPolicy`. Essa classe foi **apagada** na F13 e o comparativo do TCC passou a ser contra o **ERP real (PBS)** — ver [04 — Comparativo contra o ERP real](04-avaliacao-metricas.md#comparativo-erp). Tudo que este documento diz sobre "as duas políticas", sobre quem vence e sobre o papel da tela `/sugestao-compra` (hoje ferramenta secundária, com uma política só) está **obsoleto**; a reescrita completa está adiada de propósito. O que continua válido é a parte metodológica: o replay contrafactual sobre janela histórica e as definições dos KPIs de inventário. Leia por elas. O comparativo que o usuário de fato opera hoje é a **sessão de comparação** da F14 — uma sugestão real do PBS confrontada com o que o ML teria comprado, com as limitações declaradas na tela; ver [README §6, F14](../README.md#6-roadmap-do-poc).
+
 ## O quê
 
 A pergunta-fim do TCC: **comprar segundo o forecast de ML é melhor que comprar segundo a regra eMax/eSeg clássica do varejo farma?**
@@ -126,7 +128,7 @@ A "demanda real" é **observada pela venda**. Em dias de **ruptura**, a venda su
 
 ### 1. Política eMax/eSeg clássica {#emax-eseg}
 
-A regra que farmácias usam (com variações) há décadas. Implementada em [EMaxESegPolicy.cs](../CosmosPro.ML.DemandForCast.Purchasing/Policies/EMaxESegPolicy.cs).
+A regra que farmácias usam (com variações) há décadas. A reimplementação em C# descrita nesta seção (`EMaxESegPolicy`) foi **apagada na F13** — o baseline clássico passou a ser o que o próprio ERP grava, ver [04 — Comparativo contra o ERP real](04-avaliacao-metricas.md#comparativo-erp). A fórmula abaixo fica como registro do que a classe fazia.
 
 #### Fórmula
 

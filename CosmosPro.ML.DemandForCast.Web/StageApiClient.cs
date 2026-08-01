@@ -1,9 +1,11 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using CosmosPro.ML.DemandForCast.Web.Services;
 
 namespace CosmosPro.ML.DemandForCast.Web;
 
-public class StageApiClient(HttpClient httpClient)
+/// <summary>redeId sempre do <see cref="IRedeContext"/> — ver ImportsApiClient.</summary>
+public class StageApiClient(HttpClient httpClient, IRedeContext redeContext)
 {
     public async Task<IReadOnlyList<StageTableSummary>> ListTablesAsync(CancellationToken ct = default)
     {
@@ -14,7 +16,8 @@ public class StageApiClient(HttpClient httpClient)
     public async Task<StagePage> BrowseAsync(
         string table, int skip, int take, string? orderBy, bool desc, CancellationToken ct = default)
     {
-        var url = $"/api/stage/{Uri.EscapeDataString(table)}?skip={skip}&take={take}&desc={desc.ToString().ToLowerInvariant()}";
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        var url = $"/api/stage/{Uri.EscapeDataString(table)}?redeId={redeId}&skip={skip}&take={take}&desc={desc.ToString().ToLowerInvariant()}";
         if (!string.IsNullOrWhiteSpace(orderBy))
             url += $"&orderBy={Uri.EscapeDataString(orderBy)}";
 

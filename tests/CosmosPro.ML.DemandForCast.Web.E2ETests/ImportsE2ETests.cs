@@ -4,7 +4,8 @@ using Microsoft.Playwright;
 
 namespace CosmosPro.ML.DemandForCast.Web.E2ETests;
 
-public sealed class ImportsE2ETests(AppHostFixture fixture) : IClassFixture<AppHostFixture>
+[Collection(AspireCollection.Name)]
+public sealed class ImportsE2ETests(AppHostFixture fixture)
 {
     [Fact]
     public async Task Upload_pelo_botao_Importar_mostra_notificacao_e_aparece_no_datagrid()
@@ -35,16 +36,15 @@ public sealed class ImportsE2ETests(AppHostFixture fixture) : IClassFixture<AppH
 
         try
         {
-            await using var context = await fixture.Browser.NewContextAsync(new BrowserNewContextOptions
-            {
-                IgnoreHTTPSErrors = true,
-            });
-            var page = await context.NewPageAsync();
+            // Depois de F11 a página exige autenticação — o login vem primeiro e o
+            // redirect pós-login já cai em "/".
+            var page = await fixture.NovaPaginaLogadaAsync();
 
-            // Act — navega para "/" (página única), seta o file no <input> escondido
+            // Act — depois da F14, "/" é o painel de comparações e o upload avulso
+            // mudou para "/tecnico/importar". Seta o file no <input> escondido
             // disparado pelo botão Importar (testa o controle direto pra evitar
-            // depender de JS interop fragil sob test headless).
-            await page.GotoAsync(fixture.WebfrontendUrl.TrimEnd('/') + "/");
+            // depender de JS interop frágil sob test headless).
+            await page.GotoAsync(fixture.WebfrontendUrl.TrimEnd('/') + "/tecnico/importar");
             await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
             await page.Locator("input[type=file]#hidden-zip-input").SetInputFilesAsync(tempZip);
