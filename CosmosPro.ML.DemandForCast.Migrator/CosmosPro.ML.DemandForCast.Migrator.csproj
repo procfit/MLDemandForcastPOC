@@ -36,9 +36,16 @@
   <Target Name="IncluiDacpacDoStage"
           AfterTargets="ResolveProjectReferences"
           BeforeTargets="AssignTargetPaths">
+    <!-- RemoveProperties é o que faz isto funcionar dentro da imagem: a task MSBuild
+         propaga as propriedades globais para o projeto filho, e a publicação de container
+         define RuntimeIdentifier=linux-x64. O .sqlproj então responde
+         `bin/<cfg>/net10.0/linux-x64/...dacpac` — caminho onde ele nunca escreve, porque
+         não gera saída por RID. O build morria em MSB3030 procurando um arquivo que estava
+         um diretório acima. SelfContained anda junto com o RID e afeta o mesmo cálculo. -->
     <MSBuild Projects="..\CosmosPro.ML.DemandForCast.Database\CosmosPro.ML.DemandForCast.Database.sqlproj"
              Targets="GetTargetPath"
-             Properties="Configuration=$(Configuration)">
+             Properties="Configuration=$(Configuration)"
+             RemoveProperties="RuntimeIdentifier;SelfContained">
       <Output TaskParameter="TargetOutputs" ItemName="_StageDatabaseOutput" />
     </MSBuild>
     <ItemGroup>
