@@ -178,8 +178,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Constrói e empurra as quatro imagens do repositório (apiservice, webfrontend,
-      # worker, vendas-olap-schema). `REGISTRY_ENDPOINT`/`REGISTRY_REPOSITORY` são lidos
+      # Constrói e empurra as quatro imagens do repositório (db-migrator, apiservice,
+      # webfrontend, worker). `REGISTRY_ENDPOINT`/`REGISTRY_REPOSITORY` são lidos
       # pelos parâmetros `registryEndpoint`/`registryRepository` do AppHost.
       # `--non-interactive` garante que um parâmetro sem valor vire erro em vez de um
       # prompt que travaria o job até o timeout.
