@@ -117,23 +117,44 @@ internal sealed class ExtractionService
         return lojas;
     }
 
-    /// <summary>Catálogo para o usuário escolher a sugestão no grid do MainForm.</summary>
+    /// <summary>
+    /// Catálogo para o usuário escolher a sugestão no grid do MainForm.
+    /// <para>
+    /// Duas idas ao banco de propósito. Uma única query que juntasse os cabeçalhos
+    /// a SUGESTOES_COMPRAS_RESULTADO para contar linhas e lojas obriga o servidor a
+    /// agregar a tabela de resultado inteira na faixa de datas pedida — medido na
+    /// instância real: 7 minutos sem resposta em 18 meses, timeout em 500s com 3
+    /// meses. Os mesmos totais pedidos para uma lista fechada de ids voltam na hora,
+    /// porque aí cada id é uma busca pelo índice de SUGESTAO_COMPRA. Então lê-se o
+    /// cabeçalho sozinho, e só depois as contagens dos ids que ele devolveu.
+    /// </para>
+    /// </summary>
     public static IReadOnlyList<SugestaoCatalogo> LoadCatalogoSugestoes(string connectionString, DateOnly dataInicio, CancellationToken ct)
     {
         using var connection = new SqlConnection(connectionString);
         connection.Open();
+
+        var cabecalhos = LoadCabecalhosDoCatalogo(connection, dataInicio, ct);
+        var contagens = LoadContagensDoCatalogo(connection, [.. cabecalhos.Select(c => c.SugestaoId)], ct);
+        return MesclarCatalogo(cabecalhos, contagens);
+    }
+
+    private static IReadOnlyList<SugestaoCatalogoCabecalho> LoadCabecalhosDoCatalogo(
+        SqlConnection connection, DateOnly dataInicio, CancellationToken ct)
+    {
         using var command = new SqlCommand(SqlResources.Load("catalogo_sugestoes.sql").Replace("{{DATA_INICIO}}", "@dataInicio"), connection)
         {
             CommandTimeout = CommandTimeoutSeconds,
         };
         command.Parameters.Add("@dataInicio", SqlDbType.Date).Value = dataInicio.ToDateTime(TimeOnly.MinValue);
+        using var cancelRegistration = ct.Register(command.Cancel);
         using var reader = command.ExecuteReader();
 
-        var catalogo = new List<SugestaoCatalogo>();
+        var cabecalhos = new List<SugestaoCatalogoCabecalho>();
         while (reader.Read())
         {
             ct.ThrowIfCancellationRequested();
-            catalogo.Add(new SugestaoCatalogo(
+            cabecalhos.Add(new SugestaoCatalogoCabecalho(
                 reader.GetInt64(0),
                 reader.IsDBNull(1) ? null : reader.GetString(1),
                 reader.GetDateTime(2),
@@ -143,11 +164,82 @@ internal sealed class ExtractionService
                 // a janela derivada (ExtractionWindow.Derive) fica só até a data da
                 // sugestão, sem cobertura futura — o comprador vê uma janela degenerada
                 // e escolhe outra sugestão, em vez do catálogo inteiro travar.
-                reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
-                reader.GetInt32(5),
-                reader.GetInt32(6)));
+                reader.IsDBNull(4) ? 0 : reader.GetInt32(4)));
         }
-        return catalogo;
+        return cabecalhos;
+    }
+
+    private static IReadOnlyList<SugestaoContagem> LoadContagensDoCatalogo(
+        SqlConnection connection, IReadOnlyList<long> sugestaoIds, CancellationToken ct)
+    {
+        var sql = SqlResources.Load("catalogo_sugestoes_contagens.sql");
+        var contagens = new List<SugestaoContagem>();
+
+        foreach (var lote in LotesDeSugestoes(sugestaoIds))
+        {
+            using var command = CreateContagensCommand(connection, sql, lote);
+            using var cancelRegistration = ct.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
+
+            while (reader.Read())
+            {
+                ct.ThrowIfCancellationRequested();
+                contagens.Add(new SugestaoContagem(reader.GetInt64(0), reader.GetInt32(1), reader.GetInt32(2)));
+            }
+        }
+
+        return contagens;
+    }
+
+    /// <summary>
+    /// Teto de parâmetros por comando no SQL Server. Não é configuração: é limite
+    /// do protocolo, e passar dele derruba o comando inteiro.
+    /// </summary>
+    internal const int MaxParametrosPorComando = 2100;
+
+    /// <summary>
+    /// Ids por comando na busca de contagens. 500 e não 2000: o catálogo de uma
+    /// faixa larga passa fácil do teto de <see cref="MaxParametrosPorComando"/>, e
+    /// encostar nele deixaria a próxima coluna que alguém acrescentar ao comando
+    /// sem folga. Além disso o texto da query varia com o tamanho do lote, então um
+    /// lote fixo faz todas as rodadas cheias compartilharem um único plano no cache
+    /// — só o resto final gera um segundo. 500 dá 4x de folga e mantém cada
+    /// comando numa ida rápida ao banco.
+    /// </summary>
+    internal const int SugestoesPorLote = 500;
+
+    /// <summary>
+    /// Quebra os ids em lotes que cabem no teto de parâmetros. Lista vazia devolve
+    /// zero lotes — nenhum comando é enviado quando não há cabeçalho nenhum.
+    /// </summary>
+    internal static IReadOnlyList<IReadOnlyList<long>> LotesDeSugestoes(IReadOnlyList<long> sugestaoIds) =>
+        [.. sugestaoIds.Chunk(SugestoesPorLote)];
+
+    /// <summary>
+    /// Junta cabeçalho e contagem. Uma sugestão pode não ter nenhuma linha em
+    /// SUGESTOES_COMPRAS_RESULTADO (visto na instância real: id 17658), e aí a
+    /// segunda query simplesmente não devolve linha para ela — o catálogo continua
+    /// mostrando a sugestão, com zero, porque sumir da lista faria o comprador
+    /// procurar por uma sugestão que existe no ERP e não está na tela.
+    /// </summary>
+    internal static IReadOnlyList<SugestaoCatalogo> MesclarCatalogo(
+        IReadOnlyList<SugestaoCatalogoCabecalho> cabecalhos,
+        IEnumerable<SugestaoContagem> contagens)
+    {
+        var porSugestao = contagens.ToDictionary(c => c.SugestaoId);
+
+        return [.. cabecalhos.Select(cabecalho =>
+        {
+            var achou = porSugestao.TryGetValue(cabecalho.SugestaoId, out var contagem);
+            return new SugestaoCatalogo(
+                cabecalho.SugestaoId,
+                cabecalho.Descricao,
+                cabecalho.DataHora,
+                cabecalho.TipoCalculo,
+                cabecalho.DiasCoberturaMax,
+                achou ? contagem!.QtdLinhas : 0,
+                achou ? contagem!.QtdLojas : 0);
+        })];
     }
 
     /// <summary>
@@ -458,6 +550,29 @@ internal sealed class ExtractionService
         }
         command.Parameters.Add("@dataInicial", SqlDbType.Date).Value = dataInicial.ToDateTime(TimeOnly.MinValue);
         command.Parameters.Add("@dataFinal", SqlDbType.Date).Value = dataFinal.ToDateTime(TimeOnly.MinValue);
+        return command;
+    }
+
+    /// <summary>
+    /// Mesmo padrão de {{LOJAS}} em <see cref="CreateJanelaCommand"/>: um parâmetro
+    /// por id na lista IN. O chamador já quebrou os ids em lotes que cabem no teto
+    /// de <see cref="MaxParametrosPorComando"/>.
+    /// </summary>
+    private static SqlCommand CreateContagensCommand(SqlConnection connection, string sql, IReadOnlyList<long> sugestaoIds)
+    {
+        var placeholders = sugestaoIds
+            .Select((_, i) => "@sugestao" + i.ToString(CultureInfo.InvariantCulture))
+            .ToArray();
+
+        var command = new SqlCommand(sql.Replace("{{SUGESTOES}}", string.Join(',', placeholders)), connection)
+        {
+            CommandTimeout = CommandTimeoutSeconds,
+        };
+
+        for (var i = 0; i < sugestaoIds.Count; i++)
+        {
+            command.Parameters.Add(placeholders[i], SqlDbType.BigInt).Value = sugestaoIds[i];
+        }
         return command;
     }
 

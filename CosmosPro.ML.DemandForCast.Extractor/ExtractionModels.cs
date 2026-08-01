@@ -35,3 +35,18 @@ internal sealed record SugestaoCatalogo(
     int DiasCoberturaMax,
     int QtdLinhas,
     int QtdLojas);
+
+/// <summary>
+/// Metade do catálogo que vem de SUGESTOES_COMPRAS sozinha. Existe porque as
+/// contagens são buscadas numa segunda ida ao banco e só então viram
+/// <see cref="SugestaoCatalogo"/> — ver <c>ExtractionService.MesclarCatalogo</c>.
+/// </summary>
+internal sealed record SugestaoCatalogoCabecalho(
+    long SugestaoId,
+    string? Descricao,
+    DateTime DataHora,
+    byte TipoCalculo,
+    int DiasCoberturaMax);
+
+/// <summary>Linhas e lojas de uma sugestão, contadas em SUGESTOES_COMPRAS_RESULTADO.</summary>
+internal sealed record SugestaoContagem(long SugestaoId, int QtdLinhas, int QtdLojas);
