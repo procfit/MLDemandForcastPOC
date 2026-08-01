@@ -9,7 +9,13 @@ var builder = DistributedApplication.CreateBuilder(args);
 // Existe para o compose sair do MESMO modelo que roda no F5, em vez de um YAML
 // paralelo mantido à mão: um arquivo separado desatualizaria na primeira vez que
 // alguém acrescentasse um recurso aqui e esquecesse de espelhar lá.
-builder.AddDockerComposeEnvironment("compose");
+// Dashboard desligado no compose publicado. Ele é o único serviço que publica porta
+// no host (18888) e não tem autenticação nenhuma: numa VPS com IP público, qualquer um
+// que achasse a porta leria logs, traces e as **variáveis de ambiente** de todos os
+// serviços — o que inclui as connection strings e a senha do PowerUser. No `F5` o
+// dashboard continua existindo, porque lá ele roda na sua máquina.
+builder.AddDockerComposeEnvironment("compose")
+       .WithDashboard(enabled: false);
 
 // Registry onde as imagens deste repositório são publicadas por `aspire do push`.
 // Endpoint e repositório vêm de configuração (`REGISTRY_ENDPOINT` /

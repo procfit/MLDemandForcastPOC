@@ -58,6 +58,14 @@
         "--port","1435",
         "--permissions", "read"
       ]
+    },
+    "dokploy-julio-bozzo": {
+      "command": "npx",
+      "args": ["-y", "@dokploy/mcp"],
+      "env": {
+        "DOKPLOY_URL": "http://srv1868981.hstgr.cloud:3000",
+        "DOKPLOY_API_KEY": "${DOKPLOY_JULIO_BOZZOO_API_KEY}"
+      }
     }
   }
 }
