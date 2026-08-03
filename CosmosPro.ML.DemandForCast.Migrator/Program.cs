@@ -24,10 +24,19 @@ try
 {
     logger.LogInformation("Migrador iniciado: Stage (DACPAC) e, em seguida, engine (EF Core migrations).");
 
-    etapa = "Stage (DACPAC)";
     var stageConnectionString = configuration.GetConnectionString("Stage")
         ?? throw new InvalidOperationException(
             "Connection string 'Stage' ausente. O AppHost injeta via WithReference(stageDb).");
+
+    // Os dois bancos vivem no mesmo servidor, então uma espera só serve as duas etapas.
+    // Ela vem antes do DACPAC porque é a primeira etapa a abrir conexão — e porque um
+    // erro de conexão dentro do DacFx sai do log como falha de deploy de schema, o que
+    // manda o operador investigar o lugar errado.
+    etapa = "prontidão do SQL Server";
+    await new SqlServerReadiness(host.Services.GetRequiredService<ILogger<SqlServerReadiness>>())
+        .WaitAsync(stageConnectionString, RetryPolicy.Default);
+
+    etapa = "Stage (DACPAC)";
     new StageSchemaDeployer(host.Services.GetRequiredService<ILogger<StageSchemaDeployer>>())
         .Deploy(stageConnectionString);
 

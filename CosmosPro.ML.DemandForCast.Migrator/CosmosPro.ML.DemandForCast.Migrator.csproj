@@ -23,6 +23,26 @@
   <ItemGroup>
     <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.4.3" />
     <PackageReference Include="Microsoft.SqlServer.DacFx" Version="170.4.83" />
+
+    <!-- Referência direta a uma dependência que ninguém declara, e por isso não era
+         publicada. O DacFx foi compilado contra Microsoft.Data.SqlClient 6.1.5, que
+         trazia Microsoft.Identity.Client 4.80.0 no pacote; o SqlClient que se resolve
+         aqui é o 7.0.1 (vem do Aspire/EF Core 10) e **removeu** essa dependência — MSAL
+         virou opcional para quem usa autenticação AAD. O DacFx, porém, continua tocando
+         o assembly: `ErrorDetectionStrategyBase.CanRetry` inspeciona exceções do MSAL
+         para decidir se um erro de conexão é transitório, e o JIT precisa do tipo ali
+         mesmo num deploy que só usa autenticação SQL.
+         O resultado no primeiro deploy real foi pior do que uma falha: a conexão com o
+         SQL Server falhou (banco ainda subindo), o DacFx foi decidir se repetia, e o
+         FileNotFoundException do MSAL **substituiu** o erro de conexão no log — o
+         sintoma escondia a causa. Qualquer erro transitório voltaria disfarçado assim.
+         A versão é exatamente a 4.80.0 porque é essa a identidade que o DacFx pede
+         (`Version=4.80.0.0`). -->
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.80.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CosmosPro.ML.DemandForCast.Migrator.Tests" />
   </ItemGroup>
 
   <!-- O .dacpac precisa viajar dentro da imagem: em produção não há .sqlproj para compilar.

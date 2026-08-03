@@ -27,5 +27,6 @@
     <Project Path="tests/CosmosPro.ML.DemandForCast.Features.Tests/CosmosPro.ML.DemandForCast.Features.Tests.csproj" />
     <Project Path="tests/CosmosPro.ML.DemandForCast.Forecasting.Tests/CosmosPro.ML.DemandForCast.Forecasting.Tests.csproj" />
     <Project Path="tests/CosmosPro.ML.DemandForCast.Purchasing.Tests/CosmosPro.ML.DemandForCast.Purchasing.Tests.csproj" />
+    <Project Path="tests/CosmosPro.ML.DemandForCast.Migrator.Tests/CosmosPro.ML.DemandForCast.Migrator.Tests.csproj" />
   </Folder>
 </Solution>

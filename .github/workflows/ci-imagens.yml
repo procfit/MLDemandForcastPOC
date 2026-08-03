@@ -109,7 +109,8 @@ jobs:
             tests/CosmosPro.ML.DemandForCast.SyntheticData.Tests \
             tests/CosmosPro.ML.DemandForCast.Features.Tests \
             tests/CosmosPro.ML.DemandForCast.Forecasting.Tests \
-            tests/CosmosPro.ML.DemandForCast.Purchasing.Tests
+            tests/CosmosPro.ML.DemandForCast.Purchasing.Tests \
+            tests/CosmosPro.ML.DemandForCast.Migrator.Tests
           do
             nome=$(basename "$projeto")
             echo "::group::$nome"

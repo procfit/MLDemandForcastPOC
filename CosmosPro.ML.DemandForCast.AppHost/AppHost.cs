@@ -1,3 +1,6 @@
+using Aspire.Hosting.Docker.Resources.ComposeNodes;
+using Aspire.Hosting.Docker.Resources.ServiceNodes;
+
 var builder = DistributedApplication.CreateBuilder(args);
 
 // --- Destino de publicação ---------------------------------------------------
@@ -14,8 +17,8 @@ var builder = DistributedApplication.CreateBuilder(args);
 // que achasse a porta leria logs, traces e as **variáveis de ambiente** de todos os
 // serviços — o que inclui as connection strings e a senha do PowerUser. No `F5` o
 // dashboard continua existindo, porque lá ele roda na sua máquina.
-builder.AddDockerComposeEnvironment("compose")
-       .WithDashboard(enabled: false);
+var compose = builder.AddDockerComposeEnvironment("compose")
+                     .WithDashboard(enabled: false);
 
 // Registry onde as imagens deste repositório são publicadas por `aspire do push`.
 // Endpoint e repositório vêm de configuração (`REGISTRY_ENDPOINT` /
@@ -156,6 +159,60 @@ var dbMigrator = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Migrator
                         .WaitFor(engineDb)
                         .WithContainerRegistry(registry)
                         .WithImagePushOptions(aplicarTagDeImagem);
+
+// --- Compose: prontidão do SQL Server antes do migrador ----------------------
+
+// `WaitFor(stageDb)` acima significa duas coisas diferentes nos dois mundos. No `F5` o
+// Aspire espera o **health check** do SQL Server; traduzido para compose, o mesmo
+// `WaitFor` degrada para `condition: service_started`, que afirma apenas que o processo do
+// container começou. Um SQL Server frio leva de 30 a 60 segundos até aceitar login, e no
+// primeiro deploy real o migrador chegou lá em cinco segundos e falhou — derrubando, pelo
+// gate `service_completed_successfully`, a subida inteira.
+//
+// A correção vive no modelo, e não no YAML: `aspire publish` regenera o arquivo e apagaria
+// uma edição à mão. `ConfigureComposeFile` roda depois de o Aspire gerar o modelo do
+// compose e antes de escrevê-lo, então o `depends_on` que o `WaitFor` produziu já existe
+// para ser corrigido aqui — um callback por recurso rodaria antes dessa geração e teria a
+// correção sobrescrita em silêncio.
+//
+// Só o `db-migrator` muda de condição. Os outros três serviços já esperam a conclusão dele
+// (`service_completed_successfully`), o que implica o banco alcançável; trocar a condição
+// deles também não adiantaria nada.
+compose.ConfigureComposeFile(composeFile =>
+{
+    // O teste é um login com `SELECT 1`, não uma porta aberta: o listener do SQL Server
+    // responde antes de o engine aceitar autenticação, e é a autenticação que o migrador
+    // precisa. A senha vem do ambiente do próprio container e `$$` é o escape da
+    // interpolação do compose (ela consome um `$`), então o shell recebe
+    // `$MSSQL_SA_PASSWORD` e a senha não aparece no YAML gerado.
+    //
+    // Dois caminhos de `sqlcmd` porque `2022-latest` é tag móvel: hoje a imagem traz
+    // `/opt/mssql-tools/bin` (ODBC 17), as gerações mais novas trazem
+    // `/opt/mssql-tools18/bin`, onde a criptografia é obrigatória e exige `-C`. Apostar num
+    // caminho único deixaria o `sql` eternamente unhealthy no dia da troca — e um
+    // healthcheck que nunca fica verde tranca a subida do mesmo jeito que o bug original.
+    composeFile.Services[sqlServer.Resource.Name].Healthcheck = new Healthcheck
+    {
+        Test =
+        [
+            "CMD-SHELL",
+            "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' "
+                + "|| /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1'",
+        ],
+        Interval = "10s",
+        Timeout = "5s",
+        Retries = 10,
+        // Enquanto o `start_period` corre, sonda que falha não gasta tentativa nem marca o
+        // container como unhealthy. 90s cobre o pior caso — primeiro start num host frio,
+        // quando o SQL Server ainda cria os bancos de sistema —, e não o caso médio; o
+        // container fica pronto assim que a sonda passar, então a folga não custa tempo de
+        // subida, só evita um veredito prematuro.
+        StartPeriod = "90s",
+    };
+
+    composeFile.Services[dbMigrator.Resource.Name].DependsOn[sqlServer.Resource.Name] =
+        new ServiceDependency { Condition = "service_healthy" };
+});
 
 // --- Services ----------------------------------------------------------------
 
