@@ -32,8 +32,34 @@ var registryRepository = builder.AddParameterFromConfiguration("registryReposito
 // chamadas de `WithContainerRegistry` ficam espalhadas pelos recursos abaixo.
 // Revisar a cada bump do Aspire — é quando elas devem sair de experimental (ou
 // mudar de forma).
-#pragma warning disable ASPIRECOMPUTE003
+// ASPIREPIPELINES003: `WithImagePushOptions` (e o tipo de contexto que ela recebe) é
+// experimental no Aspire 13.4 e também vira **erro** de compilação. Suprimido porque é a
+// API documentada para trocar a tag que o `aspire do push` aplica; sem ela a tag é o
+// default do Aspire (`aspire-deploy-<timestamp>`). Mesmo alcance da supressão acima e
+// mesma recomendação: revisar a cada bump do Aspire.
+#pragma warning disable ASPIRECOMPUTE003, ASPIREPIPELINES003
 var registry = builder.AddContainerRegistry("ghcr", registryEndpoint, registryRepository);
+
+// Tag das imagens empurradas por `aspire do push`, lida de `IMAGE_TAG`.
+//
+// O pipeline manda `sha-<7 primeiros do commit>`: durante um incidente a pergunta é sempre
+// "qual commit está rodando?", e a tag é o único lugar onde ela aparece no destino — no
+// compose, no Dokploy, no `docker ps`. O default do Aspire, `aspire-deploy-<timestamp>`,
+// responde *quando* alguém empurrou (obrigando a cruzar com o histórico do CI para achar o
+// commit), muda a cada execução (envelhecendo a referência do destino) e ainda carrega o
+// nome da ferramenta de build para dentro da identidade do artefato — que é imutável e
+// seguiria afirmando "Aspire" muito depois de uma eventual troca de ferramenta.
+//
+// O default local **não** é o sha do commit: numa máquina de desenvolvimento não há como
+// saber se a árvore está limpa, e `sha-abc1234` numa imagem com alterações não commitadas
+// mente exatamente na pergunta que a tag existe para responder. `local` se identifica como
+// não vinda do CI e não colide com nada que o pipeline produza.
+var imageTag = builder.Configuration["IMAGE_TAG"] is { Length: > 0 } tagConfigurada
+    ? tagConfigurada
+    : "local";
+
+Action<ContainerImagePushOptionsCallbackContext> aplicarTagDeImagem =
+    context => context.Options.RemoteImageTag = imageTag;
 
 // --- Parameters --------------------------------------------------------------
 
@@ -128,7 +154,8 @@ var dbMigrator = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Migrator
                         .WithReference(engineDb)
                         .WaitFor(stageDb)
                         .WaitFor(engineDb)
-                        .WithContainerRegistry(registry);
+                        .WithContainerRegistry(registry)
+                        .WithImagePushOptions(aplicarTagDeImagem);
 
 // --- Services ----------------------------------------------------------------
 
@@ -141,7 +168,8 @@ var apiService = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_ApiServi
     .WaitFor(engineDb)
     .WaitFor(minio)
     .WaitForCompletion(dbMigrator)
-    .WithContainerRegistry(registry);
+    .WithContainerRegistry(registry)
+    .WithImagePushOptions(aplicarTagDeImagem);
 
 // Ao reativar o ClickHouse, este é o único ponto do modelo que amarra o apiservice
 // a ele — descomente junto com o bloco lá em cima:
@@ -175,7 +203,8 @@ builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Web>("webfrontend")
     // migrador), mas no compose cada `depends_on` é declarado por serviço — sem esta
     // linha a Web subiria em paralelo ao migrador.
     .WaitForCompletion(dbMigrator)
-    .WithContainerRegistry(registry);
+    .WithContainerRegistry(registry)
+    .WithImagePushOptions(aplicarTagDeImagem);
 
 // Worker que consome a fila engine.CargasStage e processa os ZIPs do MinIO
 // para o banco Stage (BULK INSERT por tabela em transação única).
@@ -187,7 +216,8 @@ builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Worker>("worker")
     .WaitFor(engineDb)
     .WaitFor(minio)
     .WaitForCompletion(dbMigrator)
-    .WithContainerRegistry(registry);
-#pragma warning restore ASPIRECOMPUTE003
+    .WithContainerRegistry(registry)
+    .WithImagePushOptions(aplicarTagDeImagem);
+#pragma warning restore ASPIRECOMPUTE003, ASPIREPIPELINES003
 
 builder.Build().Run();

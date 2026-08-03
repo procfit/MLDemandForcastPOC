@@ -288,7 +288,7 @@ onde começar.
 |---|---|---|
 | `windows-tests` | `windows-latest` | Só os testes do extrator. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele. Por isso a suíte é dividida por sistema operacional, e não por capricho de paralelismo. |
 | `linux-tests` | `ubuntu-latest` | Compila em **Debug** (mesma configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
-| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as quatro imagens) e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
+| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as quatro imagens, na tag imutável), um passo de `docker tag`/`docker push` que acrescenta a tag móvel, e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
 
 Os testes de integração e E2E ficam em **passos separados e sequenciais** do mesmo job de
 propósito: eles se excluem mutuamente por um lock de arquivo entre processos
@@ -300,16 +300,41 @@ os 30 minutos de tolerância do lock.
 `ghcr.io/<organização>/<repositório>/…`, tudo **em minúsculas** (o GHCR rejeita maiúsculas
 no push, e o nome do repositório tem algumas; o workflow converte). São quatro:
 `apiservice`, `webfrontend`, `worker` e `db-migrator` (`vendas-olap-schema` saiu junto com o
-ClickHouse — §3). A referência exata, com a tag, sai no log dos passos `push-*` da execução — é de lá que
-se copia para o `.env`. A infraestrutura (SQL Server, MinIO, dashboard) **não** é construída
+ClickHouse — §3). A infraestrutura (SQL Server, MinIO, dashboard) **não** é construída
 aqui: vem de imagem pública, já referenciada no compose gerado.
+
+**Como as imagens são marcadas.** Duas tags por imagem, cada uma com um trabalho:
+
+| Forma | Exemplo | Para quê |
+|---|---|---|
+| `sha-<7 primeiros do commit>` | `ghcr.io/cosmos-pro/mldemandforcastpoc/worker:sha-5b36f24` | **Imutável.** É a que vai para o `.env` do destino. Aponta para o commit exato em um passo, sem cruzar com o histórico do CI — durante um incidente a pergunta é sempre "qual commit está rodando?", e no destino (compose, Dokploy, `docker ps`) a tag é o único lugar onde ela aparece. |
+| nome da branch, saneado | `ghcr.io/cosmos-pro/mldemandforcastpoc/worker:main` | **Móvel.** Segue a última execução verde daquela branch, para quem quer "o último de `main`" sem descobrir o sha. Vem do ref da execução, não de um `main` cravado, então um `workflow_dispatch` numa branch de feature publica `feat-extrator-cli` e **não** mexe na tag que a produção segue. Nome de branch aceita `/` e tag de imagem não, daí o saneamento (`feat/extrator-cli` → `feat-extrator-cli`). |
+
+Não há mais tag do tipo `aspire-deploy-<timestamp>` (o default do `aspire do push`, substituído
+pela variável `IMAGE_TAG` que o AppHost lê no callback `WithImagePushOptions`): ela dizia
+*quando* alguém empurrou, mudava a cada execução e carregava o nome da ferramenta de build para
+dentro da identidade — imutável — do artefato. **A tag imutável não precisa mais ser copiada do
+log**: é `sha-` + os 7 primeiros caracteres do commit que se quer deployar.
+
+Rodando `aspire do push` à mão, sem `IMAGE_TAG` no ambiente, a tag é `local` — de propósito, para
+uma imagem de máquina de desenvolvimento se identificar como tal. Não é o sha do commit porque
+localmente não há como saber se a árvore está limpa, e `sha-abc1234` numa imagem com alterações
+não commitadas mente exatamente na pergunta que a tag existe para responder.
+
+O passo que acrescenta a tag móvel é `docker tag` + `docker push` comum — o Aspire empurra uma
+tag por imagem. Ele **não** tem a lista de serviços escrita à mão: pergunta ao daemon local
+quais imagens casam com o prefixo do repositório mais a tag imutável, e falha se não achar
+nenhuma. Um quinto recurso acrescentado ao AppHost entra nessa lista sozinho, em vez de ficar
+sem a tag móvel até alguém notar no destino.
 
 **O que o operador precisa preencher no `.env`.** O arquivo é enviado **em branco**, do
 jeito que o `aspire publish` gera — nenhuma credencial trafega pelo pipeline:
 
 - `APISERVICE_IMAGE`, `WEBFRONTEND_IMAGE`, `WORKER_IMAGE`, `DB_MIGRATOR_IMAGE` — as
-  referências completas do parágrafo acima. Saem **vazias**: configurar o registry no
-  AppHost afeta o `aspire do push`, não o `aspire publish`.
+  referências completas, com a **tag imutável** (`…/worker:sha-5b36f24`). Saem **vazias**:
+  configurar o registry no AppHost afeta o `aspire do push`, não o `aspire publish`. Use a
+  imutável, não a móvel: com o nome da branch o compose puxaria silenciosamente outra coisa
+  no próximo `docker compose pull`, e o que roda no destino deixaria de ser identificável.
 - `APISERVICE_PORT`, `WEBFRONTEND_PORT` — as portas publicadas no host.
 - `SQL_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` — as
   credenciais da infraestrutura no destino. Não são as do ambiente local: `minioadmin`

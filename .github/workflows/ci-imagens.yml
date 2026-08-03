@@ -198,14 +198,55 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Cada imagem recebe duas tags: `sha-<7 primeiros do commit>`, imutável, e o nome da
+      # branch, móvel.
+      #
+      # A imutável é a que responde "qual commit está rodando?" sem cruzar com o histórico do
+      # CI. `IMAGE_TAG` é o que o AppHost lê para trocar a tag do `aspire do push`.
+      #
+      # A móvel sai de `GITHUB_REF_NAME`, e não de um `main` cravado, para um
+      # `workflow_dispatch` numa branch de feature não sobrescrever a tag que a produção
+      # segue. `tr` troca tudo que não é `[A-Za-z0-9_.-]` por `-` porque nome de branch aceita
+      # `/` e tag de imagem não (`feat/extrator-cli` → `feat-extrator-cli`); `printf` em vez de
+      # `echo` para a quebra de linha final não virar um `-` no fim da tag.
+      - name: Calcular as tags das imagens
+        run: |
+          echo "IMAGE_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          tag_movel=$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9_.-' '-')
+          echo "IMAGE_TAG_MOVEL=$tag_movel" >> "$GITHUB_ENV"
+
       # Constrói e empurra as quatro imagens do repositório (db-migrator, apiservice,
       # webfrontend, worker). `REGISTRY_ENDPOINT`/`REGISTRY_REPOSITORY` são lidos
-      # pelos parâmetros `registryEndpoint`/`registryRepository` do AppHost.
+      # pelos parâmetros `registryEndpoint`/`registryRepository` do AppHost, e `IMAGE_TAG`
+      # pelo callback `WithImagePushOptions` — sem ela a tag seria o default do Aspire.
       # `--non-interactive` garante que um parâmetro sem valor vire erro em vez de um
       # prompt que travaria o job até o timeout.
       - name: Construir e empurrar as imagens
         timeout-minutes: 30
         run: aspire do push --apphost CosmosPro.ML.DemandForCast.AppHost/CosmosPro.ML.DemandForCast.AppHost.csproj --non-interactive
+
+      # O Aspire empurra **uma** tag por imagem, então a móvel é Docker comum, em cima do que
+      # o passo anterior já construiu e empurrou.
+      #
+      # A lista de serviços é derivada do daemon local, e não escrita à mão: hoje são quatro,
+      # mas um quinto recurso acrescentado ao AppHost receberia a tag imutável pelo callback e
+      # ficaria sem a móvel — em silêncio, e só se descobriria no destino apontando para uma
+      # tag que nunca se move. Zero imagens é erro, não lista vazia: significa que o push
+      # anterior não produziu o que este passo pressupõe.
+      - name: Adicionar a tag móvel às imagens
+        timeout-minutes: 15
+        run: |
+          referencia="$REGISTRY_ENDPOINT/$REGISTRY_REPOSITORY/*:$IMAGE_TAG"
+          imagens=$(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=$referencia")
+          if [ -z "$imagens" ]; then
+            echo "::error::Nenhuma imagem local casa com $referencia — o passo de push não construiu o que este passo espera."
+            exit 1
+          fi
+          for imagem in $imagens; do
+            movel="${imagem%:*}:$IMAGE_TAG_MOVEL"
+            docker tag "$imagem" "$movel"
+            docker push "$movel"
+          done
 
       - name: Gerar docker-compose.yaml e .env
         timeout-minutes: 10
