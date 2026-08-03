@@ -62,7 +62,25 @@ public sealed class AppHostFixture : IAsyncLifetime
         // avaliação de MSBuild em runtime e o remendo deixou de existir.
 
         App = await builder.BuildAsync();
-        await App.StartAsync();
+
+        // `StartAsync` sem token era o único await sem teto de toda a subida — e, num run de
+        // CI, foi ele quem consumiu 30 minutos de log em branco antes de alguém cancelar à
+        // mão. A espera por saúde, logo abaixo, já tinha teto de 5 minutos e tira uma foto
+        // dos recursos ao estourar; esta não tinha nada, então o modo de falhar era silêncio
+        // até o teto do passo no workflow. Seis minutos porque as imagens já vêm pré-baixadas
+        // no CI (passo "Pré-baixar imagens de infraestrutura") e localmente sobem em ~90s.
+        using var startCts = new CancellationTokenSource(TimeSpan.FromMinutes(6));
+        try
+        {
+            await App.StartAsync(startCts.Token);
+        }
+        catch (OperationCanceledException ex)
+        {
+            var snapshot = await CaptureResourceSnapshotAsync();
+            throw new TimeoutException(
+                $"O AppHost de teste não terminou de subir em 6 min.\n\nEstado dos recursos:\n{snapshot}",
+                ex);
+        }
 
         var httpClient = App.CreateHttpClient("apiservice", endpointName: "https");
         httpClient.Timeout = TimeSpan.FromMinutes(2);

@@ -78,7 +78,11 @@
             <RadzenCard Variant="Variant.Outlined">
                 <RadzenStack Gap="1rem">
                     <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">@TituloUpload(_sessao.Status)</RadzenText>
-                    <ol style="margin: 0; padding-left: 1.25rem; line-height: 1.8">
+                    @* data-test porque o E2E precisa de uma âncora que exista só nesta página:
+                       esperar por um <li> com a palavra "extrator" passou a casar com o item
+                       "Extrator" do menu lateral, presente em toda página, e o teste passou a
+                       ler o DOM da tela anterior (o Blazor troca a URL antes do DOM). *@
+                    <ol data-test="instrucoes-extracao" style="margin: 0; padding-left: 1.25rem; line-height: 1.8">
                         <li>Baixe o <strong>extrator</strong> e execute-o na máquina com acesso ao PBS.</li>
                         <li>No extrator, escolha a sugestão de compra do PBS que você quer comparar.</li>
                         <li>Volte aqui e envie o arquivo .zip gerado pelo extrator.</li>

@@ -77,7 +77,12 @@ public sealed class AppHostFixture : IAsyncLifetime
         builder.Configuration["Parameters:poweruser-password"] = PowerUserSenha;
 
         App = await builder.BuildAsync();
-        await App.StartAsync();
+
+        // Teto igual ao do fixture de integração, e pelo mesmo motivo: sem token, um AppHost
+        // que não sobe deixa o passo do CI em silêncio até o teto do workflow, sem dizer qual
+        // recurso ficou pelo caminho.
+        using var startCts = new CancellationTokenSource(TimeSpan.FromMinutes(6));
+        await App.StartAsync(startCts.Token);
 
         using var healthyCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         await App.ResourceNotifications.WaitForResourceHealthyAsync("webfrontend", healthyCts.Token);

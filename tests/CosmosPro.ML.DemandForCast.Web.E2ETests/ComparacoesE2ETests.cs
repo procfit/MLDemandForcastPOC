@@ -21,10 +21,15 @@ public sealed class ComparacoesE2ETests(AppHostFixture fixture)
         // circuito interativo assume (primeiro render tem _sessoes vazio, antes do
         // RefreshAsync responder). Como o Blazor troca a URL antes de trocar o DOM,
         // sob carga o locator casava com a página que estava *saindo*; o corpo lido
-        // em seguida já era a sessão nova ainda em "Carregando…" e a asserção
-        // falhava. A lista <ol><li> das instruções existe só em /comparacoes/{id}.
-        await page.Locator("li", new() { HasText = "extrator" })
-                  .First.WaitForAsync(new() { Timeout = 15_000 });
+        // em seguida já era a sessão nova ainda em "Carregando…" e a asserção falhava.
+        //
+        // A âncora é um data-test, e não mais um <li> com a palavra "extrator": a
+        // segunda versão quebrou no dia em que o menu lateral ganhou um item
+        // "Extrator" — um <li> com a mesma palavra, presente em *toda* página, e o
+        // `HasText` do Playwright casa por substring ignorando caixa. Texto de UI é
+        // vocabulário compartilhado; identidade de elemento não pode depender dele.
+        await page.Locator("[data-test=instrucoes-extracao]")
+                  .WaitForAsync(new() { Timeout = 15_000 });
 
         var corpo = await page.TextContentAsync("body") ?? "";
         corpo.Should().Contain("extrator",

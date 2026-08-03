@@ -187,11 +187,21 @@ jobs:
       # de arquivo entre processos (AppHostExclusiveLock) — os containers do Aspire são
       # persistentes e compartilhados, então dois AppHosts vivos são um só ambiente com
       # dois donos. Ficam em passos separados e sequenciais justamente para o lock nunca
-      # entrar em disputa: quem chega segundo já encontra o primeiro encerrado, em vez de
-      # esperar os 30 minutos de tolerância dele.
+      # entrar em disputa: quem chega segundo já encontra o primeiro encerrado.
+      #
+      # Teto de 15 min contra uma medição, não contra o medo: a suíte roda em ~4 min com as
+      # imagens já baixadas. Era 45, e isso é pior do que parece — um passo que pode ficar
+      # 45 minutos sem imprimir nada é cancelado à mão antes de qualquer diagnóstico, e foi
+      # o que aconteceu. Os tetos internos do fixture (6 min para subir, 5 para ficar
+      # saudável, 5 no lock) devem estourar primeiro e dizer *o que* travou; este aqui é a
+      # última linha de defesa, não a primeira.
+      #
+      # `--logger console;verbosity=normal` porque sem ele o resultado só aparece no fim: se
+      # o processo não chega ao fim, o log não mostra nem os testes que passaram, e não dá
+      # para saber se travou na subida do AppHost ou dentro de um teste.
       - name: Testes de integração
-        timeout-minutes: 45
-        run: dotnet test tests/CosmosPro.ML.DemandForCast.ApiService.IntegrationTests/CosmosPro.ML.DemandForCast.ApiService.IntegrationTests.csproj --configuration Debug --no-build
+        timeout-minutes: 15
+        run: dotnet test tests/CosmosPro.ML.DemandForCast.ApiService.IntegrationTests/CosmosPro.ML.DemandForCast.ApiService.IntegrationTests.csproj --configuration Debug --no-build --logger "console;verbosity=normal"
 
       # O fixture E2E já chama `playwright install chromium` sozinho, e isso baixa o
       # navegador — mas não as bibliotecas de sistema que ele carrega (libnss3, libatk,
@@ -201,9 +211,11 @@ jobs:
         timeout-minutes: 10
         run: pwsh tests/CosmosPro.ML.DemandForCast.Web.E2ETests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
 
+      # Mesmo teto e mesmo logger do passo de integração, e pelos mesmos motivos — este sobe
+      # o AppHost real também, e ainda um Chromium por cima.
       - name: Testes E2E
-        timeout-minutes: 45
-        run: dotnet test tests/CosmosPro.ML.DemandForCast.Web.E2ETests/CosmosPro.ML.DemandForCast.Web.E2ETests.csproj --configuration Debug --no-build
+        timeout-minutes: 15
+        run: dotnet test tests/CosmosPro.ML.DemandForCast.Web.E2ETests/CosmosPro.ML.DemandForCast.Web.E2ETests.csproj --configuration Debug --no-build --logger "console;verbosity=normal"
 
   images:
     name: Imagens e artefatos de compose

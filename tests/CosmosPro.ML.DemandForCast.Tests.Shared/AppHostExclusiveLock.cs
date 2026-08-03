@@ -30,24 +30,38 @@ namespace CosmosPro.ML.DemandForCast.Tests.Shared;
 /// </summary>
 public sealed class AppHostExclusiveLock : IAsyncDisposable
 {
-    private static readonly TimeSpan EsperaPadrao = TimeSpan.FromMinutes(30);
+    // Cinco minutos, não trinta. Subir o AppHost leva ~90s e a suíte inteira roda dentro do
+    // lock, mas a espera antiga era mais longa que a paciência de quem olha o CI: um passo
+    // parado por meia hora é cancelado à mão antes de chegar à mensagem, e aí a tolerância
+    // generosa não protegeu nada — só trocou uma falha explicada por silêncio.
+    private static readonly TimeSpan EsperaPadrao = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan IntervaloTentativa = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan IntervaloAviso = TimeSpan.FromSeconds(20);
 
     private readonly FileStream _arquivo;
+    private readonly string _caminhoDono;
 
-    private AppHostExclusiveLock(FileStream arquivo) => _arquivo = arquivo;
+    private AppHostExclusiveLock(FileStream arquivo, string caminhoDono)
+    {
+        _arquivo = arquivo;
+        _caminhoDono = caminhoDono;
+    }
 
     /// <summary>
-    /// Espera até ser o único processo com o AppHost desta solução no ar.
-    /// A espera é longa de propósito: subir o AppHost leva ~60-90s e a suíte de
-    /// integração inteira roda dentro do lock, então o vizinho legitimamente demora.
+    /// Espera até ser o único processo com o AppHost desta solução no ar, avisando no console
+    /// a cada 20s enquanto espera. O aviso não é enfeite: uma espera calada é indistinguível
+    /// de um travamento para quem lê o log do CI, e foi assim que um passo parado virou meia
+    /// hora de log em branco.
     /// </summary>
     public static async Task<AppHostExclusiveLock> AcquireAsync(
         TimeSpan? espera = null, CancellationToken ct = default)
     {
         var caminho = Path.Combine(
             Path.GetTempPath(), "cosmospro-mldemandforecast-apphost.lock");
-        var limite = DateTimeOffset.UtcNow + (espera ?? EsperaPadrao);
+        var caminhoDono = caminho + ".owner";
+        var inicio = DateTimeOffset.UtcNow;
+        var limite = inicio + (espera ?? EsperaPadrao);
+        var proximoAviso = inicio + IntervaloAviso;
 
         while (true)
         {
@@ -56,18 +70,35 @@ public sealed class AppHostExclusiveLock : IAsyncDisposable
                 var arquivo = new FileStream(
                     caminho, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
-                // Registra quem detém o lock: se a suíte travar esperando, o arquivo
-                // (legível assim que o dono soltar) diz qual processo era.
-                await arquivo.WriteAsync(
-                    System.Text.Encoding.UTF8.GetBytes(
-                        $"pid={Environment.ProcessId} desde={DateTimeOffset.UtcNow:O}\n"),
-                    ct);
+                var identificacao = $"pid={Environment.ProcessId} desde={DateTimeOffset.UtcNow:O}";
+                await arquivo.WriteAsync(System.Text.Encoding.UTF8.GetBytes(identificacao + "\n"), ct);
                 await arquivo.FlushAsync(ct);
 
-                return new AppHostExclusiveLock(arquivo);
+                // O mesmo dado num arquivo à parte, porque o lock em si é aberto com
+                // FileShare.None: enquanto alguém o detém, ninguém consegue lê-lo — nem para
+                // descobrir quem é o dono. O sidecar é escrito com compartilhamento normal,
+                // então quem espera consegue nomear quem está segurando, que é a informação
+                // que faltava. Best-effort: falhar em escrevê-lo não pode custar o lock.
+                try
+                {
+                    await File.WriteAllTextAsync(caminhoDono, identificacao + "\n", ct);
+                }
+                catch (IOException)
+                {
+                }
+
+                return new AppHostExclusiveLock(arquivo, caminhoDono);
             }
             catch (IOException) when (DateTimeOffset.UtcNow < limite)
             {
+                if (DateTimeOffset.UtcNow >= proximoAviso)
+                {
+                    Console.WriteLine(
+                        $"[AppHostExclusiveLock] esperando o AppHost de teste há " +
+                        $"{(DateTimeOffset.UtcNow - inicio).TotalSeconds:F0}s. Dono: {LerDono(caminhoDono)}");
+                    proximoAviso = DateTimeOffset.UtcNow + IntervaloAviso;
+                }
+
                 await Task.Delay(IntervaloTentativa, ct);
             }
             catch (IOException ex)
@@ -75,15 +106,41 @@ public sealed class AppHostExclusiveLock : IAsyncDisposable
                 throw new TimeoutException(
                     $"Outro processo manteve o AppHost de teste por mais de " +
                     $"{(espera ?? EsperaPadrao).TotalMinutes:F0} min (lock em '{caminho}'). " +
+                    $"Dono: {LerDono(caminhoDono)}. " +
                     "Verifique se sobrou um `dotnet test` ou um AppHost em debug rodando.",
                     ex);
             }
         }
     }
 
+    private static string LerDono(string caminhoDono)
+    {
+        try
+        {
+            return File.Exists(caminhoDono)
+                ? File.ReadAllText(caminhoDono).Trim()
+                : "desconhecido (sidecar ausente)";
+        }
+        catch (IOException)
+        {
+            return "desconhecido (sidecar ilegível)";
+        }
+    }
+
     public ValueTask DisposeAsync()
     {
         _arquivo.Dispose();
+
+        // O sidecar não é o lock — se ficar para trás, o próximo a esperar leria um dono que
+        // já morreu. Apagar aqui mantém "sidecar ausente" significando "ninguém segurando".
+        try
+        {
+            File.Delete(_caminhoDono);
+        }
+        catch (IOException)
+        {
+        }
+
         return ValueTask.CompletedTask;
     }
 }
