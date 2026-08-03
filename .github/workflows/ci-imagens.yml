@@ -34,6 +34,55 @@ jobs:
       - name: Testes do extrator
         run: dotnet test tests/CosmosPro.ML.DemandForCast.Extractor.Tests/CosmosPro.ML.DemandForCast.Extractor.Tests.csproj --configuration Debug
 
+      # O binário sai daqui porque é o único runner Windows do pipeline — e ele não vai
+      # para o GHCR nem para dentro de nenhuma imagem: o comprador baixa o .exe pela
+      # página da sessão, que faz stream do MinIO (ver README.md, "Publicar o extrator").
+      # Este passo produz o par exe+manifesto pronto para publicação; quem publica é o
+      # operador, em /admin/extrator — que recebe o .zip deste artefato como veio da UI do
+      # Actions, sem descompactar (um pacote lacrado não permite misturar execuções).
+      # Self-contained porque a máquina que enxerga o PBS é servidor de farmácia, onde não
+      # se instala runtime .NET para rodar um utilitário.
+      - name: Publicar o extrator (win-x64, self-contained)
+        shell: pwsh
+        run: |
+          # A versão vem do <Version> do csproj, não do FileVersion do binário: o SDK
+          # anexa o commit ao InformationalVersion, e o manifesto mostra este campo ao
+          # comprador na tela — "0.14.0" comunica, "0.14.0+147ac87c" não.
+          $versao = (dotnet msbuild CosmosPro.ML.DemandForCast.Extractor/CosmosPro.ML.DemandForCast.Extractor.csproj -getProperty:Version).Trim()
+          if (-not $versao) { throw "Nao foi possivel ler <Version> do csproj do extrator." }
+
+          dotnet publish CosmosPro.ML.DemandForCast.Extractor -c Release -r win-x64 `
+            --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish do extrator falhou." }
+
+          $publish = "CosmosPro.ML.DemandForCast.Extractor/bin/Release/net10.0-windows/win-x64/publish"
+          $exe = Join-Path $publish "CosmosPro.ML.DemandForCast.Extractor.exe"
+          if (-not (Test-Path $exe)) { throw "Publish nao gerou $exe." }
+
+          New-Item -ItemType Directory -Force artefatos/extrator | Out-Null
+          # Renomeado ja aqui para o nome que a apiservice procura no bucket: o operador
+          # baixa o artefato e publica os dois arquivos sem renomear nada no caminho.
+          Copy-Item $exe artefatos/extrator/extrator.exe
+
+          # Minusculas porque e como o manifesto documenta o campo, e a tela mostra o
+          # valor cru ao comprador conferir contra o Get-FileHash da maquina dele.
+          $sha = (Get-FileHash artefatos/extrator/extrator.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          [ordered]@{
+            versao      = $versao
+            sha256      = $sha
+            publicadoEm = (Get-Date).ToUniversalTime().ToString("o")
+          } | ConvertTo-Json | Set-Content artefatos/extrator/manifesto.json -Encoding utf8
+
+          Write-Host "extrator $versao sha256=$sha ($([math]::Round((Get-Item artefatos/extrator/extrator.exe).Length / 1MB)) MB)"
+
+      - name: Publicar artefato do extrator
+        uses: actions/upload-artifact@v4
+        with:
+          name: extrator
+          path: artefatos/extrator/
+          if-no-files-found: error
+
   linux-tests:
     name: Testes (Linux)
     runs-on: ubuntu-latest
@@ -186,7 +235,7 @@ jobs:
       - name: Versão da CLI do Aspire
         run: aspire --version
 
-      # `${{ github.repository }}` é `cosmos-pro/MLDemandForcastPOC`, com maiúsculas, e o
+      # `${{ github.repository }}` é `procfit/MLDemandForcastPOC`, com maiúsculas, e o
       # GHCR só aceita nome de repositório em minúsculas — empurrar com maiúscula é
       # rejeitado no push, não na configuração. `${VAR,,}` do bash faz a conversão.
       - name: Repositório do registry em minúsculas

@@ -70,5 +70,32 @@ public sealed class AuthorizationE2ETests(AppHostFixture fixture)
         corpoUsuarios.Should().NotContain("Acesso negado");
         corpoUsuarios.Should().Contain("Novo usuário",
             $"a página /admin/usuarios deveria ter carregado. Conteúdo real: <<<{corpoUsuarios.Trim()}>>>");
+
+        await page.GotoAsync($"{baseUrl}/admin/extrator");
+        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+        var corpoExtrator = await page.TextContentAsync("body") ?? "";
+        corpoExtrator.Should().NotContain("Acesso negado");
+        corpoExtrator.Should().Contain("Publicar nova versão",
+            $"a página /admin/extrator deveria ter carregado. Conteúdo real: <<<{corpoExtrator.Trim()}>>>");
+    }
+
+    /// <summary>
+    /// A publicação do extrator é a única tela do sistema que escreve um **executável** que
+    /// todos os compradores, de todas as redes, vão baixar e rodar numa máquina com acesso
+    /// ao ERP deles. É o alvo de maior valor da aplicação: um usuário de rede que a
+    /// alcançasse distribuiria o binário que quisesse a todos os outros inquilinos.
+    /// </summary>
+    [Fact]
+    public async Task UsuarioRede_nao_alcanca_a_publicacao_do_extrator()
+    {
+        var page = await fixture.NovaPaginaLogadaAsync(
+            AppHostFixture.UsuarioRedeEmail, AppHostFixture.UsuarioRedeSenha);
+
+        await page.GotoAsync(fixture.WebfrontendUrl.TrimEnd('/') + "/admin/extrator");
+        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+        var corpo = await page.TextContentAsync("body") ?? "";
+        corpo.Should().NotContain("Publicar nova versão",
+            $"o formulário de publicação não pode renderizar para quem não é PowerUser. Conteúdo real: <<<{corpo.Trim()}>>>");
     }
 }

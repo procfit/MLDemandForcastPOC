@@ -97,4 +97,58 @@ public sealed class ExtratorApiClientTests
         captured!.RequestUri!.PathAndQuery.Should().Be("/api/extrator/download");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
     }
+
+    /// <summary>
+    /// O nome do campo do multipart é o contrato com o binding de <c>IFormFile</c> na
+    /// apiservice: renomeá-lo aqui não quebra o build, quebra a publicação em tempo de
+    /// execução com uma mensagem que fala de "pacote ausente" — o sintoma aponta para o
+    /// operador quando a causa está neste método.
+    /// </summary>
+    [Fact]
+    public async Task PublicarAsync_envia_o_pacote_no_campo_esperado()
+    {
+        HttpRequestMessage? captured = null;
+        string? corpo = null;
+        var handler = new StubHttpMessageHandler(req =>
+        {
+            captured = req;
+            corpo = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"versao\":\"1.2.3\",\"sha256\":\"abc\",\"publicadoEm\":\"2026-08-03T10:00:00+00:00\"}",
+                    Encoding.UTF8, "application/json"),
+            };
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://api.test/") };
+        var client = new ExtratorApiClient(http);
+
+        var resultado = await client.PublicarAsync(new MemoryStream([1, 2, 3]), "extrator.zip");
+
+        resultado.Success.Should().BeTrue();
+        resultado.Versao!.Versao.Should().Be("1.2.3");
+        captured!.RequestUri!.PathAndQuery.Should().Be("/api/extrator");
+        captured.Method.Should().Be(HttpMethod.Post);
+        corpo.Should().Contain("name=pacote");
+    }
+
+    [Fact]
+    public async Task PublicarAsync_em_400_devolve_os_erros_de_validacao_sem_lancar()
+    {
+        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(
+                "{\"errors\":[\"O SHA-256 do executável enviado não corresponde ao declarado no manifesto.\"]}",
+                Encoding.UTF8, "application/json"),
+        });
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://api.test/") };
+        var client = new ExtratorApiClient(http);
+
+        var resultado = await client.PublicarAsync(new MemoryStream([1]), "extrator.zip");
+
+        resultado.Success.Should().BeFalse();
+        resultado.Errors.Should().ContainSingle()
+                 .Which.Should().Contain("não corresponde ao declarado",
+                     "a recusa é acionável e precisa chegar inteira à tela do operador");
+    }
 }

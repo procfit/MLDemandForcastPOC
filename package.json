@@ -11,13 +11,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cosmos-pro/MLDemandForcastPOC.git"
+    "url": "git+https://github.com/procfit/MLDemandForcastPOC.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/cosmos-pro/MLDemandForcastPOC/issues"
+    "url": "https://github.com/procfit/MLDemandForcastPOC/issues"
   },
-  "homepage": "https://github.com/cosmos-pro/MLDemandForcastPOC#readme"
+  "homepage": "https://github.com/procfit/MLDemandForcastPOC#readme"
 }

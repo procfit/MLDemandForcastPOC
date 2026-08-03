@@ -208,10 +208,42 @@ O comprador baixa o extrator pela página da sessão (`/comparacoes/{id}`, estad
 "Aguardando dados"), que faz stream do bucket MinIO `extrator` — o `.exe` **não** é
 embutido no repositório nem no build da Web (self-contained dá ~118 MB, e isso no git a
 cada versão é inviável). Isso significa que, **num ambiente novo, nada é baixável até
-alguém publicar manualmente** — é a checklist abaixo, e é passo obrigatório a cada
-release do extrator, não só na primeira vez.
+alguém publicar** — passo obrigatório a cada release do extrator, não só na primeira vez.
 
-**1. Gerar o `.exe`** (comando completo e o porquê de cada flag em
+**O caminho normal são dois passos.** O CI produz o par pronto e o operador o publica pela
+UI:
+
+1. **Baixar o artefato `extrator`** da execução do Actions (job "Testes do extrator
+   (Windows)" — é o único runner Windows do pipeline, e o extrator é WinForms). A UI do
+   Actions entrega um `.zip` com `extrator.exe` e `manifesto.json`, este já com a versão do
+   `<Version>` do csproj e o SHA-256 calculado.
+2. **Publicar em `/admin/extrator`** (só `PowerUser`), enviando **o `.zip` como veio** — sem
+   descompactar. A tela mostra a versão vigente antes e depois.
+
+**Um pacote, não dois campos de arquivo, e isso é deliberado.** O erro que importa nesta
+operação é misturar execuções: mandar o `.exe` de uma com o `manifesto.json` de outra
+publicaria um checksum que o download não cumpre, e quem conferisse concluiria "executável
+adulterado" quando o fato foi um arquivo errado arrastado na pressa. Um ZIP lacrado, vindo
+de um download só, torna essa combinação impossível na origem.
+
+O servidor ainda assim **recalcula** o SHA-256 do executável que vem dentro do pacote e o
+confere contra o declarado — agora como rede contra ZIP corrompido ou montado à mão. Pacote
+incoerente é recusado sem escrever nada, e a versão que já estava no ar continua intacta.
+O `publicadoEm` gravado é o instante da publicação, não a hora do build que veio no
+manifesto: um artefato de semanas atrás publicado hoje está disponível desde hoje.
+
+O ZIP entra como um arquivo só, mas o bucket continua guardando **dois objetos**. É o
+`/versao` que decide isso: ele lê um manifesto de ~200 bytes a cada render da página da
+sessão, e não teria por que abrir um ZIP de ~118 MB para isso.
+
+O checksum existe para o comprador conferir o arquivo que baixou, e é calculado **uma vez**
+na publicação, não a cada download: rehashear ~118 MB por request sob várias sessões
+simultâneas seria custo de CPU pago por quem baixa, para um arquivo que não muda entre
+releases.
+
+#### Publicar à mão (sem CI, ou em ambiente local)
+
+**1. Gerar o `.exe`** (o porquê de cada flag em
 [Docs/extracao-pbs-stage.md § Como publicar o extrator](Docs/extracao-pbs-stage.md#como-publicar-o-extrator)):
 
 ```powershell
@@ -221,11 +253,7 @@ dotnet publish CosmosPro.ML.DemandForCast.Extractor -c Release -r win-x64 `
 
 Saída em `CosmosPro.ML.DemandForCast.Extractor\bin\Release\net10.0-windows\win-x64\publish\CosmosPro.ML.DemandForCast.Extractor.exe`.
 
-**2. Calcular o checksum SHA-256** do `.exe` gerado — é o valor que a página da sessão
-mostra ao comprador ao lado do botão, a promessa de que o arquivo não foi alterado entre a
-publicação e o download dele. Calculado **uma vez aqui**, na publicação, não a cada
-download: recalcular por request um arquivo de ~118 MB sob várias sessões simultâneas
-seria custo de CPU pago pelo comprador, para um arquivo que não muda entre releases.
+**2. Calcular o checksum SHA-256** do `.exe` gerado:
 
 ```powershell
 Get-FileHash .\CosmosPro.ML.DemandForCast.Extractor.exe -Algorithm SHA256
@@ -248,7 +276,17 @@ A leitura é case-insensitive nas chaves (`versao`/`Versao` tanto faz) — de pr
 para um manifesto escrito à mão às pressas não falhar silenciosamente por causa de
 maiúscula/minúscula.
 
-**4. Subir os dois arquivos para o bucket `extrator`**, como `extrator.exe` e
+**4. Zipar os dois** — `extrator.exe` e `manifesto.json`, com esses nomes — e publicar em
+`/admin/extrator`. A tela aceita subpasta dentro do ZIP (um pacote feito da pasta de
+publicação serve), mas **não** aceita dois `.exe` no mesmo pacote: qual dos dois toda a
+base vai rodar não é escolha para um desempate silencioso.
+
+Os passos abaixo são a alternativa que fala direto com o MinIO — útil em desenvolvimento,
+onde o console está a um clique no Aspire Dashboard. **No deploy ela não existe:** o MinIO
+não tem endpoint publicado (só a Web atravessa o Traefik), então lá é a UI ou um shell na
+VPS.
+
+**Subir os dois arquivos para o bucket `extrator`**, como `extrator.exe` e
 `manifesto.json` (nomes fixos — a apiservice só procura por esses dois). O jeito mais
 simples é pelo **MinIO Console**: no Aspire Dashboard, abra o recurso `minio`, o endpoint
 do console (login `minioadmin`/`minioadmin` em ambiente local — outras credenciais vêm
@@ -286,7 +324,7 @@ onde começar.
 
 | Job | Runner | O que faz |
 |---|---|---|
-| `windows-tests` | `windows-latest` | Só os testes do extrator. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele. Por isso a suíte é dividida por sistema operacional, e não por capricho de paralelismo. |
+| `windows-tests` | `windows-latest` | Testes do extrator **e** o binário dele: publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json` e sobe o par como artefato `extrator`. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele, e é por isso que a suíte é dividida por sistema operacional, não por capricho de paralelismo. O `.exe` não entra em imagem nenhuma: quem o publica é o operador, em `/admin/extrator` (ver "Publicar o extrator no MinIO"). |
 | `linux-tests` | `ubuntu-latest` | Compila em **Debug** (mesma configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
 | `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as quatro imagens, na tag imutável), um passo de `docker tag`/`docker push` que acrescenta a tag móvel, e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
 
@@ -307,8 +345,8 @@ aqui: vem de imagem pública, já referenciada no compose gerado.
 
 | Forma | Exemplo | Para quê |
 |---|---|---|
-| `sha-<7 primeiros do commit>` | `ghcr.io/cosmos-pro/mldemandforcastpoc/worker:sha-5b36f24` | **Imutável.** É a que vai para o `.env` do destino. Aponta para o commit exato em um passo, sem cruzar com o histórico do CI — durante um incidente a pergunta é sempre "qual commit está rodando?", e no destino (compose, Dokploy, `docker ps`) a tag é o único lugar onde ela aparece. |
-| nome da branch, saneado | `ghcr.io/cosmos-pro/mldemandforcastpoc/worker:main` | **Móvel.** Segue a última execução verde daquela branch, para quem quer "o último de `main`" sem descobrir o sha. Vem do ref da execução, não de um `main` cravado, então um `workflow_dispatch` numa branch de feature publica `feat-extrator-cli` e **não** mexe na tag que a produção segue. Nome de branch aceita `/` e tag de imagem não, daí o saneamento (`feat/extrator-cli` → `feat-extrator-cli`). |
+| `sha-<7 primeiros do commit>` | `ghcr.io/procfit/mldemandforcastpoc/worker:sha-5b36f24` | **Imutável.** É a que vai para o `.env` do destino. Aponta para o commit exato em um passo, sem cruzar com o histórico do CI — durante um incidente a pergunta é sempre "qual commit está rodando?", e no destino (compose, Dokploy, `docker ps`) a tag é o único lugar onde ela aparece. |
+| nome da branch, saneado | `ghcr.io/procfit/mldemandforcastpoc/worker:main` | **Móvel.** Segue a última execução verde daquela branch, para quem quer "o último de `main`" sem descobrir o sha. Vem do ref da execução, não de um `main` cravado, então um `workflow_dispatch` numa branch de feature publica `feat-extrator-cli` e **não** mexe na tag que a produção segue. Nome de branch aceita `/` e tag de imagem não, daí o saneamento (`feat/extrator-cli` → `feat-extrator-cli`). |
 
 Não há mais tag do tipo `aspire-deploy-<timestamp>` (o default do `aspire do push`, substituído
 pela variável `IMAGE_TAG` que o AppHost lê no callback `WithImagePushOptions`): ela dizia

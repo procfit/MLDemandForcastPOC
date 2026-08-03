@@ -16,6 +16,17 @@ public interface IExtratorApi
 
     [Get("/api/extrator/download")]
     Task<HttpResponseMessage> DownloadAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// O nome do campo é o do parâmetro do handler na apiservice, que é como o binding de
+    /// <c>IFormFile</c> o encontra — trocá-lo aqui faz o endpoint receber nulo e recusar por
+    /// "nenhum pacote enviado", não por erro de rota.
+    /// </summary>
+    [Multipart]
+    [Post("/api/extrator")]
+    Task<IApiResponse<ExtratorVersaoResponse>> PublicarAsync(
+        [AliasAs("pacote")] StreamPart pacote,
+        CancellationToken ct = default);
 }
 
 public sealed record ExtratorVersaoResponse(string Versao, string Sha256, DateTimeOffset PublicadoEm);

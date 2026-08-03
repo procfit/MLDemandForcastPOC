@@ -114,7 +114,7 @@ Mesmo com instrução de autonomia, **pause e confirme** antes de:
 - Qualquer `git push`, criação de branch remoto, ou interação com Azure DevOps / GitHub.
 - Subir/derrubar containers que não façam parte do `AppHost.cs` atual.
 
-Repositório **é git**, com remoto `origin` no GitHub (`cosmos-pro/MLDemandForcastPOC`) e `main` como base de PR. O trabalho acontece em branch por fase. `push`, criação de branch remoto e abertura de PR continuam exigindo pedido explícito — ver a lista acima.
+Repositório **é git**, com remoto `origin` no GitHub (`procfit/MLDemandForcastPOC`) e `main` como base de PR. O trabalho acontece em branch por fase. `push`, criação de branch remoto e abertura de PR continuam exigindo pedido explícito — ver a lista acima.
 
 ---
 

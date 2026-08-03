@@ -1,0 +1,208 @@
+@page "/admin/extrator"
+@attribute [Authorize(Roles = Papeis.PowerUser)]
+@rendermode InteractiveServer
+@inject ExtratorApiClient ExtratorApi
+@inject NotificationService Notificacao
+@implements IDisposable
+
+<PageTitle>Extrator — Administração</PageTitle>
+
+<RadzenStack Gap="1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+        <RadzenText TextStyle="TextStyle.H4" TagName="TagName.H1" class="rz-mb-0">Extrator</RadzenText>
+        <HelpTip Text="O extrator é o programa que o comprador roda na máquina que enxerga o PBS para gerar o ZIP da comparação. Ele não vive dentro desta aplicação: é publicado aqui e baixado pela página da sessão." />
+    </RadzenStack>
+
+    <RadzenCard Variant="Variant.Outlined">
+        <RadzenStack Gap="0.75rem">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-0">Versão publicada</RadzenText>
+
+            @if (_carregando)
+            {
+                <RadzenText TextStyle="TextStyle.Body2">Consultando…</RadzenText>
+            }
+            else if (_erroConsulta is not null)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                    @_erroConsulta
+                </RadzenAlert>
+            }
+            else if (_versao is null)
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                    Nenhuma versão publicada. Até a primeira publicação, o botão de download na
+                    página da sessão fica desabilitado — o comprador consegue enviar um ZIP que
+                    já tenha, mas não consegue obter o extrator por aqui.
+                </RadzenAlert>
+            }
+            else
+            {
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap">
+                    <RadzenStack Gap="0.15rem">
+                        <RadzenText TextStyle="TextStyle.Caption">Versão</RadzenText>
+                        <RadzenText TextStyle="TextStyle.Body1" class="rz-mb-0"><b>@_versao.Versao</b></RadzenText>
+                    </RadzenStack>
+                    <RadzenStack Gap="0.15rem">
+                        <RadzenText TextStyle="TextStyle.Caption">Publicada em</RadzenText>
+                        <RadzenText TextStyle="TextStyle.Body1" class="rz-mb-0">
+                            @_versao.PublicadoEm.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
+                        </RadzenText>
+                    </RadzenStack>
+                </RadzenStack>
+                <RadzenStack Gap="0.15rem">
+                    <RadzenText TextStyle="TextStyle.Caption">SHA-256</RadzenText>
+                    <code style="word-break: break-all; font-size: 0.8rem">@_versao.Sha256</code>
+                </RadzenStack>
+            }
+        </RadzenStack>
+    </RadzenCard>
+
+    <RadzenCard Variant="Variant.Outlined">
+        <RadzenStack Gap="1rem">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-0">Publicar nova versão</RadzenText>
+
+            <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-0">
+                Baixe o artefato <b>extrator</b> da execução do CI (GitHub Actions, job
+                "Testes do extrator (Windows)") e envie o <b>.zip</b> exatamente como veio —
+                sem descompactar, sem renomear. Ele traz o <code>extrator.exe</code> e o
+                <code>manifesto.json</code> juntos.
+            </RadzenText>
+
+            <RadzenStack Gap="0.5rem">
+                <RadzenText TextStyle="TextStyle.Caption" class="rz-mb-0">Pacote do extrator (.zip)</RadzenText>
+                <InputFile id="extrator-pacote-input" accept=".zip" disabled="@_publicando"
+                           OnChange="@(e => _pacote = Selecionado(e))" />
+            </RadzenStack>
+
+            @if (_erros is { Count: > 0 })
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter"
+                             AllowClose="false" Title="A publicação foi recusada">
+                    <RadzenStack Gap="0.25rem">
+                        @foreach (var erro in _erros)
+                        {
+                            <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-0">@erro</RadzenText>
+                        }
+                    </RadzenStack>
+                </RadzenAlert>
+            }
+
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem">
+                <RadzenButton Text="@(_publicando ? "Publicando…" : "Publicar")"
+                              Icon="@(_publicando ? "hourglass_empty" : "cloud_upload")"
+                              Click="@PublicarAsync"
+                              Disabled="@(_publicando || _pacote is null)"
+                              data-test="publicar-extrator" />
+                @if (_publicando)
+                {
+                    <RadzenText TextStyle="TextStyle.Body2" class="rz-mb-0">
+                        O envio do pacote passa pelo navegador e leva alguns minutos. Não feche a página.
+                    </RadzenText>
+                }
+            </RadzenStack>
+
+            <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+                O servidor recalcula o SHA-256 do executável que vem dentro do pacote e o confere
+                contra o do manifesto. Pacote corrompido ou montado à mão é recusado aqui, e não
+                publicado com um checksum que o download não cumpriria.
+            </RadzenAlert>
+        </RadzenStack>
+    </RadzenCard>
+</RadzenStack>
+
+@code {
+    // Espelha o teto da apiservice (ExtratorEndpoints.MaxPacoteBytes): recusar aqui poupa o
+    // envio de dezenas de MB pelo circuito para levar um 400 no fim.
+    private const long MaxPacoteBytes = 200L * 1024 * 1024;
+
+    private readonly CancellationTokenSource _cts = new();
+
+    private ExtratorVersaoView? _versao;
+    private IBrowserFile? _pacote;
+    private IReadOnlyList<string>? _erros;
+    private string? _erroConsulta;
+    private bool _carregando = true;
+    private bool _publicando;
+
+    protected override async Task OnInitializedAsync() => await ConsultarVersaoAsync();
+
+    private static IBrowserFile? Selecionado(InputFileChangeEventArgs e) =>
+        e.FileCount == 0 ? null : e.File;
+
+    private async Task ConsultarVersaoAsync()
+    {
+        _carregando = true;
+        _erroConsulta = null;
+        try
+        {
+            _versao = await ExtratorApi.GetVersaoAsync(_cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Navegação para fora da página durante a consulta — não é falha a reportar.
+        }
+        catch (Exception ex)
+        {
+            // "Não publicado" já vem como null do cliente; cair aqui é a apiservice ou o
+            // MinIO fora do ar, e as duas coisas pedem reação diferente de quem opera.
+            _erroConsulta = $"Não foi possível consultar a versão publicada: {ex.Message}";
+        }
+        finally
+        {
+            _carregando = false;
+        }
+    }
+
+    private async Task PublicarAsync()
+    {
+        if (_pacote is null) return;
+
+        if (_pacote.Size > MaxPacoteBytes)
+        {
+            _erros = [$"O pacote tem {_pacote.Size / (1024 * 1024)} MB e o limite é {MaxPacoteBytes / (1024 * 1024)} MB."];
+            return;
+        }
+
+        _publicando = true;
+        _erros = null;
+        try
+        {
+            await using var pacote = _pacote.OpenReadStream(MaxPacoteBytes, _cts.Token);
+            var resultado = await ExtratorApi.PublicarAsync(pacote, _pacote.Name, _cts.Token);
+
+            if (resultado.Success)
+            {
+                _versao = resultado.Versao;
+                _pacote = null;
+                Notificacao.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Extrator publicado",
+                    Detail = $"Versão {resultado.Versao?.Versao} disponível para download na página da sessão.",
+                    Duration = 6000,
+                });
+            }
+            else
+            {
+                _erros = resultado.Errors;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _erros = [ex.Message];
+        }
+        finally
+        {
+            _publicando = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

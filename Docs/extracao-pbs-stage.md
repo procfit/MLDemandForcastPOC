@@ -47,9 +47,14 @@ dotnet publish CosmosPro.ML.DemandForCast.Extractor -c Release -r win-x64 ^
 
 Saída: um `.exe` de ~118 MB, sem dependência de runtime .NET no host.
 
-Depois de gerado, o `.exe` precisa ser publicado no bucket MinIO `extrator` para o
-comprador conseguir baixá-lo pela página da sessão — passo a passo (checksum, manifesto,
-upload) em [README.md § Publicar o extrator no MinIO](../README.md#publicar-o-extrator-no-minio).
+O comando acima é para gerar o `.exe` à mão. No caminho normal quem o gera é o CI: o job
+Windows publica, calcula o checksum e sobe o par `extrator.exe` + `manifesto.json` como
+artefato `extrator` da execução — que a UI do Actions entrega como um `.zip`.
+
+De um jeito ou de outro, o `.exe` só chega ao comprador depois de publicado no bucket MinIO
+`extrator` — pela tela `/admin/extrator` (`PowerUser`), que recebe **um ZIP** com os dois
+arquivos. Passo a passo em
+[README.md § Publicar o extrator no MinIO](../README.md#publicar-o-extrator-no-minio).
 
 > **Guardrail:** este documento não contém credenciais, hosts nem dados reais — só
 > estrutura, mapeamento e contagens agregadas.
