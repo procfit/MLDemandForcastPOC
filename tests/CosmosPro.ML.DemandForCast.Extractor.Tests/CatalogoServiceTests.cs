@@ -1,5 +1,7 @@
 using System.Data;
+using System.Reflection;
 using CosmosPro.ML.DemandForCast.Extractor;
+using Microsoft.Data.SqlClient;
 
 namespace CosmosPro.ML.DemandForCast.Extractor.Tests;
 
@@ -149,5 +151,74 @@ public sealed class CatalogoServiceTests
         var catalogo = new[] { Cabecalho(30, "A x"), Cabecalho(10, "B x"), Cabecalho(20, "C x") };
 
         CatalogoService.Filtrar(catalogo, "x").Select(c => c.SugestaoId).Should().Equal(30L, 10L, 20L);
+    }
+
+    private static readonly Etapa QualquerEtapa = new("etapa qualquer", "arquivo.sql");
+
+    /// <summary>
+    /// <see cref="SqlException"/> não tem construtor público (ver <c>ExtratorErrosTests</c>).
+    /// Só aqui isso importa de verdade: <see cref="CatalogoService.TraduzirFalha{T}"/> recebe a
+    /// <see cref="Exception"/> crua do <c>catch</c>, e o único jeito de provar que um número SQL
+    /// classificaria como <see cref="ConexaoPerdidaErro"/> — sem um SQL Server vivo — é montar
+    /// a exceção real via reflexão sobre a API interna do driver.
+    /// </summary>
+    private static SqlException CriarSqlException(int numero)
+    {
+        var construtorErro = typeof(SqlError).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance, null,
+            [typeof(int), typeof(byte), typeof(byte), typeof(string), typeof(string), typeof(string), typeof(int), typeof(Exception)],
+            null)!;
+        var erro = construtorErro.Invoke([numero, (byte)0, (byte)0, "servidor", "falha simulada", "procedimento", 1, null]);
+
+        var colecao = (SqlErrorCollection)Activator.CreateInstance(typeof(SqlErrorCollection), nonPublic: true)!;
+        typeof(SqlErrorCollection).GetMethod("Add", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(colecao, [erro]);
+
+        var criarExcecao = typeof(SqlException).GetMethod("CreateException",
+            BindingFlags.NonPublic | BindingFlags.Static, null, [typeof(SqlErrorCollection), typeof(string)], null)!;
+        return (SqlException)criarExcecao.Invoke(null, [colecao, string.Empty])!;
+    }
+
+    [Fact]
+    public void Token_cancelado_vence_a_excecao_do_driver()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var acao = () => CatalogoService.TraduzirFalha<int>(
+            new InvalidOperationException("qualquer"), cts.Token, QualquerEtapa, conexaoJaAberta: true, TimeSpan.FromSeconds(1));
+
+        acao.Should().Throw<OperationCanceledException>();
+    }
+
+    [Fact]
+    public void Token_cancelado_vence_mesmo_quando_a_excecao_classificaria_como_transitoria()
+    {
+        // Pino do bug de verdade: cancelar um ExecuteReader síncrono chega como
+        // SqlException, e com conexaoJaAberta=true e um número fora da lista especial
+        // isso classificaria como ConexaoPerdidaErro — que é transitório e seria
+        // RETENTADO. Sem a guarda, este teste passaria a devolver Result.Fail em vez
+        // de lançar, e é exatamente essa regressão que ele precisa pegar.
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var acao = () => CatalogoService.TraduzirFalha<int>(
+            CriarSqlException(-1), cts.Token, QualquerEtapa, conexaoJaAberta: true, TimeSpan.FromSeconds(129));
+
+        acao.Should().Throw<OperationCanceledException>();
+    }
+
+    [Fact]
+    public void Token_vivo_ainda_devolve_a_falha_classificada_com_etapa_e_duracao()
+    {
+        var resultado = CatalogoService.TraduzirFalha<int>(
+            new InvalidCastException("cast inválido"), CancellationToken.None, QualquerEtapa,
+            conexaoJaAberta: true, TimeSpan.FromSeconds(42));
+
+        resultado.IsFailed.Should().BeTrue();
+        var erro = resultado.Errors.Should().ContainSingle().Which.Should().BeOfType<EtapaErro>().Subject;
+        erro.Metadata[ExtratorErro.ChaveEtapa].Should().Be(QualquerEtapa.Nome);
+        erro.Metadata[ExtratorErro.ChaveQuery].Should().Be(QualquerEtapa.QueryFile);
+        erro.Metadata[ExtratorErro.ChaveDuracao].Should().Be(42d);
     }
 }

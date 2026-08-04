@@ -177,8 +177,22 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return Result.Fail<T>(
-                ClassificadorDeFalha.Classificar(FalhaBruta.De(ex, conexaoJaAberta), etapa, cronometro.Elapsed));
+            return TraduzirFalha<T>(ex, ct, etapa, conexaoJaAberta, cronometro.Elapsed);
         }
+    }
+
+    /// <summary>
+    /// Cancelar um <c>ExecuteReader</c> sincrono chega como <see cref="SqlException"/>
+    /// ("Operation cancelled by user"), nao como <see cref="OperationCanceledException"/>.
+    /// Sem esta guarda o cancelamento viraria ConexaoPerdidaErro — que e transitorio, e
+    /// portanto seria RETENTADO: clicar em Cancelar rodaria a consulta duas vezes mais.
+    /// </summary>
+    internal static Result<T> TraduzirFalha<T>(
+        Exception ex, CancellationToken ct, Etapa etapa, bool conexaoJaAberta, TimeSpan duracao)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        return Result.Fail<T>(
+            ClassificadorDeFalha.Classificar(FalhaBruta.De(ex, conexaoJaAberta), etapa, duracao));
     }
 }
