@@ -77,7 +77,7 @@
             @if (_erros is { Count: > 0 })
             {
                 <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter"
-                             AllowClose="false" Title="A publicação foi recusada">
+                             AllowClose="false" Title="@_erroTitulo">
                     <RadzenStack Gap="0.25rem">
                         @foreach (var erro in _erros)
                         {
@@ -120,6 +120,16 @@
     private ExtratorVersaoView? _versao;
     private IBrowserFile? _pacote;
     private IReadOnlyList<string>? _erros;
+
+    // "Recusada" e "não foi possível enviar" são fatos diferentes e pedem reação diferente:
+    // a primeira significa que o servidor avaliou o pacote e disse não — mexer no arquivo; a
+    // segunda, que a requisição não chegou lá — tentar de novo, ou olhar o log do container.
+    // Elas dividiam o mesmo título, e uma falha de transporte aparecia como se o conteúdo
+    // tivesse sido reprovado, mandando quem publica investigar o arquivo errado.
+    private const string TituloRecusa = "A publicação foi recusada";
+    private const string TituloFalhaEnvio = "Não foi possível enviar o pacote";
+
+    private string _erroTitulo = TituloRecusa;
     private string? _erroConsulta;
     private bool _carregando = true;
     private bool _publicando;
@@ -159,6 +169,7 @@
 
         if (_pacote.Size > MaxPacoteBytes)
         {
+            _erroTitulo = TituloRecusa;
             _erros = [$"O pacote tem {_pacote.Size / (1024 * 1024)} MB e o limite é {MaxPacoteBytes / (1024 * 1024)} MB."];
             return;
         }
@@ -184,6 +195,7 @@
             }
             else
             {
+                _erroTitulo = TituloRecusa;
                 _erros = resultado.Errors;
             }
         }
@@ -192,6 +204,7 @@
         }
         catch (Exception ex)
         {
+            _erroTitulo = TituloFalhaEnvio;
             _erros = [ex.Message];
         }
         finally

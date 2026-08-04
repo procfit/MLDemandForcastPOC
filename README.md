@@ -192,15 +192,31 @@ Aspire Dashboard abre automaticamente; webfrontend, apiservice e DbGate ficam ac
 
 ### Inspecionar bancos com DbGate
 
-DbGate aparece como recurso `dbgate` no dashboard. Abra o endpoint — a conexão **SQL Server (`sql`)** já vem pronta, auto-wirada pelo `WithDbGate()` do `CommunityToolkit.Aspire.Hosting.SqlServer.Extensions`.
+DbGate aparece como recurso `dbgate` no dashboard, com a conexão **SQL Server (`sql`)** já pronta.
+Roda com volume e `WithLifetime(Persistent)`, então favoritos e abas salvas sobrevivem entre F5s.
 
-Com o ClickHouse desativado (§3), a segunda conexão que o DbGate chegou a ter — auto-wirada por um
-helper local em [ClickHouseDbGateExtensions.cs](CosmosPro.ML.DemandForCast.AppHost/ClickHouseDbGateExtensions.cs),
-que cobre a lacuna do `Aspire.Hosting.ClickHouse` (ainda sem `WithDbGate()` nativo — candidato a PR
-upstream em `ClickHouse/ClickHouse.Aspire`) — não é mais wirada. O helper continua no repositório;
-reativar o ClickHouse em `AppHost.cs` (§3) a traz de volta.
+**O container é declarado à mão no `AppHost.cs`, e não pelo `.WithDbGate()`** do
+`CommunityToolkit.Aspire.Hosting.SqlServer.Extensions`, que era o que estava lá antes. Aquele helper
+só cria o recurso em **run mode**: `aspire publish` gerava um compose sem `dbgate` nenhum. É a mesma
+armadilha do `AddSqlProject` — existe no F5, desaparece no destino. Declarado à mão, o recurso vale
+nos dois modos, e o que se inspeciona localmente é o que roda no deploy. As env vars seguem o
+contrato do container (`LABEL_/SERVER_/PORT_/USER_/PASSWORD_/ENGINE_` + `CONNECTIONS`), o mesmo que
+[ClickHouseDbGateExtensions.cs](CosmosPro.ML.DemandForCast.AppHost/ClickHouseDbGateExtensions.cs)
+reproduz para o dia em que o ClickHouse voltar (§3) — o helper continua no repositório, sem uso hoje.
 
-O DbGate roda com `WithDataVolume() + WithLifetime(Persistent)`, então qualquer favorito/aba salvo na UI sobrevive entre F5s.
+**Login é obrigatório, e isso não é opcional em ambiente publicado.** Dois parâmetros novos:
+`dbgate-login` (default `admin`) e `dbgate-password`, secreto e **sem valor** — vem de user-secrets
+no desenvolvimento e do Environment no destino. Sem ele o container não sobe, de propósito: com rota
+pública e sem login, o DbGate dá leitura e escrita em `Stage` e `engine` a quem descobrir a URL —
+o dado comercial de todas as redes, e a possibilidade de inserir um `PowerUser` direto nas tabelas
+do Identity e entrar na aplicação pela porta da frente.
+
+```powershell
+dotnet user-secrets --project CosmosPro.ML.DemandForCast.AppHost set "Parameters:dbgate-password" "<senha>"
+```
+
+No deploy, `DBGATE_LOGIN` e `DBGATE_PASSWORD` ficam no Environment do Dokploy — o `.env` gerado por
+`aspire publish` emite **todo** parâmetro vazio, inclusive os que têm default no código.
 
 ### Publicar o extrator no MinIO
 

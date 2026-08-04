@@ -76,6 +76,10 @@ public sealed class AppHostFixture : IAsyncLifetime
         builder.Configuration["Parameters:poweruser-email"] = PowerUserEmail;
         builder.Configuration["Parameters:poweruser-password"] = PowerUserSenha;
 
+        // Mesmo caso: `dbgate-password` é secreto e sem valor no AppHost. Nenhum teste E2E
+        // abre o DbGate, mas sem o parâmetro o AppHost inteiro não sobe.
+        builder.Configuration["Parameters:dbgate-password"] = "TesteDbGate!2026";
+
         App = await builder.BuildAsync();
 
         // Teto igual ao do fixture de integração, e pelo mesmo motivo: sem token, um AppHost

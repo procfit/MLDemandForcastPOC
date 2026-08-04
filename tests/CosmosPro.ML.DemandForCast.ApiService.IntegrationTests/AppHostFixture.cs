@@ -54,6 +54,11 @@ public sealed class AppHostFixture : IAsyncLifetime
         builder.Configuration["Parameters:poweruser-email"] = "integracao@teste.local";
         builder.Configuration["Parameters:poweruser-password"] = "TesteIntegracao!2026";
 
+        // `dbgate-password` é parâmetro secreto sem valor no AppHost — sem injetar aqui, o
+        // AppHost não sobe e nenhum teste roda. Nada nesta suíte usa o DbGate; ele existe
+        // no modelo porque tem de existir no compose publicado.
+        builder.Configuration["Parameters:dbgate-password"] = "TesteDbGate!2026";
+
         // Aqui existia um remendo (`OverrideSqlProjectWithBuiltDacpac`): o
         // `AddSqlProject` do CommunityToolkit descobria o caminho do .dacpac avaliando o
         // .sqlproj via Microsoft.Build em runtime, e sob `dotnet test` isso falhava com

@@ -158,14 +158,14 @@ internal static class ExtratorEndpoints
     {
         if (pacote is null || pacote.Length == 0)
         {
-            return Results.BadRequest(new ValidationErrorResponse(
-                ["Nenhum pacote enviado. Envie o .zip do artefato 'extrator' da execução do CI."]));
+            return Recusar(logger,
+                ["Nenhum pacote enviado. Envie o .zip do artefato 'extrator' da execução do CI."]);
         }
 
         if (pacote.Length > MaxPacoteBytes)
         {
-            return Results.BadRequest(new ValidationErrorResponse(
-                [$"O pacote excede o limite de {MaxPacoteBytes / (1024 * 1024)} MB."]));
+            return Recusar(logger,
+                [$"O pacote excede o limite de {MaxPacoteBytes / (1024 * 1024)} MB."]);
         }
 
         // ZipArchive em modo leitura precisa de stream seekable; o IFormFile já vem
@@ -186,28 +186,28 @@ internal static class ExtratorEndpoints
         catch (Exception ex) when (ex is InvalidDataException or ArgumentOutOfRangeException
                                       or EndOfStreamException or IOException)
         {
-            return Results.BadRequest(new ValidationErrorResponse(
-                ["O arquivo enviado não é um .zip válido."]));
+            return Recusar(logger,
+                ["O arquivo enviado não é um .zip válido."]);
         }
 
         using (zip)
         {
             if (Entrada(zip, ManifestoKey) is not { } entradaManifesto)
             {
-                return Results.BadRequest(new ValidationErrorResponse(
-                    [$"O pacote não contém um {ManifestoKey}. Envie o .zip do artefato 'extrator' sem alterar o conteúdo."]));
+                return Recusar(logger,
+                    [$"O pacote não contém um {ManifestoKey}. Envie o .zip do artefato 'extrator' sem alterar o conteúdo."]);
             }
 
             if (Entrada(zip, ExecutavelKey) is not { } entradaExecutavel)
             {
-                return Results.BadRequest(new ValidationErrorResponse(
-                    [$"O pacote não contém um {ExecutavelKey}. Envie o .zip do artefato 'extrator' sem alterar o conteúdo."]));
+                return Recusar(logger,
+                    [$"O pacote não contém um {ExecutavelKey}. Envie o .zip do artefato 'extrator' sem alterar o conteúdo."]);
             }
 
             if (entradaManifesto.Length > MaxManifestoBytes)
             {
-                return Results.BadRequest(new ValidationErrorResponse(
-                    [$"O {ManifestoKey} do pacote é grande demais para ser um manifesto."]));
+                return Recusar(logger,
+                    [$"O {ManifestoKey} do pacote é grande demais para ser um manifesto."]);
             }
 
             // Comparado contra o tamanho **descompactado** declarado na entrada, antes de
@@ -215,8 +215,8 @@ internal static class ExtratorEndpoints
             // pode declarar um conteúdo enorme.
             if (entradaExecutavel.Length > MaxExecutavelBytes)
             {
-                return Results.BadRequest(new ValidationErrorResponse(
-                    [$"O executável dentro do pacote excede o limite de {MaxExecutavelBytes / (1024 * 1024)} MB."]));
+                return Recusar(logger,
+                    [$"O executável dentro do pacote excede o limite de {MaxExecutavelBytes / (1024 * 1024)} MB."]);
             }
 
             ManifestoExtrator? declarado;
@@ -228,21 +228,21 @@ internal static class ExtratorEndpoints
                 }
                 catch (JsonException ex)
                 {
-                    return Results.BadRequest(new ValidationErrorResponse(
-                        [$"O {ManifestoKey} do pacote não é um JSON válido: {ex.Message}"]));
+                    return Recusar(logger,
+                        [$"O {ManifestoKey} do pacote não é um JSON válido: {ex.Message}"]);
                 }
             }
 
             if (declarado is null || string.IsNullOrWhiteSpace(declarado.Versao))
             {
-                return Results.BadRequest(new ValidationErrorResponse(
-                    [$"O {ManifestoKey} do pacote não declara a versão."]));
+                return Recusar(logger,
+                    [$"O {ManifestoKey} do pacote não declara a versão."]);
             }
 
             if (!ShaValido(declarado.Sha256))
             {
-                return Results.BadRequest(new ValidationErrorResponse(
-                    [$"O {ManifestoKey} do pacote não declara um SHA-256 válido (64 caracteres hexadecimais)."]));
+                return Recusar(logger,
+                    [$"O {ManifestoKey} do pacote não declara um SHA-256 válido (64 caracteres hexadecimais)."]);
             }
 
             string calculado;
@@ -253,9 +253,9 @@ internal static class ExtratorEndpoints
 
             if (!calculado.Equals(declarado.Sha256, StringComparison.OrdinalIgnoreCase))
             {
-                return Results.BadRequest(new ValidationErrorResponse(
+                return Recusar(logger,
                     [$"O SHA-256 do executável dentro do pacote ({calculado}) não corresponde ao declarado no " +
-                     $"manifesto ({declarado.Sha256.ToLowerInvariant()}). O pacote está corrompido ou foi montado à mão."]));
+                     $"manifesto ({declarado.Sha256.ToLowerInvariant()}). O pacote está corrompido ou foi montado à mão."]);
             }
 
             await Imports.ImportsEndpoints.EnsureBucketExistsAsync(minio, BucketName, ct);
@@ -318,6 +318,17 @@ internal static class ExtratorEndpoints
             .ToList();
 
         return candidatas.Count == 1 ? candidatas[0] : null;
+    }
+
+    /// <summary>
+    /// Recusa **e registra**. A publicação é operação de operador, não de comprador: quando
+    /// ela falha, quem investiga não tem a tela na frente — tem o log do container. Devolver
+    /// 400 em silêncio obrigava a pedir a alguém que lesse o aviso da UI em voz alta.
+    /// </summary>
+    private static IResult Recusar(ILogger logger, params string[] erros)
+    {
+        logger.LogWarning("Publicação do extrator recusada: {Erros}", string.Join(" | ", erros));
+        return Results.BadRequest(new ValidationErrorResponse(erros));
     }
 
     private static bool ShaValido(string? sha) =>

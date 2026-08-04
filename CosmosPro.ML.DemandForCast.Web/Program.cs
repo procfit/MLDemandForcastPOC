@@ -88,11 +88,34 @@ builder.Services.AddHostedService<IdentityBootstrapper>();
 // Radzen services: dialog, notification, tooltip, context-menu, theme.
 builder.Services.AddRadzenComponents();
 
+// `RemoveAllResilienceHandlers` é marcada como experimental e o compilador trata
+// EXTEXP0001 como **erro**, não aviso — mesmo caso de ASPIRECOMPUTE003 no AppHost.
+// Suprimido de propósito: a alternativa seria empilhar um segundo
+// `AddStandardResilienceHandler` com retry zerado sobre o primeiro, e os dois passariam a
+// valer. Se a API sair numa versão futura, o build quebra aqui e não em silêncio.
+#pragma warning disable EXTEXP0001
+
+// Os três clientes que transferem arquivo grande (este, ComparacoesApiClient e
+// ExtratorApiClient) removem o handler de resiliência que o ServiceDefaults liga em todo
+// HttpClient. São dois defeitos, e o primeiro é silencioso:
+//
+// 1. O `AddStandardResilienceHandler` impõe timeout **de 10s por tentativa** (e 30s no
+//    total), *dentro* do Timeout do HttpClient. O `TimeSpan.FromMinutes(10)` abaixo nunca
+//    valeu nada: qualquer upload que passasse de 10 segundos era cortado. Não vimos em
+//    desenvolvimento porque loopback entrega dezenas de MB antes disso; no primeiro upload
+//    real pela internet, morreu.
+// 2. O retry reenvia a requisição, e `StreamContent` é de uso único — a segunda tentativa
+//    falha com "The stream was already consumed", *substituindo* a exceção da primeira. O
+//    erro que chega à tela descreve o retry, não a causa. Retry automático em POST de
+//    upload é errado de todo modo: não é idempotente.
+//
+// Os clientes que só fazem GET de dados continuam com resiliência — ali o retry ajuda e
+// nenhum corpo precisa ser reenviado.
 builder.Services.AddHttpClient<ImportsApiClient>(client =>
 {
     client.BaseAddress = new("https+http://apiservice");
     client.Timeout = TimeSpan.FromMinutes(10);
-});
+}).RemoveAllResilienceHandlers();
 
 builder.Services.AddHttpClient<StageApiClient>(client =>
 {
@@ -114,11 +137,13 @@ builder.Services.AddHttpClient<ComparisonApiClient>(client =>
     client.BaseAddress = new("https+http://apiservice");
 });
 
+// Sem resiliência pelo mesmo motivo do ImportsApiClient (ver comentário acima): este
+// cliente sobe o ZIP da sessão de comparação, que é o caminho central da aplicação.
 builder.Services.AddHttpClient<ComparacoesApiClient>(client =>
 {
     client.BaseAddress = new("https+http://apiservice");
     client.Timeout = TimeSpan.FromMinutes(10);
-});
+}).RemoveAllResilienceHandlers();
 
 builder.Services.AddHttpClient<ExtratorApiClient>(client =>
 {
@@ -126,7 +151,9 @@ builder.Services.AddHttpClient<ExtratorApiClient>(client =>
     // O .exe tem dezenas de MB; o download precisa do mesmo teto generoso do upload,
     // não do default de 100s do HttpClient.
     client.Timeout = TimeSpan.FromMinutes(10);
-});
+}).RemoveAllResilienceHandlers();
+
+#pragma warning restore EXTEXP0001
 
 const long MaxUploadBytes = 500L * 1024 * 1024;
 builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(o =>

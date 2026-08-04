@@ -1,3 +1,14 @@
+@* Ilha interativa dentro de um layout estático. O `<Routes />` do App.razor não declara
+   render mode, então o layout inteiro é SSR: sem isto, o RadzenPanelMenu renderiza como
+   HTML morto e os grupos não expandem nem recolhem — o clique não tem circuito que o
+   atenda. Só o item com `Expanded="true"` aparecia aberto, porque isso vem cravado no
+   markup. O componente não recebe parâmetro nenhum, então virar ilha é seguro (parâmetro
+   não-serializável impediria).
+   Os toggles do cabeçalho (RadzenSidebarToggle, RadzenAppearanceToggle) seguem estáticos
+   pelo mesmo motivo e não têm a mesma saída: dependem de estado compartilhado com o
+   RadzenSidebar dentro do MainLayout, e isolá-los exige tornar o layout interativo. *@
+@rendermode InteractiveServer
+
 @* Esconder item de menu é cosmético — o controle real é o [Authorize] na página.
    Os dois existem: o menu apenas evita oferecer o que seria negado. *@
 <AuthorizeView>

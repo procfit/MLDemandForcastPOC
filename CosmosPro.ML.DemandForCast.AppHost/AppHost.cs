@@ -74,15 +74,9 @@ var minioSecretKey = builder.AddParameter("minio-secret-key", secret: false, val
 
 // --- Data stores (persistentes entre F5s) ------------------------------------
 
-// DbGate (UI web de inspeção) é compartilhado entre SQL Server e ClickHouse.
-// O volume/lifetime do container DbGate é configurado aqui (na primeira
-// chamada `.WithDbGate`); a chamada subsequente no ClickHouse reusa o mesmo
-// recurso DbGate (AddDbGate é idempotente) — e só acontece em run mode, então
-// no compose publicado o DbGate fica só com a conexão do SQL Server.
 var sqlServer = builder.AddSqlServer("sql")
                        .WithLifetime(ContainerLifetime.Persistent)
-                       .WithDataVolume()
-                       .WithDbGate(cfg => cfg.WithDataVolume().WithLifetime(ContainerLifetime.Persistent));
+                       .WithDataVolume();
 
 // Stage: staging area dos dados importados via UI (vendas, estoque, compras,
 // promoções, mestres, IQVIA). O engine só lê deste banco; nunca escreve.
@@ -132,6 +126,44 @@ var engineDb = sqlServer.AddDatabase("engine");
 var minio = builder.AddMinioContainer("minio", minioAccessKey, minioSecretKey)
                    .WithLifetime(ContainerLifetime.Persistent)
                    .WithDataVolume();
+
+// --- DbGate (UI web de inspeção dos bancos) ----------------------------------
+
+// Container declarado à mão em vez do `.WithDbGate()` do
+// CommunityToolkit.Aspire.Hosting.SqlServer.Extensions, que era o que estava aqui antes.
+// Motivo, medido e não suposto: aquele helper só cria o recurso em **run mode** —
+// `aspire publish` gerava um compose com sql/minio/db-migrator/apiservice/webfrontend/
+// worker e nenhum `dbgate`. É o mesmo formato de armadilha do `AddSqlProject`: existe no
+// F5, desaparece no destino, e ninguém percebe até precisar dele em produção.
+//
+// Declarado aqui, vale nos dois modos — e é isso que faz o que se testa no F5 ser o que
+// roda no deploy. As env vars seguem o contrato do container do DbGate
+// (LABEL_/SERVER_/PORT_/USER_/PASSWORD_/ENGINE_ + CONNECTIONS), o mesmo que
+// `ClickHouseDbGateExtensions` reproduz para o dia em que o ClickHouse voltar.
+var dbGateLogin = builder.AddParameter("dbgate-login", secret: false, value: "admin");
+
+// Sem `value:` de propósito: é segredo e precisa vir de user-secrets no desenvolvimento e
+// do Environment no destino. Sem ele o container não sobe — e essa é a intenção. Um DbGate
+// com rota pública e sem login é acesso de leitura e escrita a `Stage` e `engine` para
+// quem descobrir a URL: dá para ler o dado comercial de todas as redes e para inserir um
+// PowerUser direto no Identity, entrando na aplicação pela porta da frente.
+var dbGatePassword = builder.AddParameter("dbgate-password", secret: true);
+
+var dbGate = builder.AddContainer("dbgate", "dbgate/dbgate", "6.1.4")
+                    .WithLifetime(ContainerLifetime.Persistent)
+                    .WithVolume("dbgate-data", "/root/.dbgate")
+                    .WithHttpEndpoint(targetPort: 3000, name: "http")
+                    .WithExternalHttpEndpoints()
+                    .WithEnvironment("LOGIN", dbGateLogin)
+                    .WithEnvironment("PASSWORD", dbGatePassword)
+                    .WithEnvironment("CONNECTIONS", "sql")
+                    .WithEnvironment("LABEL_sql", "SQL Server")
+                    .WithEnvironment("SERVER_sql", "sql")
+                    .WithEnvironment("PORT_sql", "1433")
+                    .WithEnvironment("USER_sql", "sa")
+                    .WithEnvironment("PASSWORD_sql", sqlServer.Resource.PasswordParameter)
+                    .WithEnvironment("ENGINE_sql", "mssql@dbgate-plugin-mssql")
+                    .WaitFor(sqlServer);
 
 // --- Schema deployment -------------------------------------------------------
 
