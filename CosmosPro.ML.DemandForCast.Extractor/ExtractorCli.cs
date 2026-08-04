@@ -147,7 +147,7 @@ internal static class ExtractorCli
     /// (etapa, query, número SQL, duração), que é o que se cola num chamado. A pilha
     /// só sob pedido, porque ela sepulta o que interessa.
     /// </summary>
-    private static int Falhar<T>(Result<T> resultado, bool comStackTrace)
+    internal static int Falhar<T>(Result<T> resultado, bool comStackTrace)
     {
         var erro = resultado.Errors.OfType<ExtratorErro>().First();
         Console.Error.WriteLine(erro.Message);

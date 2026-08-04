@@ -1,4 +1,3 @@
-using System.Reflection;
 using CosmosPro.ML.DemandForCast.Extractor;
 using FluentResults;
 
@@ -26,18 +25,8 @@ public sealed class ExtractorCliTests
         EtapaQualquer,
         TimeSpan.FromSeconds(3));
 
-    /// <summary>
-    /// Invoca o <c>Falhar</c> privado do CLI via reflexão: ele é privado de
-    /// propósito (é detalhe de implementação do modo linha de comando, não uma API
-    /// pública), mas é o único lugar que decide o que sai em stderr e qual código
-    /// de saída volta — testar por fora dele testaria uma cópia, não o real.
-    /// </summary>
     private static (int Codigo, string Saida) Falhar(ExtratorErro erro, bool comStackTrace)
     {
-        var metodo = typeof(ExtractorCli)
-            .GetMethod("Falhar", BindingFlags.NonPublic | BindingFlags.Static)!
-            .MakeGenericMethod(typeof(object));
-
         var resultado = Result.Fail<object>(erro);
 
         var escritorOriginal = Console.Error;
@@ -45,7 +34,7 @@ public sealed class ExtractorCliTests
         Console.SetError(escritor);
         try
         {
-            var codigo = (int)metodo.Invoke(null, [resultado, comStackTrace])!;
+            var codigo = ExtractorCli.Falhar(resultado, comStackTrace);
             return (codigo, escritor.ToString());
         }
         finally
