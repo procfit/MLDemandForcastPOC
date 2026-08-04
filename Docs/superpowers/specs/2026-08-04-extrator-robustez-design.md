@@ -44,6 +44,29 @@ rápido. A otimização registrada em `perf(extractor): split suggestion catalog
 header and count queries` resolveu o join por faixa de datas, mas manteve a agregação
 caríssima do lado das contagens.
 
+### E os 20 minutos nem chegam ao fim: a conexão cai antes
+
+Numa segunda tentativa, com a porta correta (1435), a tela falhou em **2min09**
+(log do form: `11:06:36 Carregando sugestões...` → `11:08:45 ERRO`), com erro de
+**transporte**:
+
+> Falha na etapa 'contagens do catálogo (catalogo_sugestoes_contagens.sql)': Ocorreu um
+> erro no nível de transporte durante o recebimento de resultados do servidor.
+> (provider: Provedor de TCP, error: 0 — Uma tentativa de conexão falhou porque o
+> componente conectado não respondeu corretamente após um período de tempo...)
+
+Não é timeout de comando — com `CommandTimeout = 0` o cliente esperaria para sempre.
+É a rede até `natusfarma.procfit.com.br:1435` que desiste. Do ambiente do
+desenvolvedor a mesma sequência sobreviveu a 146,8 s (1 mês, 4 lotes), então o ponto
+de queda não é fixo: é instabilidade do caminho, e uma sequência de 20 minutos de
+consultas pesadas não passa por ele.
+
+Isso muda o peso da decisão sobre as contagens: ela deixa de ser otimização e passa a
+ser **viabilidade**. Nenhum arranjo de paginação resolve, porque o custo é *por
+página* — 40 páginas de 500 ids a 30 s, ou 80 de 250 a 15 s, dão o mesmo total com o
+dobro de idas ao banco; 10 páginas de 2.000 ids dariam ~120 s cada, e cada página
+sozinha já encostaria no ponto onde a conexão caiu.
+
 ### Por que o sintoma foi "travou" e não "está lento"
 
 Quatro escolhas de código se somaram:
@@ -72,7 +95,7 @@ a porta.
 
 | Questão | Decisão | Por quê |
 |---|---|---|
-| Contagens Linhas/Lojas no grid | **Sob demanda, na seleção** | O catálogo carrega em 0,27 s; a contagem da sugestão escolhida custa 0,01 s. A informação não se perde, ela passa a aparecer para a única linha que interessa. |
+| Contagens Linhas/Lojas no grid | **Sob demanda, na seleção** | O catálogo carrega em 0,27 s; a contagem da sugestão escolhida custa 0,01 s. A informação não se perde, ela passa a aparecer para a única linha que interessa. E, dado que a conexão cai em ~2 min, é a única forma que **cabe** no ambiente. |
 | Fronteira do `Result` | **Camada de serviço inteira, extração incluída** | Dois estilos de erro na mesma classe é o que produz o `catch (Exception)` que engole contexto. Com a fronteira inteira, exceção que escapa passa a significar bug. |
 | Log | **Arquivo + botão copiar** | O operador roda no terminal do cliente. Log que morre com o form transforma toda falha em "não sei, deu erro". |
 | Timeout da extração | **Continua 0 (ilimitado)** | Varrer dezenas de milhões de linhas é a natureza da operação, não um sintoma. O que muda é cancelamento que responde e progresso que anda. |
@@ -155,6 +178,7 @@ Todo erro deriva de um `ExtratorError` comum e carrega `Metadata`: `etapa`,
 | erro | quando | o que a mensagem acrescenta |
 |---|---|---|
 | `ConexaoError` | conexão não abriu | **conferir servidor E porta** — a mensagem crua do SQL Server não menciona porta, e foi assim que a 1433 vs 1435 passou por logon inválido |
+| `ConexaoPerdidaError` | conexão caiu **no meio** da consulta (erro de transporte / `SqlException` de rede sobre conexão já aberta) | "a conexão caiu durante a consulta" — separado de `ConexaoError` de propósito: servidor e porta estavam certos, mandar conferi-los joga o operador na direção errada. Diz a etapa e o tempo que a consulta já durava. |
 | `LogonTriggerError` | `SqlException.Number == 17892` | mantém a dica de `ApplicationName` em `extrator.config.json` |
 | `TempoExcedidoError` | timeout limitado estourou | nome da query e o limite que foi excedido |
 | `EtapaError` | falha dentro de etapa nomeada | etapa + arquivo `.sql` + tipo interno |
@@ -177,7 +201,32 @@ do caminho.
 `OperationCanceledException` nunca é convertida em erro: cancelamento é desfecho, e
 os dois modos já o distinguem (na UI pelo status, no CLI pelo exit code).
 
-## 6. Catálogo
+## 6. Resiliência de conexão
+
+O caminho até o PBS do cliente é a internet, e ele derruba conexão no meio de
+consulta (§1). Duas medidas, com escopos diferentes:
+
+**Na connection string** — `ConnectRetryCount = 3` e `ConnectRetryInterval = 10`,
+hoje não declarados. Importante ser honesto sobre o alcance: a resiliência do
+`SqlClient` reconecta conexão **ociosa** que foi quebrada; ela **não** salva um
+comando que estava em execução. Vale para a abertura e para a conexão que ficou
+parada entre etapas, e é barata — mas não é a resposta ao erro que apareceu na tela.
+
+**Retry no nível da consulta** — a resposta ao erro que apareceu. Só para leituras
+curtas e idempotentes: cabeçalhos do catálogo, contagem da seleção, lojas. Até 2
+tentativas extras, 2 s entre elas, e o log **diz** que está retentando
+(`"tentativa 2 de 3"`) — retry silencioso é a mesma desonestidade de antes, com outro
+nome. Só para erro classificado como transitório: `ConexaoPerdidaError` e deadlock
+(`SqlException.Number == 1205`). Nunca para `ContratoError`, `SugestaoNaoEncontrada`
+ou credencial — repetir esses só faz o operador esperar três vezes pela mesma
+resposta.
+
+**Extração não tem retry automático.** Uma query de vendas refeita do zero custa
+minutos, e a operação escreve arquivo — retentar ali é decisão do operador, com o ZIP
+parcial já descartado. O que ela ganha é a mensagem certa: `ConexaoPerdidaError`
+dizendo em qual dos nove arquivos caiu e há quanto tempo rodava.
+
+## 7. Catálogo
 
 `catalogo_sugestoes_contagens.sql` sai do caminho de carregamento. Ela passa a ser
 chamada para **uma** sugestão, na seleção do grid, e o resultado aparece ao lado da
@@ -198,7 +247,7 @@ Se a contagem da seleção falhar ou estourar o timeout, a linha de informação
 e a extração **continua permitida**: contagem é conforto do operador, não
 pré-condição.
 
-## 7. Timeouts
+## 8. Timeouts
 
 | operação | hoje | proposto | chave em `extrator.config.json` |
 |---|---|---|---|
@@ -212,7 +261,7 @@ O 0 da extração fica fora da configuração de propósito: um timeout ali só 
 falha no meio de um ZIP que estava indo bem. Quem interrompe extração é o operador,
 pelo botão.
 
-## 8. CLI
+## 9. CLI
 
 `CliExitCode` passa a ser **derivado** do erro tipado, num único mapa, em vez de
 escolhido dentro de cada `catch`. Hoje o form e o CLI podem discordar sobre o que
@@ -221,7 +270,7 @@ código de saída e o texto da tela vêm da mesma fonte. `--list` fica instantâ
 mesmo caminho do form. `MensagemDeFalha` passa a formatar erro tipado, mantendo
 `--stack-trace`.
 
-## 9. Testes
+## 10. Testes
 
 Os 138 testes existentes continuam passando; nenhum contrato de CSV, ZIP, manifesto
 ou janela muda. Novos, todos sem banco:
@@ -235,7 +284,7 @@ ou janela muda. Novos, todos sem banco:
 - `MesclarCatalogo` continua valendo com contagens ausentes (a sugestão sem linhas
   em `..._RESULTADO` — id 17658 na instância real — não pode sumir da lista)
 
-## 10. Fora de escopo
+## 11. Fora de escopo
 
 Registrado para não parecer esquecimento:
 
