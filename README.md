@@ -230,11 +230,14 @@ davam 40 lotes, cerca de **20 minutos**, e a conexão até o cliente caiu antes 
 2min09, com erro de transporte. Use o campo de filtro para achar a sugestão por id ou
 descrição; com 19 mil linhas, rolar a lista não é navegação.
 
-**Toda espera é cancelável e mostra o relógio.** Testar conexão, carregar sugestões,
-contar itens e extrair passam pelo mesmo escopo: os campos travam, o botão **Cancelar**
-responde, a barra anda (indeterminada quando não há total conhecido) e o rodapé mostra o
-tempo decorrido. Uma operação lenta se distingue de uma travada sem precisar do
-código-fonte.
+**Toda espera é cancelável e mostra o relógio — e a contagem por sugestão é a exceção
+deliberada.** Testar conexão, carregar sugestões e extrair passam pelo mesmo escopo: os
+campos travam, o botão **Cancelar** responde, a barra anda (indeterminada quando não há
+total conhecido) e o rodapé mostra o tempo decorrido. Uma operação lenta se distingue de
+uma travada sem precisar do código-fonte. A contagem de itens da sugestão selecionada
+**não** passa por esse escopo: é uma busca leve em segundo plano, refeita a cada seleção,
+que nunca trava campo nenhum, nunca abre diálogo de erro e escreve o próprio desfecho
+(sucesso ou falha) direto na linha de informação da janela derivada.
 
 **A falha diz onde quebrou.** Os erros são tipados e carregam etapa, arquivo `.sql`,
 número do erro SQL e duração. Exemplo real, com a porta errada — o `1433` responde e o
