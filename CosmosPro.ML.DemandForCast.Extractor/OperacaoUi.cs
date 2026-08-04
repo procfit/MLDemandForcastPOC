@@ -57,13 +57,21 @@ internal sealed class OperacaoUi : IDisposable
 
     public void Cancelar() => _cts.Cancel();
 
+    // O Progress<T> que a extração usa decide, ao ser construído, em qual thread este
+    // método roda: construído antes do Task.Run, ele captura o contexto da UI; construído
+    // dentro do delegate em background (o formato que a extração usa), não captura
+    // nenhum e o callback chega pela thread do pool. Esta classe não pode depender de
+    // quem a chama ter acertado o ponto de construção — daí o marshaling aqui, não lá.
     public void Reportar(string detalhe, int? etapaAtual)
     {
         _detalhe = detalhe;
-        if (etapaAtual is { } etapa && _alvos.Progresso.Style == ProgressBarStyle.Continuous)
+        Marshal(_alvos.Progresso, () =>
         {
-            _alvos.Progresso.Value = Math.Clamp(etapa, _alvos.Progresso.Minimum, _alvos.Progresso.Maximum);
-        }
+            if (etapaAtual is { } etapa && _alvos.Progresso.Style == ProgressBarStyle.Continuous)
+            {
+                _alvos.Progresso.Value = Math.Clamp(etapa, _alvos.Progresso.Minimum, _alvos.Progresso.Maximum);
+            }
+        });
         AtualizarStatus();
     }
 
@@ -86,17 +94,64 @@ internal sealed class OperacaoUi : IDisposable
             : $"{((int)decorrido.TotalMinutes).ToString(CultureInfo.InvariantCulture)}min"
               + decorrido.Seconds.ToString("00", CultureInfo.InvariantCulture);
 
-    private void AtualizarStatus() => _alvos.Status.Text = TextoDeStatus(_titulo, _decorrido.Elapsed, _detalhe);
+    private void AtualizarStatus() =>
+        Marshal(_alvos.Status, () => _alvos.Status.Text = TextoDeStatus(_titulo, _decorrido.Elapsed, _detalhe));
+
+    // Único ponto de contato entre esta classe e a thread da UI. O Timer já tica na UI,
+    // então aqui o InvokeRequired normalmente dá falso e o delegate roda direto — o
+    // BeginInvoke só entra quando quem chamou (Reportar, a partir do callback de
+    // progresso da extração) está na thread do pool. Assíncrono de propósito: um
+    // worker relatando progresso não pode ficar bloqueado esperando a UI processar.
+    private static void Marshal(Control controle, Action acao)
+    {
+        try
+        {
+            if (controle.InvokeRequired) controle.BeginInvoke(acao);
+            else acao();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Form fechado no meio da operação: o controle já não existe para receber
+            // o progresso. Perder este relato não vale derrubar a extração em andamento.
+        }
+        catch (InvalidOperationException)
+        {
+            // Handle ainda não criado (form fechado antes de aparecer, ou ainda não
+            // mostrado): mesmo motivo do caso acima, um relato perdido não é o problema.
+        }
+    }
 
     public void Dispose()
     {
-        _cronometro.Stop();
+        // Cada restauração roda isolada: um controle já descartado (o operador fechou o
+        // form com a operação em andamento) não pode abortar as demais. Um form
+        // parcialmente restaurado é o pior resultado que esta classe existe para evitar
+        // — trava o operador, que só tem o processo para matar.
+        RestaurarComSeguranca(() => _cronometro.Stop());
         _cronometro.Dispose();
 
-        for (var i = 0; i < _alvos.Travar.Count; i++) _alvos.Travar[i].Enabled = _estadoAnterior[i];
-        _alvos.Cancelar.Enabled = false;
-        _alvos.Progresso.Style = _estiloAnterior;
+        for (var i = 0; i < _alvos.Travar.Count; i++)
+        {
+            var indice = i;
+            RestaurarComSeguranca(() => _alvos.Travar[indice].Enabled = _estadoAnterior[indice]);
+        }
+
+        RestaurarComSeguranca(() => _alvos.Cancelar.Enabled = false);
+        RestaurarComSeguranca(() => _alvos.Progresso.Style = _estiloAnterior);
 
         _cts.Dispose();
+    }
+
+    private static void RestaurarComSeguranca(Action acao)
+    {
+        try
+        {
+            acao();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Ver o comentário em Dispose(): um controle perdido não pode custar a
+            // restauração dos outros.
+        }
     }
 }
