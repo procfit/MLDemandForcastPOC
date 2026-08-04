@@ -226,6 +226,12 @@ internal sealed class MainForm : Form
                 {
                     var resultado = await Task.Run(() => operacao(escopo.Token), escopo.Token);
 
+                    // A operação pode devolver Result.Ok mesmo depois de cancelada -- por
+                    // exemplo, um passo de leitura que já tinha o dado em mãos quando o
+                    // token virou. Sem este checkpoint o rodapé diria "Concluído" para uma
+                    // extração que o operador cancelou, com o catch abaixo nunca disparando.
+                    escopo.Token.ThrowIfCancellationRequested();
+
                     if (resultado.IsSuccess)
                     {
                         aoConcluir(resultado.Value);
@@ -233,7 +239,7 @@ internal sealed class MainForm : Form
                     }
                     else
                     {
-                        var erro = resultado.Errors.OfType<ExtratorErro>().First();
+                        var erro = resultado.ErroOuFallback();
                         escopo.Concluir("Falhou.");
                         _log.Escrever($"ERRO: {erro.Message}");
                         foreach (var (chave, valor) in erro.Metadata)
@@ -317,7 +323,7 @@ internal sealed class MainForm : Form
             }
             else
             {
-                var erro = resultado.Errors.OfType<ExtratorErro>().First();
+                var erro = resultado.ErroOuFallback();
                 _janelaInfo.Text = $"Não foi possível contar os itens da sugestão {sugestaoId}: {erro.Message}";
                 _log.Escrever($"ERRO ao contar itens da sugestão {sugestaoId}: {erro.Message}");
                 foreach (var (chave, valor) in erro.Metadata)
@@ -331,6 +337,15 @@ internal sealed class MainForm : Form
             // Seleção trocou antes da contagem terminar: abandono normal, não falha --
             // sem log, sem MessageBox, sem tocar em _janelaInfo (quem escreveu por
             // último foi a seleção atual, e é isso que deve continuar na tela).
+        }
+        finally
+        {
+            // Descarta o CTS desta chamada -- não o de _contagemCts, que já pode
+            // apontar para uma seleção mais nova. Cada chamada é dona só do seu
+            // próprio cts, e só o descarta depois do try/catch acima já ter
+            // terminado de usá-lo -- descartar por fora, na hora da troca, arriscaria
+            // derrubar um Task.Run que ainda estivesse em voo com este token.
+            cts.Dispose();
         }
     }
 
