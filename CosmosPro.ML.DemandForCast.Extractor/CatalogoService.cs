@@ -40,7 +40,7 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
                 }
                 return (IReadOnlyList<SugestaoCatalogoCabecalho>)cabecalhos;
             },
-            "{{DATA_INICIO}}", "@dataInicio"));
+            "{{DATA_INICIO}}", "@dataInicio"), ct);
     }
 
     public Result<SugestaoContagem> Contar(string connectionString, long sugestaoId, CancellationToken ct)
@@ -53,7 +53,7 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
                 comando.Parameters.Add("@sugestao", SqlDbType.BigInt).Value = sugestaoId;
             },
             reader => LerContagem(sugestaoId, reader),
-            "{{SUGESTOES}}", "@sugestao"));
+            "{{SUGESTOES}}", "@sugestao"), ct);
     }
 
     public Result<SugestaoCatalogoCabecalho> PorId(string connectionString, long sugestaoId, CancellationToken ct)
@@ -66,7 +66,7 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
                 comando.Parameters.Add("@sugestaoId", SqlDbType.BigInt).Value = sugestaoId;
             },
             reader => reader.Read() ? LerCabecalho(reader) : null,
-            "{{SUGESTAO_ID}}", "@sugestaoId"));
+            "{{SUGESTAO_ID}}", "@sugestaoId"), ct);
 
         if (lido.IsFailed) return Result.Fail<SugestaoCatalogoCabecalho>(lido.Errors);
 
@@ -90,7 +90,7 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
                     lojas.Add(new LojaOption(reader.GetInt32(0), reader.GetString(1)));
                 }
                 return (IReadOnlyList<LojaOption>)lojas;
-            }));
+            }), ct);
     }
 
     /// <summary>
@@ -138,8 +138,8 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
 
     private int TimeoutContagem => AppConfig.Segundos(config.TimeoutContagemSegundos, AppConfig.TimeoutContagemPadrao);
 
-    private Result<T> ComRetentativa<T>(Func<Result<T>> consulta) =>
-        Retentativa.Executar(consulta, Retentativa.TentativasPadrao, log.Escrever, Thread.Sleep);
+    private Result<T> ComRetentativa<T>(Func<Result<T>> consulta, CancellationToken ct) =>
+        Retentativa.Executar(consulta, Retentativa.TentativasPadrao, log.Escrever, Retentativa.Dormir, ct);
 
     /// <summary>
     /// O único ponto de tradução de exceção deste arquivo. <c>conexaoJaAberta</c> é o
@@ -171,6 +171,12 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
             using var command = new SqlCommand(sql, connection) { CommandTimeout = timeoutSegundos };
             parametros(command);
             using var cancelRegistration = ct.Register(command.Cancel);
+
+            // Um token já cancelado dispara o callback do Register síncrono, contra um
+            // Command que nem começou -- Cancel() vira no-op documentado. Sem este
+            // ThrowIfCancellationRequested logo antes do ExecuteReader, a consulta
+            // inteira roda até o fim como se ninguém tivesse clicado em Cancelar.
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             return Result.Ok(ler(reader));

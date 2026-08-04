@@ -26,6 +26,7 @@ internal sealed class ExtractionService
     {
         var cronometro = System.Diagnostics.Stopwatch.StartNew();
         var zipPath = string.Empty;
+        var zipBytes = 0L;
 
         var rows = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
@@ -76,6 +77,12 @@ internal sealed class ExtractionService
                     ZipManifest.VersaoAtual(),
                     skusFabricados)));
             }
+
+            // Dentro do try de propósito: uma falha aqui (antivírus travou o arquivo
+            // recém-fechado, por exemplo) é tão IOException quanto qualquer escrita
+            // deste método, e tem que passar pelo mesmo ponto único de tradução —
+            // não escapar crua e quebrar o contrato de que Run só devolve Result.
+            zipBytes = new FileInfo(zipPath).Length;
         }
         catch (OperationCanceledException)
         {
@@ -117,7 +124,7 @@ internal sealed class ExtractionService
             warnings.Add("Nenhum estoque no período — o histórico de ESTOQUE_LANCAMENTOS costuma cobrir apenas os últimos meses.");
         }
 
-        return Result.Ok(new ExtractionResult(zipPath, new FileInfo(zipPath).Length, rows, warnings));
+        return Result.Ok(new ExtractionResult(zipPath, zipBytes, rows, warnings));
     }
 
     /// <summary>
@@ -132,6 +139,7 @@ internal sealed class ExtractionService
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("escopo_sugestao.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             var ids = new HashSet<int>();
@@ -162,6 +170,7 @@ internal sealed class ExtractionService
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra_diagnostico.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
             if (reader.Read() && !reader.IsDBNull(0))
             {
@@ -185,6 +194,7 @@ internal sealed class ExtractionService
             using var entry = zip.CreateEntry(StageContract.SugestoesCompra, header);
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             EnsureShape(reader, header, StageContract.SugestoesCompra);
@@ -223,6 +233,7 @@ internal sealed class ExtractionService
             using var entry = zip.CreateEntry(StageContract.Produtos, header);
             using var command = new SqlCommand(SqlResources.Load("produtos.sql"), connection) { CommandTimeout = CommandTimeoutSeconds };
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             EnsureShape(reader, header, StageContract.Produtos);
@@ -336,6 +347,7 @@ internal sealed class ExtractionService
             var header = StageContract.Headers[entryName];
             using var entry = zip.CreateEntry(entryName, header);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             EnsureShape(reader, header, entryName);
@@ -371,6 +383,7 @@ internal sealed class ExtractionService
             using var entry = zip.CreateEntry(StageContract.EstoquesDiarios, header);
             using var command = CreateJanelaCommand(connection, SqlResources.Load("estoques_movimentos.sql"), lojaIds, dataInicial, dataFinal);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             foreach (var linha in StockCarryForward.Densify(ReadMovements(reader, ct), dataFinal))
