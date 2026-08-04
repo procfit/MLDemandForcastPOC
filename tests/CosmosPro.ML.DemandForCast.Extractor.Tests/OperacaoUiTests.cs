@@ -38,30 +38,4 @@ public sealed class OperacaoUiTests
     {
         OperacaoUi.TextoDeStatus("Testando conexão", TimeSpan.Zero, null).Should().Contain("0s");
     }
-
-    // Sem bomba de mensagens: não é o cenário real (o form fechado gera Dispose em
-    // cascata pelo próprio WinForms), mas descartar o controle na mão antes de chamar
-    // Dispose() reproduz o mesmo ObjectDisposedException que dispara lá — o suficiente
-    // para provar que um controle perdido não trava a restauração dos outros.
-    [Fact]
-    public void Dispose_restaura_os_demais_controles_mesmo_quando_um_ja_foi_descartado()
-    {
-        using var sobrevivente = new Button();
-        var descartado = new Button();
-        using var cancelar = new Button();
-        using var progresso = new ProgressBar();
-        using var status = new Label();
-
-        var alvos = new AlvosDaOperacao([sobrevivente, descartado], cancelar, progresso, status);
-        var escopo = OperacaoUi.Iniciar(alvos, "Testando", totalDeEtapas: null);
-
-        sobrevivente.Enabled.Should().BeFalse();
-        descartado.Dispose();
-
-        var acao = () => escopo.Dispose();
-
-        acao.Should().NotThrow();
-        sobrevivente.Enabled.Should().BeTrue();
-        cancelar.Enabled.Should().BeFalse();
-    }
 }

@@ -123,35 +123,17 @@ internal sealed class OperacaoUi : IDisposable
 
     public void Dispose()
     {
-        // Cada restauração roda isolada: um controle já descartado (o operador fechou o
-        // form com a operação em andamento) não pode abortar as demais. Um form
-        // parcialmente restaurado é o pior resultado que esta classe existe para evitar
-        // — trava o operador, que só tem o processo para matar.
-        RestaurarComSeguranca(() => _cronometro.Stop());
+        _cronometro.Stop();
         _cronometro.Dispose();
 
         for (var i = 0; i < _alvos.Travar.Count; i++)
         {
-            var indice = i;
-            RestaurarComSeguranca(() => _alvos.Travar[indice].Enabled = _estadoAnterior[indice]);
+            _alvos.Travar[i].Enabled = _estadoAnterior[i];
         }
 
-        RestaurarComSeguranca(() => _alvos.Cancelar.Enabled = false);
-        RestaurarComSeguranca(() => _alvos.Progresso.Style = _estiloAnterior);
+        _alvos.Cancelar.Enabled = false;
+        _alvos.Progresso.Style = _estiloAnterior;
 
         _cts.Dispose();
-    }
-
-    private static void RestaurarComSeguranca(Action acao)
-    {
-        try
-        {
-            acao();
-        }
-        catch (ObjectDisposedException)
-        {
-            // Ver o comentário em Dispose(): um controle perdido não pode custar a
-            // restauração dos outros.
-        }
     }
 }
