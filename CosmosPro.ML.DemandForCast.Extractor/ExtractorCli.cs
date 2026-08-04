@@ -150,7 +150,7 @@ internal static class ExtractorCli
     /// </summary>
     internal static int Falhar<T>(Result<T> resultado, bool comStackTrace)
     {
-        var erro = resultado.Errors.OfType<ExtratorErro>().First();
+        var erro = resultado.ErroOuFallback();
         Console.Error.WriteLine(erro.Message);
 
         foreach (var (chave, valor) in erro.Metadata)

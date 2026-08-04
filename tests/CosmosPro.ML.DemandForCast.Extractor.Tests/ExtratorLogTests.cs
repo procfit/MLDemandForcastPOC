@@ -160,6 +160,24 @@ public sealed class ExtratorLogTests : IDisposable
     }
 
     [Fact]
+    public void Escritas_concorrentes_nao_se_perdem()
+    {
+        // Escrever roda tanto na UI quanto na thread do pool (Retentativa logando um
+        // retry dentro do Task.Run de ExecutarAsync) -- sem serialização, dois
+        // File.AppendAllText concorrentes colidem, um estoura IOException, o catch de
+        // Gravar engole, e a linha some em silêncio.
+        var log = Log();
+
+        Parallel.For(0, 50, i => log.Escrever($"linha {i}"));
+
+        var conteudo = File.ReadAllText(log.CaminhoDeHoje);
+        for (var i = 0; i < 50; i++)
+        {
+            conteudo.Should().Contain($"linha {i}");
+        }
+    }
+
+    [Fact]
     public void Pasta_inacessivel_nao_derruba_a_operacao()
     {
         // Perder o log é ruim; perder a extração porque o log falhou é pior.

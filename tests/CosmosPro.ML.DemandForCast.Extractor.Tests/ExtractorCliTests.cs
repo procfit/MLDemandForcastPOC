@@ -94,4 +94,27 @@ public sealed class ExtractorCliTests
 
         codigo.Should().Be(CliExitCode.SugestaoNaoEncontrada);
     }
+
+    [Fact]
+    public void Falha_sem_erro_tipado_nao_estoura_e_ainda_mostra_mensagem()
+    {
+        // Um IError genérico (fora do que os serviços deste projeto produzem) não
+        // pode fazer .First() estourar InvalidOperationException.
+        var resultado = Result.Fail<object>(new Error("falha genérica de outra origem"));
+
+        var escritorOriginal = Console.Error;
+        var escritor = new StringWriter();
+        Console.SetError(escritor);
+        try
+        {
+            var acao = () => ExtractorCli.Falhar(resultado, comStackTrace: false);
+
+            acao.Should().NotThrow();
+            escritor.ToString().Should().Contain("falha genérica de outra origem");
+        }
+        finally
+        {
+            Console.SetError(escritorOriginal);
+        }
+    }
 }

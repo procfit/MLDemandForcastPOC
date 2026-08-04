@@ -11,6 +11,7 @@ namespace CosmosPro.ML.DemandForCast.Extractor;
 internal sealed partial class ExtratorLog(string pasta, Action<string>? tela = null, Func<DateTime>? agora = null)
 {
     private readonly Func<DateTime> _agora = agora ?? (() => DateTime.Now);
+    private readonly Lock _gravarLock = new();
 
     public string CaminhoDeHoje => Path.Combine(pasta, NomeDoArquivo(_agora()));
 
@@ -29,17 +30,24 @@ internal sealed partial class ExtratorLog(string pasta, Action<string>? tela = n
     private string Formatar(string mensagem) =>
         $"{_agora().ToString("HH:mm:ss", CultureInfo.InvariantCulture)}  {Redigir(mensagem)}";
 
+    // Chamado tanto da UI quanto da thread do pool (Retentativa logando um retry
+    // dentro do Task.Run de ExecutarAsync) -- sem serializar, dois AppendAllText
+    // concorrentes colidem no mesmo arquivo, um deles estoura IOException, o catch
+    // abaixo engole, e a linha desaparece em silêncio.
     private void Gravar(string linha)
     {
-        try
+        lock (_gravarLock)
         {
-            Directory.CreateDirectory(pasta);
-            File.AppendAllText(CaminhoDeHoje, linha + Environment.NewLine);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or DirectoryNotFoundException)
-        {
-            // Pasta somente leitura ou caminho inválido: perder o log não justifica
-            // derrubar a operação. Mesma política de AppConfig.Save().
+            try
+            {
+                Directory.CreateDirectory(pasta);
+                File.AppendAllText(CaminhoDeHoje, linha + Environment.NewLine);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or DirectoryNotFoundException)
+            {
+                // Pasta somente leitura ou caminho inválido: perder o log não justifica
+                // derrubar a operação. Mesma política de AppConfig.Save().
+            }
         }
     }
 
