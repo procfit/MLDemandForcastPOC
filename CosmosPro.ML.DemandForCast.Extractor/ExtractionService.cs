@@ -77,6 +77,16 @@ internal sealed class ExtractionService
                     skusFabricados)));
             }
         }
+        catch (OperationCanceledException)
+        {
+            // Cancelamento não é falha, mas o ZIP parcial tem de morrer igual: ele
+            // passa na validação de header do import e entraria no Stage como se
+            // estivesse completo. Antes da fronteira Result isto vinha de um catch
+            // pelado; os dois catches abaixo não o pegam de propósito, porque
+            // cancelamento sobe como exceção.
+            TryDelete(zipPath);
+            throw;
+        }
         catch (FalhaDeDominioException falha)
         {
             // ZIP parcial é pior que nenhum: ele passa na validação de header do
