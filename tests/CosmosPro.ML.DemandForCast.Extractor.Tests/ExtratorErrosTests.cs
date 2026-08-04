@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using CosmosPro.ML.DemandForCast.Extractor;
+using FluentResults;
 
 namespace CosmosPro.ML.DemandForCast.Extractor.Tests;
 
@@ -93,11 +95,53 @@ public sealed class ExtratorErrosTests
     [Theory]
     [InlineData(typeof(IOException))]
     [InlineData(typeof(UnauthorizedAccessException))]
-    public void Falha_de_disco_vira_erro_de_escrita(Type tipo)
+    public void Falha_de_io_numa_etapa_de_query_vira_etapa_erro_e_nao_erro_de_escrita(Type tipo)
     {
+        // Qualquer (contagem do catálogo) tem QueryFile: é leitura de rede, não
+        // escrita em disco. "Confira espaço em disco" é conselho errado aqui.
+        var falha = new FalhaBruta(tipo, "conexão caiu no meio da leitura", null, false, "detalhe");
+
+        Classificar(falha).Should().BeOfType<EtapaErro>();
+    }
+
+    [Theory]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(UnauthorizedAccessException))]
+    public void Falha_de_io_numa_etapa_sem_query_file_vira_erro_de_escrita(Type tipo)
+    {
+        // Etapa sem QueryFile é o ZIP (ver ExtractionService.Run) -- aqui sim
+        // "confira espaço em disco" é o conselho certo.
+        var etapaDoZip = new Etapa("extração", null);
         var falha = new FalhaBruta(tipo, "disco", null, false, "detalhe");
 
-        Classificar(falha).Should().BeOfType<EscritaErro>();
+        ClassificadorDeFalha.Classificar(falha, etapaDoZip, TimeSpan.FromSeconds(1))
+            .Should().BeOfType<EscritaErro>();
+    }
+
+    [Fact]
+    public void Falha_de_transporte_sem_sqlexception_nenhuma_vira_erro_de_conexao()
+    {
+        // Queda tão bruta (host inalcançável, porta fechada) que nem chega a virar
+        // SqlException -- o driver embrulha em Win32Exception puro, e isso não pode
+        // cair no balde genérico de InesperadoErro.
+        var falha = new FalhaBruta(typeof(Win32Exception), "No such host is known", null, false, "detalhe");
+
+        Classificar(falha).Should().BeOfType<ConexaoErro>();
+    }
+
+    [Fact]
+    public void Falha_com_tipo_de_transporte_e_numero_sql_classifica_pelo_numero_nao_pelo_tipo()
+    {
+        // Caso real: Tipo vem do inner (Win32Exception/IOException do transporte),
+        // SqlNumber vem do SqlException que fica no topo da cadeia -- os dois nascem
+        // de exceções diferentes agora, e a classificação não pode se confundir com
+        // isso: ela decide pelo número, não pelo tipo.
+        var falha = new FalhaBruta(typeof(Win32Exception), "An existing connection was forcibly closed", -1, ConexaoJaAberta: true, "detalhe");
+
+        var erro = Classificar(falha);
+
+        erro.Should().BeOfType<ConexaoPerdidaErro>();
+        erro.Transitorio.Should().BeTrue();
     }
 
     [Fact]
@@ -149,6 +193,20 @@ public sealed class ExtratorErrosTests
     }
 
     [Fact]
+    public void Falha_bruta_nao_inventa_numero_a_partir_do_tipo_do_inner_quando_nao_ha_sqlexception()
+    {
+        // Não dá para construir um SqlException real aqui (sem construtor público) --
+        // o caminho em que o número sobrevive ao unwrap só é exercitado pelo CLI contra
+        // o PBS real (ver relatório). O que se pina é a outra metade do contrato: uma
+        // cadeia sem SqlException nenhuma, direta ou como inner, nunca fabrica número.
+        var falha = FalhaBruta.De(
+            new InvalidOperationException("embrulho", new IOException("io")),
+            conexaoJaAberta: true);
+
+        falha.SqlNumber.Should().BeNull();
+    }
+
+    [Fact]
     public void Erros_de_dominio_nao_sao_transitorios()
     {
         new SugestaoNaoEncontradaErro(4242).Transitorio.Should().BeFalse();
@@ -164,5 +222,27 @@ public sealed class ExtratorErrosTests
 
         erro.Message.Should().Contain("4242");
         erro.Message.Should().Contain("--list");
+    }
+
+    [Fact]
+    public void Erro_ou_fallback_devolve_o_erro_tipado_quando_existe()
+    {
+        var resultado = Result.Fail<int>(new SugestaoNaoEncontradaErro(9));
+
+        resultado.ErroOuFallback().Should().BeOfType<SugestaoNaoEncontradaErro>();
+    }
+
+    [Fact]
+    public void Erro_ou_fallback_nao_estoura_quando_o_erro_nao_e_tipado()
+    {
+        // Um IError de outra origem (fora do que os serviços deste projeto produzem)
+        // não pode fazer .First() estourar InvalidOperationException num handler
+        // async void, na frente do operador.
+        var resultado = Result.Fail<int>(new Error("erro genérico de outra origem"));
+
+        var erro = resultado.ErroOuFallback();
+
+        erro.Should().BeOfType<InesperadoErro>();
+        erro.Message.Should().Contain("erro genérico de outra origem");
     }
 }
