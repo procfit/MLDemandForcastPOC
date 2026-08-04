@@ -52,11 +52,10 @@ internal sealed class MainForm : Form
     private IReadOnlyList<SugestaoCatalogoCabecalho> _catalogo = [];
     private ExtractionWindow? _janela;
 
-    // Guarda a última sugestão contada para o finally de ExecutarAsync não
-    // religar a própria contagem: sem isto, ao terminar, ContarSelecaoAsync
-    // chamaria AtualizarJanela, que dispararia outra contagem para sempre,
-    // com a mesma seleção parada na tela.
-    private long? _sugestaoContada;
+    // Contagem por seleção: fetch próprio, fora de ExecutarAsync (ver ContarSelecaoAsync).
+    // Um novo CTS por chamada -- trocar de linha rápido cancela a contagem anterior em
+    // vez de enfileirar as duas.
+    private CancellationTokenSource? _contagemCts;
 
     public MainForm()
     {
@@ -66,9 +65,13 @@ internal sealed class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(660, 760);
 
+        // ExtratorLog.Escrever roda este callback direto na thread de quem chamou --
+        // inclusive a thread do pool do Task.Run de ExecutarAsync, quando é Retentativa
+        // quem está logando um retry. ExtratorLog não pode fazer o marshaling (tem que
+        // ficar livre de WinForms), então tem que ser aqui.
         _log = new ExtratorLog(
             Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
-            tela: linha => _painelDeLog.AppendText(linha + Environment.NewLine));
+            tela: linha => MarshalParaPainelDeLog(linha));
         _catalogoService = new CatalogoService(_config, _log);
 
         BuildLayout();
@@ -174,6 +177,27 @@ internal sealed class MainForm : Form
 
     private string BuildConnectionString() => ConnectionStringFactory.Build(CaptureConfig(), _senha.Text);
 
+    // Mesma forma de OperacaoUi.Marshal: quem chama pode estar na thread do pool (o
+    // callback de log de Retentativa, dentro do Task.Run de ExecutarAsync), e uma
+    // linha de log perdida não pode derrubar a operação que a gerou.
+    private void MarshalParaPainelDeLog(string linha)
+    {
+        try
+        {
+            if (_painelDeLog.InvokeRequired) _painelDeLog.BeginInvoke(() => _painelDeLog.AppendText(linha + Environment.NewLine));
+            else _painelDeLog.AppendText(linha + Environment.NewLine);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Form fechado no meio da operação: sem painel para receber a linha.
+        }
+        catch (InvalidOperationException)
+        {
+            // Handle ainda não criado (form fechado antes de aparecer, ou ainda não
+            // mostrado): mesmo motivo do caso acima.
+        }
+    }
+
     /// <summary>
     /// Uma operação longa, com tudo o que ela deve ao operador: inputs travados,
     /// Cancelar ativo, relógio andando e o desfecho no log — inclusive quando falha.
@@ -185,35 +209,47 @@ internal sealed class MainForm : Form
             [_conexaoBox, _sugestaoBox, _saidaBox, _extrair, _testar, _carregarSugestoes],
             _cancelar, _progresso, _status);
 
-        using var escopo = OperacaoUi.Iniciar(alvos, titulo, totalDeEtapas);
-        _operacao = escopo;
-        _log.Escrever($"{titulo}...");
-
         try
         {
-            var resultado = await Task.Run(() => operacao(escopo.Token), escopo.Token);
-
-            if (resultado.IsSuccess)
+            // Bloco explicito, não using-declaração: uma using-declaração só descartaria
+            // a OperacaoUi no fim do método, depois deste finally -- e o Dispose() dela
+            // restaura _extrair.Enabled (e os demais alvos) ao valor de ANTES da operação,
+            // desfazendo o que AtualizarJanela() está prestes a recalcular a partir da
+            // seleção atual. Fechando o bloco aqui, o Dispose roda primeiro: restaura o
+            // estado genérico, e só depois AtualizarJanela decide o estado de verdade.
+            using (var escopo = OperacaoUi.Iniciar(alvos, titulo, totalDeEtapas))
             {
-                aoConcluir(resultado.Value);
-                escopo.Concluir($"Concluído em {escopo.Decorrido}.");
-                return;
-            }
+                _operacao = escopo;
+                _log.Escrever($"{titulo}...");
 
-            var erro = resultado.Errors.OfType<ExtratorErro>().First();
-            escopo.Concluir("Falhou.");
-            _log.Escrever($"ERRO: {erro.Message}");
-            foreach (var (chave, valor) in erro.Metadata)
-            {
-                _log.EscreverSoNoArquivo($"  {chave}: {valor}");
+                try
+                {
+                    var resultado = await Task.Run(() => operacao(escopo.Token), escopo.Token);
+
+                    if (resultado.IsSuccess)
+                    {
+                        aoConcluir(resultado.Value);
+                        escopo.Concluir($"Concluído em {escopo.Decorrido}.");
+                    }
+                    else
+                    {
+                        var erro = resultado.Errors.OfType<ExtratorErro>().First();
+                        escopo.Concluir("Falhou.");
+                        _log.Escrever($"ERRO: {erro.Message}");
+                        foreach (var (chave, valor) in erro.Metadata)
+                        {
+                            _log.EscreverSoNoArquivo($"  {chave}: {valor}");
+                        }
+                        MessageBox.Show(this, erro.Message + Environment.NewLine + Environment.NewLine
+                            + $"Detalhe completo em {_log.CaminhoDeHoje}", "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    escopo.Concluir("Cancelado.");
+                    _log.Escrever("Cancelado pelo usuário.");
+                }
             }
-            MessageBox.Show(this, erro.Message + Environment.NewLine + Environment.NewLine
-                + $"Detalhe completo em {_log.CaminhoDeHoje}", "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-        catch (OperationCanceledException)
-        {
-            escopo.Concluir("Cancelado.");
-            _log.Escrever("Cancelado pelo usuário.");
         }
         finally
         {
@@ -241,7 +277,6 @@ internal sealed class MainForm : Form
             catalogo =>
             {
                 _catalogo = catalogo;
-                _sugestaoContada = null;
                 _config.MesesRetroativos = meses;
                 _config.Save();
                 _log.Escrever($"{catalogo.Count:N0} sugestões carregadas.");
@@ -249,11 +284,55 @@ internal sealed class MainForm : Form
             });
     }
 
-    private Task ContarSelecaoAsync(long sugestaoId, string textoDaJanela) =>
-        ExecutarAsync($"Contando itens da sugestão {sugestaoId}", null,
-            ct => _catalogoService.Contar(BuildConnectionString(), sugestaoId, ct),
-            contagem => _janelaInfo.Text =
-                $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s) · {textoDaJanela}");
+    /// <summary>
+    /// Contagem é conforto do operador, não pré-condição: não passa por ExecutarAsync,
+    /// não trava input nenhum, não usa OperacaoUi e nunca abre MessageBox. Tem o próprio
+    /// CancellationTokenSource, cancelado e substituído a cada seleção nova -- trocar de
+    /// linha rápido abandona a contagem anterior em vez de enfileirar as duas.
+    /// </summary>
+    private async Task ContarSelecaoAsync(long sugestaoId, string textoDaJanela)
+    {
+        _contagemCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _contagemCts = cts;
+        var token = cts.Token;
+
+        try
+        {
+            var connectionString = BuildConnectionString();
+            var resultado = await Task.Run(() => _catalogoService.Contar(connectionString, sugestaoId, token), token);
+
+            // await sobre Task.Run recupera aqui o SynchronizationContext da UI (o
+            // WindowsFormsSynchronizationContext que Application.Run instala) porque
+            // este método nunca usa ConfigureAwait(false) -- a continuação volta para a
+            // thread da UI sozinha, então escrever em _janelaInfo direto é seguro, sem
+            // o Marshal que OperacaoUi.Reportar precisa para o callback do Progress<T>
+            // (que nasce sem SynchronizationContext nenhum -- ver ExtrairAsync).
+            if (token.IsCancellationRequested) return;
+
+            if (resultado.IsSuccess)
+            {
+                var contagem = resultado.Value;
+                _janelaInfo.Text = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s) · {textoDaJanela}";
+            }
+            else
+            {
+                var erro = resultado.Errors.OfType<ExtratorErro>().First();
+                _janelaInfo.Text = $"Não foi possível contar os itens da sugestão {sugestaoId}: {erro.Message}";
+                _log.Escrever($"ERRO ao contar itens da sugestão {sugestaoId}: {erro.Message}");
+                foreach (var (chave, valor) in erro.Metadata)
+                {
+                    _log.EscreverSoNoArquivo($"  {chave}: {valor}");
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Seleção trocou antes da contagem terminar: abandono normal, não falha --
+            // sem log, sem MessageBox, sem tocar em _janelaInfo (quem escreveu por
+            // último foi a seleção atual, e é isso que deve continuar na tela).
+        }
+    }
 
     private void AplicarFiltro()
     {
@@ -304,7 +383,11 @@ internal sealed class MainForm : Form
         if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada)
         {
             _janela = null;
-            _janelaInfo.Text = string.Empty;
+            // Só limpa quando há linhas navegáveis mas nenhuma selecionada. Com grid
+            // vazio (0 linhas), AplicarFiltro já escreveu a única explicação que o
+            // operador vê -- período sem sugestão, ou filtro sem match -- e apagar
+            // aqui deixaria a tela com grade vazia e nenhum motivo.
+            if (_sugestoes.Rows.Count > 0) _janelaInfo.Text = string.Empty;
             _extrair.Enabled = false;
             return;
         }
@@ -315,7 +398,7 @@ internal sealed class MainForm : Form
             // DataBoundItem ficou apontando para uma seleção que não existe mais no
             // _catalogo atual (ex.: grid recarregado entre o clique e este handler).
             _janela = null;
-            _janelaInfo.Text = string.Empty;
+            if (_sugestoes.Rows.Count > 0) _janelaInfo.Text = string.Empty;
             _extrair.Enabled = false;
             return;
         }
@@ -329,14 +412,11 @@ internal sealed class MainForm : Form
             _janelaInfo.Text = textoDaJanela;
             _extrair.Enabled = true;
 
-            // Contagem é conforto do operador, não pré-condição: se falhar ou
-            // estourar o timeout, a extração continua permitida. Uma vez por
-            // seleção -- ver o comentário de _sugestaoContada.
-            if (_operacao is null && _sugestaoContada != catalogo.SugestaoId)
-            {
-                _sugestaoContada = catalogo.SugestaoId;
-                _ = ContarSelecaoAsync(catalogo.SugestaoId, textoDaJanela);
-            }
+            // Contagem é conforto do operador, não pré-condição: roda de novo a cada
+            // recálculo de janela, mesmo para a mesma seleção -- ContarSelecaoAsync é
+            // barata e cancela a anterior sozinha, e não passa por ExecutarAsync, então
+            // não há recursão (ExecutarAsync termina chamando AtualizarJanela; isto não).
+            _ = ContarSelecaoAsync(catalogo.SugestaoId, textoDaJanela);
         }
         else
         {
