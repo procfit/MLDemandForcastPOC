@@ -112,6 +112,16 @@ public sealed class ExtratorLogTests : IDisposable
         File.ReadAllText(log.CaminhoDeHoje).Should().NotContain("Secreta123");
     }
 
+    [Theory]
+    [InlineData("""Data Source=x;User ID=dev;Password="Secret;Value";Encrypt=True""", "Value")]
+    [InlineData("""Data Source=x;Password='Outra;Teste';Encrypt=True""", "Teste")]
+    public void Senha_entre_aspas_com_ponto_e_virgula_nao_deixa_fragmento(string connectionString, string fragmento)
+    {
+        // SqlConnectionStringBuilder coloca a senha entre aspas quando ela contém ';',
+        // e a redação que parava no primeiro ';' deixava o resto do segredo no log.
+        ExtratorLog.Redigir(connectionString).Should().NotContain(fragmento);
+    }
+
     [Fact]
     public void Pasta_inacessivel_nao_derruba_a_operacao()
     {
