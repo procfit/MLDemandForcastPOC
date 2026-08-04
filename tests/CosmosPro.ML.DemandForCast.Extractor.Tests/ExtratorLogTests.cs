@@ -123,6 +123,43 @@ public sealed class ExtratorLogTests : IDisposable
     }
 
     [Fact]
+    public void Senha_com_aspa_dupla_interna_escapada_nao_deixa_fragmento()
+    {
+        var texto = ExtratorLog.Redigir(
+            """Data Source=x;Password="Sec""re't";Encrypt=True""");
+
+        texto.Should().NotContain("re't");
+    }
+
+    [Fact]
+    public void Senha_com_aspa_simples_interna_escapada_nao_deixa_fragmento()
+    {
+        var texto = ExtratorLog.Redigir(
+            """Data Source=x;Password='Sec''re"t';Encrypt=True""");
+
+        texto.Should().NotContain("""re"t""");
+    }
+
+    [Fact]
+    public void Nao_redige_alem_da_senha_quando_ha_outra_palavra_chave_entre_aspas_depois()
+    {
+        var texto = ExtratorLog.Redigir("""Password="a";Other="b" """);
+
+        // O `(?:[^"]|"")*` guloso não pode atravessar `a";Other="b`: os dois `"` ali não
+        // são adjacentes (nem casam `""`, nem sobram como `[^"]`), então o motor
+        // retrocede para `"a"` e devolve `Other="b"` intacto.
+        texto.Should().Contain("""Other="b" """);
+    }
+
+    [Fact]
+    public void Aspa_nao_fechada_apos_password_ainda_e_redigida()
+    {
+        var texto = ExtratorLog.Redigir("""Data Source=x;Password="NuncaFecha;Encrypt=True""");
+
+        texto.Should().NotContain("NuncaFecha");
+    }
+
+    [Fact]
     public void Pasta_inacessivel_nao_derruba_a_operacao()
     {
         // Perder o log é ruim; perder a extração porque o log falhou é pior.

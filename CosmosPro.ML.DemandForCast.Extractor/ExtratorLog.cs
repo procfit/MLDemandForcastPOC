@@ -45,9 +45,12 @@ internal sealed partial class ExtratorLog(string pasta, Action<string>? tela = n
 
     public static string Redigir(string texto) => SenhaNaConnectionString().Replace(texto, "Password=***");
 
-    // SqlConnectionStringBuilder quotes password values when they contain ';', quotes, or whitespace.
-    // Quoted alternatives must come first; otherwise [^;]* consumes only to the first ';' and leaves
-    // the rest of the quoted secret in the log.
-    [GeneratedRegex("""\b(password|pwd)\s*=\s*(?:"[^"]*"|'[^']*'|[^;]*)""", RegexOptions.IgnoreCase)]
+    // SqlConnectionStringBuilder quotes password values when they contain ';', quotes, or whitespace,
+    // and escapes an internal quote of the same kind by doubling it (Password="Sec""re't" for the
+    // value Sec"re't). A branch that stops at the first quote — "[^"]*" — matches only up to that
+    // doubled pair's first character and leaves the rest of the secret in the log; each quoted branch
+    // must allow a doubled quote as part of the value: "(?:[^"]|"")*". Quoted alternatives must still
+    // come first, or the unquoted fallback [^;]* wins on a quoted value and undoes the fix.
+    [GeneratedRegex("""\b(password|pwd)\s*=\s*(?:"(?:[^"]|"")*"|'(?:[^']|'')*'|[^;]*)""", RegexOptions.IgnoreCase)]
     private static partial Regex SenhaNaConnectionString();
 }
