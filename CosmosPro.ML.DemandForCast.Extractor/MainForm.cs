@@ -44,7 +44,7 @@ internal sealed class MainForm : Form
     private readonly AppConfig _config = AppConfig.Load();
     private CancellationTokenSource? _cts;
 
-    private IReadOnlyList<SugestaoCatalogo> _catalogo = [];
+    private IReadOnlyList<SugestaoCatalogoCabecalho> _catalogo = [];
     private ExtractionWindow? _janela;
 
     public MainForm()
@@ -152,24 +152,31 @@ internal sealed class MainForm : Form
 
     private string BuildConnectionString() => ConnectionStringFactory.Build(CaptureConfig(), _senha.Text);
 
+    // Ponte temporária (Task 4): Task 6 mata o throw abaixo e wire de verdade o Result.
     private async Task TestarConexaoAsync()
     {
         await RunGuardedAsync("Testando conexão...", async () =>
         {
             var connectionString = BuildConnectionString();
-            var lojas = await Task.Run(() => ExtractionService.LoadLojas(connectionString, CancellationToken.None));
-            Log($"Conexão OK. {lojas.Count} lojas ativas encontradas.");
+            var servico = new CatalogoService(_config, new ExtratorLog(AppContext.BaseDirectory));
+            var resultado = await Task.Run(() => servico.Lojas(connectionString, CancellationToken.None));
+            if (resultado.IsFailed) throw new InvalidOperationException(resultado.Errors[0].Message);
+            Log($"Conexão OK. {resultado.Value.Count} lojas ativas encontradas.");
             _config.Save();
         });
     }
 
+    // Ponte temporária (Task 4): Task 6 mata o throw abaixo e wire de verdade o Result.
     private async Task CarregarSugestoesAsync()
     {
         await RunGuardedAsync("Carregando sugestões...", async () =>
         {
             var connectionString = BuildConnectionString();
             var dataInicio = DateOnly.FromDateTime(DateTime.Today).AddMonths(-MesesRetroativosCatalogo);
-            var catalogo = await Task.Run(() => ExtractionService.LoadCatalogoSugestoes(connectionString, dataInicio, CancellationToken.None));
+            var servico = new CatalogoService(_config, new ExtratorLog(AppContext.BaseDirectory));
+            var resultado = await Task.Run(() => servico.Carregar(connectionString, dataInicio, CancellationToken.None));
+            if (resultado.IsFailed) throw new InvalidOperationException(resultado.Errors[0].Message);
+            var catalogo = resultado.Value;
 
             _catalogo = catalogo;
             PopularGrid(catalogo);
@@ -177,10 +184,10 @@ internal sealed class MainForm : Form
         });
     }
 
-    private void PopularGrid(IReadOnlyList<SugestaoCatalogo> catalogo)
+    private void PopularGrid(IReadOnlyList<SugestaoCatalogoCabecalho> catalogo)
     {
         _sugestoes.DataSource = catalogo
-            .Select(c => new SugestaoLinha(c.SugestaoId, c.Descricao ?? "(sem descrição)", c.DataHora, MetodoTexto(c.TipoCalculo), c.QtdLinhas, c.QtdLojas))
+            .Select(c => new SugestaoLinha(c.SugestaoId, c.Descricao ?? "(sem descrição)", c.DataHora, MetodoTexto(c.TipoCalculo)))
             .ToList();
         ConfigurarColunas();
 
@@ -203,8 +210,6 @@ internal sealed class MainForm : Form
         Renomear(nameof(SugestaoLinha.Descricao), "Descrição");
         Renomear(nameof(SugestaoLinha.DataHora), "Data");
         Renomear(nameof(SugestaoLinha.Metodo), "Método");
-        Renomear(nameof(SugestaoLinha.QtdLinhas), "Linhas");
-        Renomear(nameof(SugestaoLinha.QtdLojas), "Lojas");
     }
 
     private static string MetodoTexto(byte tipoCalculo) => tipoCalculo switch
@@ -350,5 +355,5 @@ internal sealed class MainForm : Form
     private void Log(string message) =>
         _log.AppendText($"{DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture)}  {message}{Environment.NewLine}");
 
-    private sealed record SugestaoLinha(long SugestaoId, string Descricao, DateTime DataHora, string Metodo, int QtdLinhas, int QtdLojas);
+    private sealed record SugestaoLinha(long SugestaoId, string Descricao, DateTime DataHora, string Metodo);
 }

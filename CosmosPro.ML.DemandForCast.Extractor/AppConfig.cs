@@ -23,6 +23,27 @@ internal sealed class AppConfig
     /// </summary>
     public string ApplicationName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Limites de espera das leituras curtas. Ficam aqui porque rede de cliente
+    /// varia e trocar isto não pode exigir recompilação. A extração não tem limite
+    /// (ver ExtractionService): ela varre dezenas de milhões de linhas por natureza,
+    /// e um timeout ali só produziria falha no meio de um ZIP que estava indo bem.
+    /// </summary>
+    public int TimeoutConexaoSegundos { get; set; } = 15;
+    public int TimeoutConsultaSegundos { get; set; } = 30;
+    public int TimeoutContagemSegundos { get; set; } = 15;
+
+    /// <summary>Quantos meses para trás o catálogo procura sugestões.</summary>
+    public int MesesRetroativos { get; set; } = 12;
+
+    internal const int TimeoutConexaoPadrao = 15;
+    internal const int TimeoutConsultaPadrao = 30;
+    internal const int TimeoutContagemPadrao = 15;
+    internal const int MesesRetroativosPadrao = 12;
+
+    /// <summary>O arquivo é editado à mão; valor fora de faixa não pode virar espera infinita.</summary>
+    internal static int Segundos(int valor, int padrao) => valor is > 0 and <= 3600 ? valor : padrao;
+
     private static string FilePath
     {
         get
@@ -72,7 +93,13 @@ internal static class ConnectionStringFactory
             InitialCatalog = config.Banco,
             Encrypt = true,
             TrustServerCertificate = true,
-            ConnectTimeout = 15,
+            ConnectTimeout = AppConfig.Segundos(config.TimeoutConexaoSegundos, AppConfig.TimeoutConexaoPadrao),
+
+            // Reconecta conexão ociosa quebrada. Não salva comando em execução --
+            // o caminho até o PBS do cliente derruba consulta em voo, e isso é
+            // tratado por Retentativa.
+            ConnectRetryCount = 3,
+            ConnectRetryInterval = 10,
         };
 
         if (!string.IsNullOrWhiteSpace(config.ApplicationName))

@@ -88,10 +88,14 @@ internal static class ExtractorCli
         }
     }
 
+    // Ponte temporária (Task 4): Task 8 mata o throw abaixo e wire de verdade o Result.
     private static int Listar(CliOptions options, string connectionString, CancellationToken ct)
     {
         var hoje = DateOnly.FromDateTime(DateTime.Today);
-        var catalogo = ExtractionService.LoadCatalogoSugestoes(connectionString, hoje.AddMonths(-options.MesesRetroativos), ct);
+        var servico = new CatalogoService(new AppConfig(), new ExtratorLog(AppContext.BaseDirectory));
+        var resultado = servico.Carregar(connectionString, hoje.AddMonths(-options.MesesRetroativos), ct);
+        if (resultado.IsFailed) throw new InvalidOperationException(resultado.Errors[0].Message);
+        var catalogo = resultado.Value;
 
         if (catalogo.Count == 0)
         {
@@ -113,21 +117,18 @@ internal static class ExtractorCli
         return CliExitCode.Sucesso;
     }
 
+    // Ponte temporária (Task 4): Task 8 mata o throw abaixo e wire de verdade o Result,
+    // inclusive a distinção de SugestaoNaoEncontradaErro para CliExitCode.SugestaoNaoEncontrada.
     private static int Extrair(CliOptions options, string connectionString, CancellationToken ct)
     {
         var hoje = DateOnly.FromDateTime(DateTime.Today);
         // Busca direta pelo id, sem passar pelo catálogo: quem chega aqui já escolheu, e
         // varrer a lista inteira para achar uma sugestão custava minutos na instância
         // real. Por isso também não há mais limite de meses retroativos nesta rota.
-        var sugestao = ExtractionService.LoadSugestaoPorId(connectionString, options.SugestaoId, ct);
-
-        if (sugestao is null)
-        {
-            Console.Error.WriteLine(
-                $"Sugestão {options.SugestaoId} não existe no PBS, ou não tem método de cálculo declarado. " +
-                "Confira o id com --list.");
-            return CliExitCode.SugestaoNaoEncontrada;
-        }
+        var servico = new CatalogoService(new AppConfig(), new ExtratorLog(AppContext.BaseDirectory));
+        var resultado = servico.PorId(connectionString, options.SugestaoId, ct);
+        if (resultado.IsFailed) throw new InvalidOperationException(resultado.Errors[0].Message);
+        var sugestao = resultado.Value;
 
         var janela = ExtractionWindow.Derive(
             DateOnly.FromDateTime(sugestao.DataHora), sugestao.DiasCoberturaMax, hoje);
@@ -153,15 +154,15 @@ internal static class ExtractorCli
         };
 
         var service = new ExtractionService();
-        var resultado = service.Run(request, new ConsoleProgress(), ct);
+        var resultadoExtracao = service.Run(request, new ConsoleProgress(), ct);
 
         Console.WriteLine();
-        Console.WriteLine($"ZIP gerado: {resultado.ZipPath} ({resultado.ZipBytes / 1024d / 1024d:N1} MB)");
-        foreach (var (arquivo, linhas) in resultado.RowsByFile)
+        Console.WriteLine($"ZIP gerado: {resultadoExtracao.ZipPath} ({resultadoExtracao.ZipBytes / 1024d / 1024d:N1} MB)");
+        foreach (var (arquivo, linhas) in resultadoExtracao.RowsByFile)
         {
             Console.WriteLine($"  {arquivo,-28} {linhas,12:N0} linhas");
         }
-        foreach (var aviso in resultado.Warnings)
+        foreach (var aviso in resultadoExtracao.Warnings)
         {
             Console.WriteLine($"  AVISO: {aviso}");
         }
@@ -169,9 +170,9 @@ internal static class ExtractorCli
         return CliExitCode.Sucesso;
     }
 
-    private static void EscreverTabela(IReadOnlyList<SugestaoCatalogo> catalogo, DateOnly hoje)
+    private static void EscreverTabela(IReadOnlyList<SugestaoCatalogoCabecalho> catalogo, DateOnly hoje)
     {
-        Console.WriteLine($"{"Sugestão",10}  {"Data",16}  {"Método",20}  {"Cobert.",7}  {"Linhas",8}  {"Lojas",5}  {"Janela",23}  Descrição");
+        Console.WriteLine($"{"Sugestão",10}  {"Data",16}  {"Método",20}  {"Cobert.",7}  {"Janela",23}  Descrição");
 
         foreach (var c in catalogo)
         {
@@ -182,18 +183,18 @@ internal static class ExtractorCli
 
             Console.WriteLine(
                 $"{c.SugestaoId,10}  {c.DataHora,16:dd/MM/yyyy HH:mm}  {Truncar(Metodo(c.TipoCalculo), 20),20}  " +
-                $"{c.DiasCoberturaMax,7}  {c.QtdLinhas,8:N0}  {c.QtdLojas,5}  {textoJanela,23}  {Descricao(c)}");
+                $"{c.DiasCoberturaMax,7}  {textoJanela,23}  {Descricao(c)}");
         }
 
         Console.WriteLine();
         Console.WriteLine($"{catalogo.Count} sugestão(ões). 'inviável' = a cobertura ainda não terminou, então não há como julgar quem acertou.");
     }
 
-    private static void EscreverTsv(IReadOnlyList<SugestaoCatalogo> catalogo, DateOnly hoje)
+    private static void EscreverTsv(IReadOnlyList<SugestaoCatalogoCabecalho> catalogo, DateOnly hoje)
     {
         Console.WriteLine(string.Join('\t',
             "SugestaoId", "DataHora", "TipoCalculo", "Metodo", "DiasCobertura",
-            "QtdLinhas", "QtdLojas", "Viavel", "JanelaInicio", "JanelaFim", "Descricao"));
+            "Viavel", "JanelaInicio", "JanelaFim", "Descricao"));
 
         foreach (var c in catalogo)
         {
@@ -204,8 +205,6 @@ internal static class ExtractorCli
                 c.TipoCalculo.ToString(CultureInfo.InvariantCulture),
                 Metodo(c.TipoCalculo),
                 c.DiasCoberturaMax.ToString(CultureInfo.InvariantCulture),
-                c.QtdLinhas.ToString(CultureInfo.InvariantCulture),
-                c.QtdLojas.ToString(CultureInfo.InvariantCulture),
                 janela.Viavel ? "true" : "false",
                 janela.Inicio.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 janela.Fim.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
@@ -213,7 +212,7 @@ internal static class ExtractorCli
         }
     }
 
-    private static string Descricao(SugestaoCatalogo c) =>
+    private static string Descricao(SugestaoCatalogoCabecalho c) =>
         string.IsNullOrWhiteSpace(c.Descricao) ? "(sem descrição)" : c.Descricao.Trim();
 
     private static string Metodo(byte tipoCalculo) => tipoCalculo switch
