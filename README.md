@@ -218,6 +218,44 @@ dotnet user-secrets --project CosmosPro.ML.DemandForCast.AppHost set "Parameters
 No deploy, `DBGATE_LOGIN` e `DBGATE_PASSWORD` ficam no Environment do Dokploy — o `.env` gerado por
 `aspire publish` emite **todo** parâmetro vazio, inclusive os que têm default no código.
 
+### Como o extrator se comporta quando algo demora ou falha
+
+**O catálogo de sugestões carrega só os cabeçalhos.** Doze meses da Natus são 19.610
+sugestões e a consulta custa **0,27 s** no servidor. As colunas *Linhas* e *Lojas* não
+ficam mais no grid: elas são buscadas para a sugestão que o comprador **selecionar**
+(0,01 s) e aparecem ao lado da janela derivada. O motivo é medido, não estético — pedi-las
+em lote custava **30,25 s por lote de 500 ids**, porque `COUNT(DISTINCT FILIAL)` não é
+coberto pelo índice de `SUGESTAO_COMPRA` numa tabela de 124 milhões de linhas. Doze meses
+davam 40 lotes, cerca de **20 minutos**, e a conexão até o cliente caiu antes disso, aos
+2min09, com erro de transporte. Use o campo de filtro para achar a sugestão por id ou
+descrição; com 19 mil linhas, rolar a lista não é navegação.
+
+**Toda espera é cancelável e mostra o relógio.** Testar conexão, carregar sugestões,
+contar itens e extrair passam pelo mesmo escopo: os campos travam, o botão **Cancelar**
+responde, a barra anda (indeterminada quando não há total conhecido) e o rodapé mostra o
+tempo decorrido. Uma operação lenta se distingue de uma travada sem precisar do
+código-fonte.
+
+**A falha diz onde quebrou.** Os erros são tipados e carregam etapa, arquivo `.sql`,
+número do erro SQL e duração. Exemplo real, com a porta errada — o `1433` responde e o
+logon falha sem mencionar porta nenhuma:
+
+```
+Não foi possível conectar ao SQL Server. Confira servidor, porta e banco — uma porta
+errada costuma responder e falhar no logon, sem dizer que o problema é a porta.
+  etapa: catálogo de sugestões
+  query: catalogo_sugestoes.sql
+  sqlNumber: 4060
+```
+
+**O log da janela sobrevive à sessão.** A interface gráfica grava tudo o que aparece no
+painel em `extrator-log-AAAA-MM-DD.txt`, ao lado do `.exe`, e o botão **Copiar log** leva
+o painel para a área de transferência. A senha é redigida. No modo linha de comando não
+há arquivo: a saída vai para o console (dados em `stdout`, falhas e progresso em
+`stderr`), que o operador redireciona — o arquivo só recebe linha ali quando uma consulta
+é retentada. Ao reportar um problema, é esse conteúdo que interessa: ele leva a etapa, a
+query, o número do erro SQL e a duração.
+
 ### Publicar o extrator no MinIO
 
 O comprador baixa o extrator pela página da sessão (`/comparacoes/{id}`, estado

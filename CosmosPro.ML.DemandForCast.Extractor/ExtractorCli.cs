@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using FluentResults;
 
 namespace CosmosPro.ML.DemandForCast.Extractor;
@@ -163,9 +164,18 @@ internal static class ExtractorCli
         return CliExitCodeMap.De(erro);
     }
 
+    /// <summary>
+    /// O catálogo sai numa escrita só, montado em memória. O console do modo linha de
+    /// comando roda com <c>AutoFlush</c> ligado, para o progresso da extração aparecer
+    /// enquanto ela acontece — mas isso custa um flush por linha, e medido contra a
+    /// instância real são 3,5 ms cada: 19.610 sugestões de 12 meses levavam 66 s para
+    /// serem impressas, contra 0,27 s de consulta. A listagem é despejo em massa e não
+    /// ganha nada em aparecer linha a linha.
+    /// </summary>
     private static void EscreverTabela(IReadOnlyList<SugestaoCatalogoCabecalho> catalogo, DateOnly hoje)
     {
-        Console.WriteLine($"{"Sugestão",10}  {"Data",16}  {"Método",20}  {"Cobert.",7}  {"Janela",23}  Descrição");
+        var saida = new StringBuilder();
+        saida.AppendLine($"{"Sugestão",10}  {"Data",16}  {"Método",20}  {"Cobert.",7}  {"Janela",23}  Descrição");
 
         foreach (var c in catalogo)
         {
@@ -174,25 +184,28 @@ internal static class ExtractorCli
                 ? $"{janela.Inicio:dd/MM/yyyy}-{janela.Fim:dd/MM/yyyy}"
                 : "inviável";
 
-            Console.WriteLine(
+            saida.AppendLine(
                 $"{c.SugestaoId,10}  {c.DataHora,16:dd/MM/yyyy HH:mm}  {Truncar(Metodo(c.TipoCalculo), 20),20}  " +
                 $"{c.DiasCoberturaMax,7}  {textoJanela,23}  {Descricao(c)}");
         }
 
-        Console.WriteLine();
-        Console.WriteLine($"{catalogo.Count} sugestão(ões). 'inviável' = a cobertura ainda não terminou, então não há como julgar quem acertou.");
+        saida.AppendLine();
+        saida.AppendLine($"{catalogo.Count} sugestão(ões). 'inviável' = a cobertura ainda não terminou, então não há como julgar quem acertou.");
+        Console.Out.Write(saida.ToString());
     }
 
+    /// <summary>Uma escrita só, pelo mesmo motivo de <see cref="EscreverTabela"/>.</summary>
     private static void EscreverTsv(IReadOnlyList<SugestaoCatalogoCabecalho> catalogo, DateOnly hoje)
     {
-        Console.WriteLine(string.Join('\t',
+        var saida = new StringBuilder();
+        saida.AppendLine(string.Join('\t',
             "SugestaoId", "DataHora", "TipoCalculo", "Metodo", "DiasCobertura",
             "Viavel", "JanelaInicio", "JanelaFim", "Descricao"));
 
         foreach (var c in catalogo)
         {
             var janela = ExtractionWindow.Derive(DateOnly.FromDateTime(c.DataHora), c.DiasCoberturaMax, hoje);
-            Console.WriteLine(string.Join('\t',
+            saida.AppendLine(string.Join('\t',
                 c.SugestaoId.ToString(CultureInfo.InvariantCulture),
                 c.DataHora.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture),
                 c.TipoCalculo.ToString(CultureInfo.InvariantCulture),
@@ -203,6 +216,8 @@ internal static class ExtractorCli
                 janela.Fim.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 SemTabulacao(Descricao(c))));
         }
+
+        Console.Out.Write(saida.ToString());
     }
 
     private static string Descricao(SugestaoCatalogoCabecalho c) =>
