@@ -142,6 +142,32 @@ public class ComparacoesApiClient(HttpClient httpClient, IRedeContext redeContex
         var text = await resp.Content.ReadAsStringAsync(ct);
         return new UploadDadosResult(false, [$"Erro HTTP {(int)resp.StatusCode}: {text}"]);
     }
+
+    /// <summary>
+    /// Exclui a sessão. O 404 é tratado como sucesso: o efeito pretendido — "esta comparação
+    /// não deve mais existir" — já está satisfeito, e mostrar erro para quem clicou duas
+    /// vezes, ou para uma linha que o polling de 3s ainda não atualizou, seria ruído.
+    /// </summary>
+    public async Task<ExcluirSessaoResult> ExcluirAsync(Guid id, CancellationToken ct = default)
+    {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+
+        var resp = await httpClient.DeleteAsync($"/api/comparacoes/{id}?redeId={redeId}", ct);
+
+        if (resp.IsSuccessStatusCode || resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            return new ExcluirSessaoResult(true, null);
+        }
+
+        if (resp.StatusCode == HttpStatusCode.Conflict)
+        {
+            var err = await resp.Content.ReadFromJsonAsync<ValidationErrorResponse>(cancellationToken: ct);
+            return new ExcluirSessaoResult(false, err?.Errors ?? ["A comparação não pode ser excluída agora."]);
+        }
+
+        var texto = await resp.Content.ReadAsStringAsync(ct);
+        return new ExcluirSessaoResult(false, [$"Erro HTTP {(int)resp.StatusCode}: {texto}"]);
+    }
 }
 
 public sealed record CreateSessaoRequest(string? Nome);
@@ -162,6 +188,15 @@ public sealed record SessaoView(
 {
     /// <summary>Estados terminais: a sessão não muda mais sozinha, então nada de poll.</summary>
     public bool EstadoTerminal => Status is "Concluida" or "Inviavel" or "Falha";
+
+    /// <summary>
+    /// Espelha <c>ComparacaoSessao.PodeExcluir</c> — as fases em andamento têm job de outra
+    /// fila trabalhando pela sessão, e excluir ali deixaria o job terminando no vazio.
+    /// Mesmo par de espelhos de <see cref="EstadoTerminal"/>: aqui o status é string porque
+    /// atravessa JSON. A autoridade é o endpoint, que repete a condição no <c>WHERE</c> do
+    /// <c>DELETE</c> — botão desabilitado é cosmético.
+    /// </summary>
+    public bool PodeExcluir => Status is not ("ProcessandoDados" or "Treinando" or "Comparando");
 
     public static string EstadoLabel(string status) => status switch
     {
@@ -187,6 +222,8 @@ public sealed record SessaoView(
 }
 
 public sealed record UploadDadosResult(bool Success, IReadOnlyList<string>? Errors);
+
+public sealed record ExcluirSessaoResult(bool Success, IReadOnlyList<string>? Errors);
 
 // --- Espelho de SessaoResultado (Worker/Sessoes/SessaoResultadoMontador.cs) -----------
 //
