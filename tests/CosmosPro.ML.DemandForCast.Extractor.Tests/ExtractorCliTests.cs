@@ -14,8 +14,8 @@ public sealed class ExtractorCliTests
     [Fact]
     public void Mensagem_nomeia_a_etapa_quando_a_falha_veio_da_extracao()
     {
-        var erro = new ExtractionStepException(
-            "sugestoes_compra_itens.csv (sugestoes_compra_itens.sql)",
+        var erro = new EtapaFalhouException(
+            new Etapa("sugestoes_compra_itens.csv", "sugestoes_compra_itens.sql"),
             new InvalidCastException("Unable to cast object of type 'System.Decimal' to type 'System.Int32'."));
 
         var texto = ExtractorCli.MensagemDeFalha(erro, comStackTrace: false);
@@ -30,7 +30,7 @@ public sealed class ExtractorCliTests
     {
         // InvalidCastException é o que aponta para coluna sem CONVERT na query;
         // o tipo do embrulho não diria nada a quem lê o log.
-        var erro = new ExtractionStepException("produtos.csv (produtos.sql)", new InvalidCastException("x"));
+        var erro = new EtapaFalhouException(new Etapa("produtos.csv", "produtos.sql"), new InvalidCastException("x"));
 
         ExtractorCli.MensagemDeFalha(erro, comStackTrace: false)
             .Should().Contain(typeof(InvalidCastException).FullName!);

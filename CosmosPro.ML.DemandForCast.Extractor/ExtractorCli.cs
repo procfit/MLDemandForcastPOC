@@ -154,7 +154,10 @@ internal static class ExtractorCli
         };
 
         var service = new ExtractionService();
-        var resultadoExtracao = service.Run(request, new ConsoleProgress(), ct);
+        var resultadoDaExtracao = service.Run(request, new ConsoleProgress(), ct);
+        // Ponte temporária (Task 5): Task 7 mata o throw abaixo e wire de verdade o Result.
+        if (resultadoDaExtracao.IsFailed) throw new InvalidOperationException(resultadoDaExtracao.Errors[0].Message);
+        var resultadoExtracao = resultadoDaExtracao.Value;
 
         Console.WriteLine();
         Console.WriteLine($"ZIP gerado: {resultadoExtracao.ZipPath} ({resultadoExtracao.ZipBytes / 1024d / 1024d:N1} MB)");
@@ -230,7 +233,7 @@ internal static class ExtractorCli
     /// <summary>
     /// Mensagem de falha do modo linha de comando. A primeira linha já nomeia a
     /// etapa quando o erro veio de dentro da extração (ver
-    /// <see cref="ExtractionStepException"/>); depois vem o tipo do erro, que
+    /// <see cref="EtapaFalhouException"/>); depois vem o tipo do erro, que
     /// distingue um problema de dado de um problema de conversão, e por fim a
     /// pilha — só sob pedido, porque ela sepulta a mensagem que interessa.
     /// <para>

@@ -1,6 +1,7 @@
 using System.Data;
 using System.Globalization;
 using System.Reflection;
+using FluentResults;
 using Microsoft.Data.SqlClient;
 
 namespace CosmosPro.ML.DemandForCast.Extractor;
@@ -21,17 +22,20 @@ internal sealed class ExtractionService
     private const int CommandTimeoutSeconds = 0;
     private const int ProgressRowInterval = 25_000;
 
-    public ExtractionResult Run(ExtractionRequest request, IProgress<ExtractionProgress> progress, CancellationToken ct)
+    public Result<ExtractionResult> Run(ExtractionRequest request, IProgress<ExtractionProgress> progress, CancellationToken ct)
     {
-        Directory.CreateDirectory(request.OutputDirectory);
-        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture);
-        var zipPath = Path.Combine(request.OutputDirectory, $"extracao-pbs_{stamp}.zip");
+        var cronometro = System.Diagnostics.Stopwatch.StartNew();
+        var zipPath = string.Empty;
 
         var rows = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
 
         try
         {
+            Directory.CreateDirectory(request.OutputDirectory);
+            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture);
+            zipPath = Path.Combine(request.OutputDirectory, $"extracao-pbs_{stamp}.zip");
+
             using (var output = File.Create(zipPath))
             using (var zip = new CsvZipWriter(output))
             using (var connection = new SqlConnection(request.ConnectionString))
@@ -58,7 +62,7 @@ internal sealed class ExtractionService
                 progress.Report(new ExtractionProgress(StageContract.MercadoIqvia, 7, total, 0));
 
                 var cabecalho = CopySugestaoHeader(connection, zip, request.SugestaoId, 8, total, progress, ct)
-                    ?? throw new InvalidOperationException($"Sugestão {request.SugestaoId} não encontrada no PBS.");
+                    ?? throw new FalhaDeDominioException(new SugestaoNaoEncontradaErro(request.SugestaoId));
                 rows[StageContract.SugestoesCompra] = 1;
                 rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, 9, total, progress, ct);
 
@@ -73,12 +77,25 @@ internal sealed class ExtractionService
                     skusFabricados)));
             }
         }
-        catch
+        catch (FalhaDeDominioException falha)
         {
             // ZIP parcial é pior que nenhum: ele passa na validação de header do
             // import e entraria no Stage como se estivesse completo.
             TryDelete(zipPath);
-            throw;
+            return Result.Fail<ExtractionResult>(falha.Erro);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            TryDelete(zipPath);
+
+            // Cancelar um ExecuteReader síncrono chega aqui como SqlException, não
+            // como OperationCanceledException — sem esta guarda o cancelamento do
+            // usuário seria classificado como ConexaoPerdidaErro (transitório).
+            ct.ThrowIfCancellationRequested();
+
+            var etapa = ex is EtapaFalhouException etapaFalhou ? etapaFalhou.Etapa : new Etapa("extração", null);
+            return Result.Fail<ExtractionResult>(
+                ClassificadorDeFalha.Classificar(FalhaBruta.De(ex, conexaoJaAberta: true), etapa, cronometro.Elapsed));
         }
 
         if (rows[StageContract.Vendas] == 0)
@@ -90,7 +107,7 @@ internal sealed class ExtractionService
             warnings.Add("Nenhum estoque no período — o histórico de ESTOQUE_LANCAMENTOS costuma cobrir apenas os últimos meses.");
         }
 
-        return new ExtractionResult(zipPath, new FileInfo(zipPath).Length, rows, warnings);
+        return Result.Ok(new ExtractionResult(zipPath, new FileInfo(zipPath).Length, rows, warnings));
     }
 
     /// <summary>
@@ -101,7 +118,7 @@ internal sealed class ExtractionService
     private static (IReadOnlyList<int> LojaIds, IReadOnlySet<string> Skus) LoadEscopoSugestao(
         SqlConnection connection, long sugestaoId, CancellationToken ct)
     {
-        var (lojaIds, skus) = Step("escopo da sugestão (escopo_sugestao.sql)", () =>
+        var (lojaIds, skus) = Step(new Etapa("escopo da sugestão", "escopo_sugestao.sql"), () =>
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("escopo_sugestao.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
@@ -120,7 +137,7 @@ internal sealed class ExtractionService
 
         if (lojaIds.Count == 0)
         {
-            throw new InvalidOperationException($"Sugestão {sugestaoId} não tem itens no PBS — nada para extrair.");
+            throw new FalhaDeDominioException(new SugestaoSemItensErro(sugestaoId));
         }
 
         return ([.. lojaIds.Order()], skus);
@@ -131,7 +148,7 @@ internal sealed class ExtractionService
     /// sinal de que LojaId = FILIAL pode não valer nesta instalação do PBS.
     /// </summary>
     private static void AvisarDivergenciaEmpresaFilial(SqlConnection connection, long sugestaoId, List<string> warnings, CancellationToken ct) =>
-        Step("diagnóstico EMPRESA vs FILIAL (sugestoes_compra_diagnostico.sql)", () =>
+        Step(new Etapa("diagnóstico EMPRESA vs FILIAL", "sugestoes_compra_diagnostico.sql"), () =>
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra_diagnostico.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
@@ -152,7 +169,7 @@ internal sealed class ExtractionService
     private static SugestaoCabecalho? CopySugestaoHeader(
         SqlConnection connection, CsvZipWriter zip, long sugestaoId,
         int fileIndex, int fileCount, IProgress<ExtractionProgress> progress, CancellationToken ct) =>
-        Step($"{StageContract.SugestoesCompra} (sugestoes_compra.sql)", () =>
+        Step(new Etapa(StageContract.SugestoesCompra, "sugestoes_compra.sql"), () =>
         {
             var header = StageContract.Headers[StageContract.SugestoesCompra];
             using var entry = zip.CreateEntry(StageContract.SugestoesCompra, header);
@@ -190,7 +207,7 @@ internal sealed class ExtractionService
         SqlConnection connection, CsvZipWriter zip, IReadOnlySet<string> skusDaSugestao,
         int fileIndex, int fileCount, IProgress<ExtractionProgress> progress, CancellationToken ct,
         List<string> warnings) =>
-        Step($"{StageContract.Produtos} (produtos.sql)", () =>
+        Step(new Etapa(StageContract.Produtos, "produtos.sql"), () =>
         {
             var header = StageContract.Headers[StageContract.Produtos];
             using var entry = zip.CreateEntry(StageContract.Produtos, header);
@@ -304,7 +321,7 @@ internal sealed class ExtractionService
         IProgress<ExtractionProgress> progress,
         CancellationToken ct,
         Action<IDataRecord>? inspect) =>
-        Step($"{entryName} ({queryFile})", () =>
+        Step(new Etapa(entryName, queryFile), () =>
         {
             var header = StageContract.Headers[entryName];
             using var entry = zip.CreateEntry(entryName, header);
@@ -338,7 +355,7 @@ internal sealed class ExtractionService
         int fileCount,
         IProgress<ExtractionProgress> progress,
         CancellationToken ct) =>
-        Step($"{StageContract.EstoquesDiarios} (estoques_movimentos.sql)", () =>
+        Step(new Etapa(StageContract.EstoquesDiarios, "estoques_movimentos.sql"), () =>
         {
             var header = StageContract.Headers[StageContract.EstoquesDiarios];
             using var entry = zip.CreateEntry(StageContract.EstoquesDiarios, header);
@@ -432,19 +449,21 @@ internal sealed class ExtractionService
     /// linha de comando distingue os dois pelo código de saída.
     /// </para>
     /// </summary>
-    internal static T Step<T>(string etapa, Func<T> acao)
+    internal static T Step<T>(Etapa etapa, Func<T> acao)
     {
         try
         {
             return acao();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException and not ExtractionStepException)
+        catch (Exception ex) when (ex is not OperationCanceledException
+                                      and not EtapaFalhouException
+                                      and not FalhaDeDominioException)
         {
-            throw new ExtractionStepException(etapa, ex);
+            throw new EtapaFalhouException(etapa, ex);
         }
     }
 
-    internal static void Step(string etapa, Action acao) =>
+    internal static void Step(Etapa etapa, Action acao) =>
         Step<object?>(etapa, () =>
         {
             acao();
@@ -459,16 +478,16 @@ internal sealed class ExtractionService
     {
         if (reader.FieldCount != header.Count)
         {
-            throw new InvalidOperationException(
-                $"'{entryName}': query devolveu {reader.FieldCount} colunas, esperado {header.Count}.");
+            throw new FalhaDeDominioException(new ContratoErro(entryName,
+                $"query devolveu {reader.FieldCount} colunas, esperado {header.Count}"));
         }
 
         for (var i = 0; i < header.Count; i++)
         {
             if (!string.Equals(reader.GetName(i), header[i], StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException(
-                    $"'{entryName}': coluna {i + 1} é '{reader.GetName(i)}', esperado '{header[i]}'.");
+                throw new FalhaDeDominioException(new ContratoErro(entryName,
+                    $"coluna {i + 1} é '{reader.GetName(i)}', esperado '{header[i]}'"));
             }
         }
     }
@@ -487,14 +506,22 @@ internal sealed class ExtractionService
 }
 
 /// <summary>
-/// Falha ocorrida dentro de uma etapa nomeada da extração. O nome da etapa cita a
-/// query e o arquivo de destino, que é a informação que faltava quando a extração
-/// morria com uma mensagem de conversão de tipo sem dizer onde.
+/// Falha dentro de uma etapa nomeada. Nunca sai desta classe: o único catch de
+/// <see cref="ExtractionService.Run"/> a traduz em <c>Result.Fail</c>. Existe porque
+/// a extração tem uma dúzia de etapas encadeadas, e devolver Result de cada método
+/// privado espalharia verificação sem acrescentar informação.
 /// </summary>
-internal sealed class ExtractionStepException(string etapa, Exception causa)
+internal sealed class EtapaFalhouException(Etapa etapa, Exception causa)
     : InvalidOperationException($"Falha na etapa '{etapa}': {causa.Message}", causa)
 {
-    public string Etapa { get; } = etapa;
+    public Etapa Etapa { get; } = etapa;
+}
+
+/// <summary>Falha de domínio já classificada, a caminho do catch único do Run.</summary>
+internal sealed class FalhaDeDominioException(ExtratorErro erro)
+    : InvalidOperationException(erro.Message)
+{
+    public ExtratorErro Erro { get; } = erro;
 }
 
 internal static class SqlResources

@@ -293,7 +293,10 @@ internal sealed class MainForm : Form
         {
             var service = new ExtractionService();
             var token = _cts.Token;
-            var result = await Task.Run(() => service.Run(request, progress, token), token);
+            var resultado = await Task.Run(() => service.Run(request, progress, token), token);
+            // Ponte temporária (Task 5): Task 6 mata o throw abaixo e wire de verdade o Result.
+            if (resultado.IsFailed) throw new InvalidOperationException(resultado.Errors[0].Message);
+            var result = resultado.Value;
 
             Log($"ZIP gerado: {result.ZipPath} ({result.ZipBytes / 1024d / 1024d:N1} MB)");
             foreach (var (file, count) in result.RowsByFile) Log($"  {file}: {count:N0} linhas");
