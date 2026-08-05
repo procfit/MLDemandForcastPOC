@@ -55,7 +55,11 @@ internal sealed class MainForm : Form
     // Contagem por seleção: fetch próprio, fora de ExecutarAsync (ver ContarSelecaoAsync).
     // Um novo CTS por chamada -- trocar de linha rápido cancela a contagem anterior em
     // vez de enfileirar as duas.
-    private CancellationTokenSource? _contagemCts;
+    /// <summary>Sugestão cuja contagem já está em voo ou na tela. Ver <see cref="ContarSelecao"/>.</summary>
+    private long? _sugestaoContada;
+
+    /// <summary>Ordem das contagens: só a mais nova pode escrever na tela.</summary>
+    private long _contagemGeracao;
 
     public MainForm()
     {
@@ -296,60 +300,49 @@ internal sealed class MainForm : Form
 
     /// <summary>
     /// Contagem é conforto do operador, não pré-condição: não passa por ExecutarAsync,
-    /// não trava input nenhum, não usa OperacaoUi e nunca abre MessageBox. Tem o próprio
-    /// CancellationTokenSource, cancelado e substituído a cada seleção nova -- trocar de
-    /// linha rápido abandona a contagem anterior em vez de enfileirar as duas.
+    /// não trava input nenhum, não usa OperacaoUi e nunca abre MessageBox.
+    /// <para>
+    /// Uma contagem em voo <b>não</b> é cancelada quando outra começa. Cancelar um
+    /// <c>SqlCommand</c> em execução derruba a consulta com exceção, e para 10 ms de
+    /// trabalho isso não compra nada — só produz uma OperationCanceledException por
+    /// troca de seleção, que para o depurador de quem estiver desenvolvendo. O que
+    /// importa é não escrever resposta velha na tela, e para isso basta o número da
+    /// geração: quem volta fora de época se cala.
+    /// </para>
     /// </summary>
     private async Task ContarSelecaoAsync(long sugestaoId, string textoDaJanela)
     {
-        _contagemCts?.Cancel();
-        var cts = new CancellationTokenSource();
-        _contagemCts = cts;
-        var token = cts.Token;
+        var geracao = ++_contagemGeracao;
+        var connectionString = BuildConnectionString();
 
-        try
+        var resultado = await Task.Run(() => _catalogoService.Contar(connectionString, sugestaoId, CancellationToken.None));
+
+        // await sobre Task.Run recupera aqui o SynchronizationContext da UI (o
+        // WindowsFormsSynchronizationContext que Application.Run instala) porque
+        // este método nunca usa ConfigureAwait(false) -- a continuação volta para a
+        // thread da UI sozinha, então escrever em _janelaInfo direto é seguro, sem
+        // o Marshal que OperacaoUi.Reportar precisa para o callback do Progress<T>
+        // (que nasce sem SynchronizationContext nenhum -- ver ExtrairAsync).
+        if (geracao != _contagemGeracao) return;
+
+        if (resultado.IsSuccess)
         {
-            var connectionString = BuildConnectionString();
-            var resultado = await Task.Run(() => _catalogoService.Contar(connectionString, sugestaoId, token), token);
-
-            // await sobre Task.Run recupera aqui o SynchronizationContext da UI (o
-            // WindowsFormsSynchronizationContext que Application.Run instala) porque
-            // este método nunca usa ConfigureAwait(false) -- a continuação volta para a
-            // thread da UI sozinha, então escrever em _janelaInfo direto é seguro, sem
-            // o Marshal que OperacaoUi.Reportar precisa para o callback do Progress<T>
-            // (que nasce sem SynchronizationContext nenhum -- ver ExtrairAsync).
-            if (token.IsCancellationRequested) return;
-
-            if (resultado.IsSuccess)
-            {
-                var contagem = resultado.Value;
-                _janelaInfo.Text = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s) · {textoDaJanela}";
-            }
-            else
-            {
-                var erro = resultado.ErroOuFallback();
-                _janelaInfo.Text = $"Não foi possível contar os itens da sugestão {sugestaoId}: {erro.Message}";
-                _log.Escrever($"ERRO ao contar itens da sugestão {sugestaoId}: {erro.Message}");
-                foreach (var (chave, valor) in erro.Metadata)
-                {
-                    _log.EscreverSoNoArquivo($"  {chave}: {valor}");
-                }
-            }
+            var contagem = resultado.Value;
+            _janelaInfo.Text = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s) · {textoDaJanela}";
         }
-        catch (OperationCanceledException)
+        else
         {
-            // Seleção trocou antes da contagem terminar: abandono normal, não falha --
-            // sem log, sem MessageBox, sem tocar em _janelaInfo (quem escreveu por
-            // último foi a seleção atual, e é isso que deve continuar na tela).
-        }
-        finally
-        {
-            // Descarta o CTS desta chamada -- não o de _contagemCts, que já pode
-            // apontar para uma seleção mais nova. Cada chamada é dona só do seu
-            // próprio cts, e só o descarta depois do try/catch acima já ter
-            // terminado de usá-lo -- descartar por fora, na hora da troca, arriscaria
-            // derrubar um Task.Run que ainda estivesse em voo com este token.
-            cts.Dispose();
+            var erro = resultado.ErroOuFallback();
+            _janelaInfo.Text = $"Não foi possível contar os itens da sugestão {sugestaoId}: {erro.Message}";
+            _log.Escrever($"ERRO ao contar itens da sugestão {sugestaoId}: {erro.Message}");
+            foreach (var (chave, valor) in erro.Metadata)
+            {
+                _log.EscreverSoNoArquivo($"  {chave}: {valor}");
+            }
+
+            // A contagem que falhou não fica marcada como feita: selecionar a mesma
+            // linha de novo tem de poder tentar outra vez.
+            _sugestaoContada = null;
         }
     }
 
@@ -455,6 +448,12 @@ internal sealed class MainForm : Form
     {
         if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada) return;
         if (_janela is not { Viavel: true } janela) return;
+
+        // DataGridView levanta SelectionChanged várias vezes ao ligar o DataSource, e
+        // todas trazem a mesma linha. Sem esta guarda, um único "Carregar sugestões"
+        // dispara várias contagens idênticas contra o ERP do cliente.
+        if (_sugestaoContada == selecionada.SugestaoId) return;
+        _sugestaoContada = selecionada.SugestaoId;
 
         var textoDaJanela = TextoDaJanela(janela);
         _janelaInfo.Text = textoDaJanela;
