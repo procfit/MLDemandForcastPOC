@@ -283,12 +283,54 @@ jobs:
       # pelo callback `WithImagePushOptions` — sem ela a tag seria o default do Aspire.
       # `--non-interactive` garante que um parâmetro sem valor vire erro em vez de um
       # prompt que travaria o job até o timeout.
+      #
+      # Retenta **só** quando o GHCR estrangula. Um merge para `main` falhou aqui com
+      # `denied: permission_denied ... 403` e corpo dizendo "You have exceeded a secondary
+      # rate limit": build inteiro verde, testes verdes, e o run perdido no envio. Limite
+      # secundário cede ao **tempo**, não à insistência, daí a espera crescente.
+      #
+      # A retentativa é condicionada à assinatura do erro, e não aplicada a qualquer falha,
+      # de propósito: um erro de build real repetido três vezes custaria os minutos de espera
+      # somados e ainda esconderia a causa atrás de duas tentativas idênticas. `pipefail` é
+      # obrigatório aqui — sem ele o `tee` mascara o código de saída do `aspire` e o passo
+      # passa mesmo quebrado.
       - name: Construir e empurrar as imagens
-        timeout-minutes: 30
-        run: aspire do push --apphost CosmosPro.ML.DemandForCast.AppHost/CosmosPro.ML.DemandForCast.AppHost.csproj --non-interactive
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -o pipefail
+          espera=120
+          for tentativa in 1 2 3; do
+            if aspire do push \
+                 --apphost CosmosPro.ML.DemandForCast.AppHost/CosmosPro.ML.DemandForCast.AppHost.csproj \
+                 --non-interactive 2>&1 | tee push.log
+            then
+              exit 0
+            fi
 
-      # O Aspire empurra **uma** tag por imagem, então a móvel é Docker comum, em cima do que
-      # o passo anterior já construiu e empurrou.
+            if ! grep -qiE 'secondary rate limit|too many requests|toomanyrequests|\b429\b' push.log; then
+              echo "::error::O push falhou por um motivo que não é limite de taxa do registry — ver o log acima."
+              exit 1
+            fi
+
+            if [ "$tentativa" = 3 ]; then
+              echo "::error::O GHCR estrangulou o push nas três tentativas. Espere alguns minutos e reexecute só este job."
+              exit 1
+            fi
+
+            echo "::warning::GHCR estrangulou o push (tentativa $tentativa/3). Aguardando ${espera}s antes de tentar de novo."
+            sleep "$espera"
+            espera=$((espera * 2))
+          done
+
+      # O Aspire empurra **uma** tag por imagem, então a móvel é acrescentada aqui, em cima do
+      # que o passo anterior já publicou.
+      #
+      # `buildx imagetools create`, e não `docker tag` + `docker push`: a tag é criada a partir
+      # do manifest **que já está no registry**, sem reenviar nada. O par tag+push subia as
+      # camadas de novo (o registry deduplica, mas cada blob ainda custa requisição), o que
+      # dobrava o número de chamadas ao GHCR por execução — oito referências em vez de quatro,
+      # justamente o padrão de rajada que dispara o limite secundário que derrubou um run.
       #
       # A lista de serviços é derivada do daemon local, e não escrita à mão: hoje são quatro,
       # mas um quinto recurso acrescentado ao AppHost receberia a tag imutável pelo callback e
@@ -297,6 +339,7 @@ jobs:
       # anterior não produziu o que este passo pressupõe.
       - name: Adicionar a tag móvel às imagens
         timeout-minutes: 15
+        shell: bash
         run: |
           referencia="$REGISTRY_ENDPOINT/$REGISTRY_REPOSITORY/*:$IMAGE_TAG"
           imagens=$(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=$referencia")
@@ -306,8 +349,7 @@ jobs:
           fi
           for imagem in $imagens; do
             movel="${imagem%:*}:$IMAGE_TAG_MOVEL"
-            docker tag "$imagem" "$movel"
-            docker push "$movel"
+            docker buildx imagetools create --tag "$movel" "$imagem"
           done
 
       - name: Gerar docker-compose.yaml e .env
