@@ -1,7 +1,23 @@
 using System.Globalization;
-using Microsoft.Data.SqlClient;
+using System.Text;
+using FluentResults;
 
 namespace CosmosPro.ML.DemandForCast.Extractor;
+
+/// <summary>
+/// Erro tipado -> código de saída. Um mapa só: antes o form e o CLI interpretavam a
+/// exceção cada um por conta própria, e podiam discordar sobre o que aconteceu.
+/// </summary>
+internal static class CliExitCodeMap
+{
+    public static int De(ExtratorErro erro) => erro switch
+    {
+        ConexaoErro or ConexaoPerdidaErro or LogonTriggerErro => CliExitCode.FalhaDeConexao,
+        SugestaoNaoEncontradaErro or SugestaoSemItensErro => CliExitCode.SugestaoNaoEncontrada,
+        JanelaInviavelErro => CliExitCode.JanelaInviavel,
+        _ => CliExitCode.FalhaNaExtracao,
+    };
+}
 
 /// <summary>
 /// Modo linha de comando: listar as sugestões de compra do PBS e extrair uma
@@ -35,7 +51,11 @@ internal static class ExtractorCli
             return CliExitCode.ConfiguracaoAusente;
         }
 
-        var connectionString = ConnectionStringFactory.Build(ambiente.Config!, ambiente.Senha);
+        var config = ambiente.Config!;
+        var connectionString = ConnectionStringFactory.Build(config, ambiente.Senha);
+        var log = new ExtratorLog(
+            Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
+            tela: Console.Error.WriteLine);
 
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
@@ -45,93 +65,52 @@ internal static class ExtractorCli
             Console.Error.WriteLine("Cancelando...");
         };
 
-        if (AbrirConexao(connectionString, options.StackTrace) is { } erroDeConexao)
-        {
-            Console.Error.WriteLine(erroDeConexao);
-            return CliExitCode.FalhaDeConexao;
-        }
-
         try
         {
             return options.Command == CliCommand.List
-                ? Listar(options, connectionString, cts.Token)
-                : Extrair(options, connectionString, cts.Token);
+                ? Listar(options, config, connectionString, log, cts.Token)
+                : Extrair(options, config, connectionString, log, cts.Token);
         }
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Cancelado pelo operador — o ZIP parcial foi descartado.");
             return CliExitCode.Cancelado;
         }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine(MensagemDeFalha(ex, options.StackTrace));
-            return CliExitCode.FalhaNaExtracao;
-        }
     }
 
-    /// <summary>
-    /// Uma conexão de teste antes do trabalho real é o que permite distinguir
-    /// "não consegui falar com o SQL Server" de "a extração quebrou" no código de
-    /// saída — depois de aberta, um <c>SqlException</c> pode ser qualquer coisa.
-    /// </summary>
-    private static string? AbrirConexao(string connectionString, bool comStackTrace)
-    {
-        try
-        {
-            using var connection = new SqlConnection(connectionString);
-            connection.Open();
-            return null;
-        }
-        catch (Exception ex) when (ex is SqlException or InvalidOperationException or ArgumentException)
-        {
-            return MensagemDeFalha(ex, comStackTrace);
-        }
-    }
-
-    private static int Listar(CliOptions options, string connectionString, CancellationToken ct)
+    private static int Listar(CliOptions options, AppConfig config, string connectionString, ExtratorLog log, CancellationToken ct)
     {
         var hoje = DateOnly.FromDateTime(DateTime.Today);
-        var catalogo = ExtractionService.LoadCatalogoSugestoes(connectionString, hoje.AddMonths(-options.MesesRetroativos), ct);
+        var resultado = new CatalogoService(config, log)
+            .Carregar(connectionString, hoje.AddMonths(-options.MesesRetroativos), ct);
 
+        if (resultado.IsFailed) return Falhar(resultado, options.StackTrace);
+
+        var catalogo = resultado.Value;
         if (catalogo.Count == 0)
         {
             Console.Error.WriteLine(
-                $"Nenhuma sugestão de compra nos últimos {options.MesesRetroativos} meses. " +
-                "Aumente --months-back para procurar mais para trás.");
+                $"Nenhuma sugestão de compra nos últimos {options.MesesRetroativos} meses. "
+                + "Aumente --months-back para procurar mais para trás.");
             return CliExitCode.Sucesso;
         }
 
-        if (options.Tsv)
-        {
-            EscreverTsv(catalogo, hoje);
-        }
-        else
-        {
-            EscreverTabela(catalogo, hoje);
-        }
+        if (options.Tsv) EscreverTsv(catalogo, hoje);
+        else EscreverTabela(catalogo, hoje);
 
         return CliExitCode.Sucesso;
     }
 
-    private static int Extrair(CliOptions options, string connectionString, CancellationToken ct)
+    private static int Extrair(CliOptions options, AppConfig config, string connectionString, ExtratorLog log, CancellationToken ct)
     {
         var hoje = DateOnly.FromDateTime(DateTime.Today);
-        // Busca direta pelo id, sem passar pelo catálogo: quem chega aqui já escolheu, e
-        // varrer a lista inteira para achar uma sugestão custava minutos na instância
-        // real. Por isso também não há mais limite de meses retroativos nesta rota.
-        var sugestao = ExtractionService.LoadSugestaoPorId(connectionString, options.SugestaoId, ct);
+        var servico = new CatalogoService(config, log);
 
-        if (sugestao is null)
-        {
-            Console.Error.WriteLine(
-                $"Sugestão {options.SugestaoId} não existe no PBS, ou não tem método de cálculo declarado. " +
-                "Confira o id com --list.");
-            return CliExitCode.SugestaoNaoEncontrada;
-        }
+        var cabecalho = servico.PorId(connectionString, options.SugestaoId, ct);
+        if (cabecalho.IsFailed) return Falhar(cabecalho, options.StackTrace);
 
-        var janela = ExtractionWindow.Derive(
-            DateOnly.FromDateTime(sugestao.DataHora), sugestao.DiasCoberturaMax, hoje);
-
+        var sugestao = cabecalho.Value;
+        var janela = ExtractionWindow.Derive(DateOnly.FromDateTime(sugestao.DataHora), sugestao.DiasCoberturaMax, hoje);
         if (!janela.Viavel)
         {
             Console.Error.WriteLine(janela.MotivoInviabilidade);
@@ -152,26 +131,51 @@ internal static class ExtractorCli
             OutputDirectory = options.OutputDirectory,
         };
 
-        var service = new ExtractionService();
-        var resultado = service.Run(request, new ConsoleProgress(), ct);
+        var extracao = new ExtractionService().Run(request, new ConsoleProgress(), ct);
+        if (extracao.IsFailed) return Falhar(extracao, options.StackTrace);
 
+        var resultado = extracao.Value;
         Console.WriteLine();
         Console.WriteLine($"ZIP gerado: {resultado.ZipPath} ({resultado.ZipBytes / 1024d / 1024d:N1} MB)");
-        foreach (var (arquivo, linhas) in resultado.RowsByFile)
-        {
-            Console.WriteLine($"  {arquivo,-28} {linhas,12:N0} linhas");
-        }
-        foreach (var aviso in resultado.Warnings)
-        {
-            Console.WriteLine($"  AVISO: {aviso}");
-        }
+        foreach (var (arquivo, linhas) in resultado.RowsByFile) Console.WriteLine($"  {arquivo,-28} {linhas,12:N0} linhas");
+        foreach (var aviso in resultado.Warnings) Console.WriteLine($"  AVISO: {aviso}");
 
         return CliExitCode.Sucesso;
     }
 
-    private static void EscreverTabela(IReadOnlyList<SugestaoCatalogo> catalogo, DateOnly hoje)
+    /// <summary>
+    /// A primeira linha é a mensagem de negócio; depois vem a metadata da falha
+    /// (etapa, query, número SQL, duração), que é o que se cola num chamado. A pilha
+    /// só sob pedido, porque ela sepulta o que interessa.
+    /// </summary>
+    internal static int Falhar<T>(Result<T> resultado, bool comStackTrace)
     {
-        Console.WriteLine($"{"Sugestão",10}  {"Data",16}  {"Método",20}  {"Cobert.",7}  {"Linhas",8}  {"Lojas",5}  {"Janela",23}  Descrição");
+        var erro = resultado.ErroOuFallback();
+        Console.Error.WriteLine(erro.Message);
+
+        foreach (var (chave, valor) in erro.Metadata)
+        {
+            if (chave == ExtratorErro.ChaveDetalhe && !comStackTrace) continue;
+            Console.Error.WriteLine($"  {chave}: {valor}");
+        }
+
+        if (!comStackTrace) Console.Error.WriteLine($"Rode de novo com {CliParser.FlagStackTrace} para ver a pilha de chamadas.");
+
+        return CliExitCodeMap.De(erro);
+    }
+
+    /// <summary>
+    /// O catálogo sai numa escrita só, montado em memória. O console do modo linha de
+    /// comando roda com <c>AutoFlush</c> ligado, para o progresso da extração aparecer
+    /// enquanto ela acontece — mas isso custa um flush por linha, e medido contra a
+    /// instância real são 3,5 ms cada: 19.610 sugestões de 12 meses levavam 66 s para
+    /// serem impressas, contra 0,27 s de consulta. A listagem é despejo em massa e não
+    /// ganha nada em aparecer linha a linha.
+    /// </summary>
+    private static void EscreverTabela(IReadOnlyList<SugestaoCatalogoCabecalho> catalogo, DateOnly hoje)
+    {
+        var saida = new StringBuilder();
+        saida.AppendLine($"{"Sugestão",10}  {"Data",16}  {"Método",20}  {"Cobert.",7}  {"Janela",23}  Descrição");
 
         foreach (var c in catalogo)
         {
@@ -180,40 +184,43 @@ internal static class ExtractorCli
                 ? $"{janela.Inicio:dd/MM/yyyy}-{janela.Fim:dd/MM/yyyy}"
                 : "inviável";
 
-            Console.WriteLine(
+            saida.AppendLine(
                 $"{c.SugestaoId,10}  {c.DataHora,16:dd/MM/yyyy HH:mm}  {Truncar(Metodo(c.TipoCalculo), 20),20}  " +
-                $"{c.DiasCoberturaMax,7}  {c.QtdLinhas,8:N0}  {c.QtdLojas,5}  {textoJanela,23}  {Descricao(c)}");
+                $"{c.DiasCoberturaMax,7}  {textoJanela,23}  {Descricao(c)}");
         }
 
-        Console.WriteLine();
-        Console.WriteLine($"{catalogo.Count} sugestão(ões). 'inviável' = a cobertura ainda não terminou, então não há como julgar quem acertou.");
+        saida.AppendLine();
+        saida.AppendLine($"{catalogo.Count} sugestão(ões). 'inviável' = a cobertura ainda não terminou, então não há como julgar quem acertou.");
+        Console.Out.Write(saida.ToString());
     }
 
-    private static void EscreverTsv(IReadOnlyList<SugestaoCatalogo> catalogo, DateOnly hoje)
+    /// <summary>Uma escrita só, pelo mesmo motivo de <see cref="EscreverTabela"/>.</summary>
+    private static void EscreverTsv(IReadOnlyList<SugestaoCatalogoCabecalho> catalogo, DateOnly hoje)
     {
-        Console.WriteLine(string.Join('\t',
+        var saida = new StringBuilder();
+        saida.AppendLine(string.Join('\t',
             "SugestaoId", "DataHora", "TipoCalculo", "Metodo", "DiasCobertura",
-            "QtdLinhas", "QtdLojas", "Viavel", "JanelaInicio", "JanelaFim", "Descricao"));
+            "Viavel", "JanelaInicio", "JanelaFim", "Descricao"));
 
         foreach (var c in catalogo)
         {
             var janela = ExtractionWindow.Derive(DateOnly.FromDateTime(c.DataHora), c.DiasCoberturaMax, hoje);
-            Console.WriteLine(string.Join('\t',
+            saida.AppendLine(string.Join('\t',
                 c.SugestaoId.ToString(CultureInfo.InvariantCulture),
                 c.DataHora.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture),
                 c.TipoCalculo.ToString(CultureInfo.InvariantCulture),
                 Metodo(c.TipoCalculo),
                 c.DiasCoberturaMax.ToString(CultureInfo.InvariantCulture),
-                c.QtdLinhas.ToString(CultureInfo.InvariantCulture),
-                c.QtdLojas.ToString(CultureInfo.InvariantCulture),
                 janela.Viavel ? "true" : "false",
                 janela.Inicio.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 janela.Fim.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 SemTabulacao(Descricao(c))));
         }
+
+        Console.Out.Write(saida.ToString());
     }
 
-    private static string Descricao(SugestaoCatalogo c) =>
+    private static string Descricao(SugestaoCatalogoCabecalho c) =>
         string.IsNullOrWhiteSpace(c.Descricao) ? "(sem descrição)" : c.Descricao.Trim();
 
     private static string Metodo(byte tipoCalculo) => tipoCalculo switch
@@ -227,39 +234,6 @@ internal static class ExtractorCli
 
     private static string Truncar(string texto, int limite) =>
         texto.Length <= limite ? texto : texto[..(limite - 1)] + "…";
-
-    /// <summary>
-    /// Mensagem de falha do modo linha de comando. A primeira linha já nomeia a
-    /// etapa quando o erro veio de dentro da extração (ver
-    /// <see cref="ExtractionStepException"/>); depois vem o tipo do erro, que
-    /// distingue um problema de dado de um problema de conversão, e por fim a
-    /// pilha — só sob pedido, porque ela sepulta a mensagem que interessa.
-    /// <para>
-    /// Erro 17892 = logon trigger recusou a sessão; no PBS costuma ser filtro por
-    /// APP_NAME(), e a mensagem crua do SQL Server não diz isso.
-    /// </para>
-    /// </summary>
-    internal static string MensagemDeFalha(Exception ex, bool comStackTrace)
-    {
-        var linhas = new List<string> { ex.Message };
-
-        if (ex is SqlException { Number: 17892 })
-        {
-            linhas.Add(
-                "O servidor tem um logon trigger que recusou a conexão — normalmente por causa do "
-                + "nome da aplicação. Tente de novo com --app-name <nome>.");
-        }
-
-        // O tipo da causa, não o do embrulho: InvalidCastException aponta para
-        // coluna sem CONVERT na query, e é isso que o operador precisa reportar.
-        linhas.Add($"Tipo do erro: {(ex.InnerException ?? ex).GetType().FullName}");
-
-        linhas.Add(comStackTrace
-            ? ex.ToString()
-            : $"Rode de novo com {CliParser.FlagStackTrace} para ver a pilha de chamadas.");
-
-        return string.Join(Environment.NewLine, linhas);
-    }
 
     /// <summary>
     /// Escreve na thread que reportou, e não via <see cref="Progress{T}"/>: sem

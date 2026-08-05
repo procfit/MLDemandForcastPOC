@@ -69,6 +69,39 @@ public sealed class ComparacaoSessao
         Permitidas.TryGetValue(de, out var destinos) && destinos.Contains(para);
 
     /// <summary>
+    /// Fases em andamento: a sessão tem job de outra fila trabalhando por ela agora.
+    /// Excluir aqui deixaria o job avançando sozinho e, na volta, um worker tentando
+    /// escrever o resultado de uma sessão que não existe mais.
+    /// </summary>
+    private static readonly SessaoStatus[] EmAndamento =
+        [SessaoStatus.ProcessandoDados, SessaoStatus.Treinando, SessaoStatus.Comparando];
+
+    /// <summary>
+    /// Se a sessão pode ser excluída. Vale fora das fases em andamento — inclusive em
+    /// <see cref="SessaoStatus.AguardandoDados"/>, que é o caso de quem criou por engano e
+    /// nunca enviou nada.
+    ///
+    /// <para>
+    /// <b>Não há escape por "sessão abandonada"</b>, e isso é deliberado. Seria tentador
+    /// permitir excluir uma fase parada há mais de <see cref="LimiteDeFaseSemProgresso"/>,
+    /// mas isso criaria um segundo conceito de morte ao lado do que já existe: passado
+    /// aquele limite, quem observa a fase encerra a sessão com um motivo, ela cai em
+    /// <see cref="SessaoStatus.Falha"/> e fica excluível por esta mesma regra. Um cenário em
+    /// que isso nunca acontece exige o Worker permanentemente morto — e aí nada funciona,
+    /// não é a exclusão que está travada.
+    /// </para>
+    ///
+    /// <para>
+    /// Predicado sobre o status e nada mais, sem relógio: é o que permite à tela decidir se
+    /// oferece o botão usando o mesmo critério do servidor, sem precisar do horário do
+    /// servidor nem confiar no do navegador. A autoridade continua sendo o endpoint, que
+    /// repete a condição no <c>WHERE</c> do próprio <c>DELETE</c> — desabilitar botão é
+    /// cosmético, como no menu.
+    /// </para>
+    /// </summary>
+    public static bool PodeExcluir(SessaoStatus status) => !EmAndamento.Contains(status);
+
+    /// <summary>
     /// Tempo que uma fase pode passar sem sinal de progresso antes de ser tratada como
     /// abandonada.
     ///

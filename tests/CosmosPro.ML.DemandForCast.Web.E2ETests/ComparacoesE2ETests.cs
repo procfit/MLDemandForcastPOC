@@ -1,3 +1,5 @@
+using Microsoft.Playwright;
+
 namespace CosmosPro.ML.DemandForCast.Web.E2ETests;
 
 [Collection(AspireCollection.Name)]
@@ -57,5 +59,50 @@ public sealed class ComparacoesE2ETests(AppHostFixture fixture)
         var corpo = await page.TextContentAsync("body") ?? "";
         corpo.Should().Contain("Baixar extrator",
             $"AguardandoDados é o único estado em que baixar o extrator ainda faz sentido. Conteudo real: <<<{corpo.Trim()}>>>");
+    }
+
+    /// <summary>
+    /// Exclusão pela listagem, do clique ao desaparecimento da linha. Cobre o que o teste de
+    /// integração não alcança: o diálogo de confirmação existe, e o clique no ícone de lixeira
+    /// **não** navega para a sessão — o grid tem `RowSelect`, e sem `stopPropagation` o mesmo
+    /// gesto abriria a página e deixaria o diálogo por trás dela.
+    /// </summary>
+    [Fact]
+    public async Task Excluir_pela_listagem_pede_confirmacao_e_remove_a_linha()
+    {
+        var page = await fixture.NovaPaginaLogadaAsync();
+        var baseUrl = fixture.WebfrontendUrl.TrimEnd('/');
+
+        await page.GotoAsync(baseUrl + "/");
+        await page.GetByText("Nova comparação").First.ClickAsync();
+        await page.WaitForURLAsync(u => u.Contains("/comparacoes/"), new() { Timeout = 30_000 });
+
+        // A linha alvo é a **primeira** do grid, não uma casada por id: a listagem ordena por
+        // CriadoEm desc, então a sessão que acabou de ser criada está no topo. Identificar por
+        // texto não funciona aqui — o grid mostra `id[..8]` quando a sessão não tem nome, e os
+        // 8 primeiros hex de um UUIDv7 são os bits altos do timestamp em ms: sessões criadas
+        // no mesmo minuto compartilham o prefixo, e o locator casava com as três que os testes
+        // desta classe criam em sequência (passava sozinho, falhava na suíte).
+        await page.GotoAsync(baseUrl + "/");
+        var primeiraLinha = page.Locator("tbody tr").First;
+        await primeiraLinha.WaitForAsync(new() { Timeout = 15_000 });
+
+        await primeiraLinha.Locator("[data-test=excluir-comparacao]").ClickAsync();
+
+        // Confirmação obrigatória: sem clicar em "Excluir" no diálogo, nada acontece.
+        var confirmar = page.GetByRole(AriaRole.Button, new() { Name = "Excluir", Exact = true });
+        await confirmar.WaitForAsync(new() { Timeout = 15_000 });
+
+        page.Url.Should().EndWith("/",
+            "o clique na lixeira não pode navegar para a sessão — o RowSelect do grid tem de ser barrado");
+
+        await confirmar.ClickAsync();
+
+        // O desfecho observável do fluxo é a confirmação de sucesso: ela só aparece quando o
+        // DELETE volta 2xx. Que a linha some da tabela e que o detalhe por item vá junto está
+        // provado em ComparacoesIntegrationTests, contra o banco — aqui o que se testa é o
+        // caminho da UI até o endpoint.
+        await Assertions.Expect(page.GetByText("Comparação excluída"))
+                        .ToBeVisibleAsync(new() { Timeout = 20_000 });
     }
 }

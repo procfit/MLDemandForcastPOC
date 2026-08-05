@@ -3,6 +3,7 @@
 @rendermode InteractiveServer
 @inject ComparacoesApiClient ComparacoesApi
 @inject NotificationService Notifications
+@inject DialogService Dialogs
 @inject NavigationManager Nav
 @implements IAsyncDisposable
 
@@ -81,8 +82,18 @@
                     <RadzenDataGridColumn TItem="SessaoView" Property="CriadoEm" Title="Criada em" Width="150px">
                         <Template Context="s"><small>@s.CriadoEm.ToLocalTime().ToString("dd/MM HH:mm")</small></Template>
                     </RadzenDataGridColumn>
-                    <RadzenDataGridColumn TItem="SessaoView" Title="" Width="56px" Sortable="false">
+                    @* Sortable=false e largura fixa: coluna de ação, não de dado. O clique
+                       para excluir precisa de StopPropagation, senão o RowSelect do grid
+                       navega para a sessão no mesmo gesto e o diálogo abre por trás. *@
+                    <RadzenDataGridColumn TItem="SessaoView" Title="" Width="104px" Sortable="false">
                         <Template Context="s">
+                            <RadzenButton Icon="delete_outline" Variant="Variant.Text"
+                                          ButtonStyle="ButtonStyle.Danger"
+                                          Disabled="@(!s.PodeExcluir || _excluindo == s.Id)"
+                                          data-test="excluir-comparacao"
+                                          title="@(s.PodeExcluir ? "Excluir esta comparação" : "Não é possível excluir enquanto o processamento corre")"
+                                          Click="@(args => ExcluirAsync(s))"
+                                          @onclick:stopPropagation="true" />
                             <RadzenButton Icon="chevron_right" Variant="Variant.Text"
                                           Click="@(() => Nav.NavigateTo($"/comparacoes/{s.Id}"))" />
                         </Template>
@@ -97,6 +108,7 @@
     private List<SessaoView> _sessoes = [];
     private bool _loading;
     private bool _criando;
+    private Guid? _excluindo;
     private string? _erroCarregamento;
     private Timer? _timer;
     private readonly CancellationTokenSource _cts = new();
@@ -169,6 +181,75 @@
         finally
         {
             _criando = false;
+        }
+    }
+
+    /// <summary>
+    /// Confirmação antes de excluir, e não desfazer depois: a exclusão leva com ela o detalhe
+    /// por item, que é materializado e não dá para recalcular — cada import substitui o Stage
+    /// da rede inteiro, então a sugestão e as vendas que o resultado descreve podem já não
+    /// existir mais. Não há como reconstruir uma comparação apagada.
+    /// </summary>
+    private async Task ExcluirAsync(SessaoView sessao)
+    {
+        var nome = sessao.Nome ?? $"Comparação {sessao.Id.ToString()[..8]}…";
+
+        var confirmado = await Dialogs.Confirm(
+            $"Excluir \"{nome}\"? O resultado e o detalhe por item são apagados e não podem ser recuperados.",
+            "Excluir comparação",
+            new ConfirmOptions { OkButtonText = "Excluir", CancelButtonText = "Cancelar" });
+
+        if (confirmado != true) return;
+
+        _excluindo = sessao.Id;
+        StateHasChanged();
+        try
+        {
+            var resultado = await ComparacoesApi.ExcluirAsync(sessao.Id, _cts.Token);
+
+            if (resultado.Success)
+            {
+                // Remove da lista aqui em vez de esperar o polling de 3s: o comprador acabou
+                // de confirmar a exclusão e a linha continuar na tela parece falha.
+                _sessoes.RemoveAll(s => s.Id == sessao.Id);
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Comparação excluída",
+                    Detail = nome,
+                    Duration = 4000,
+                });
+            }
+            else
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Error,
+                    Summary = "Não foi possível excluir",
+                    Detail = string.Join(" · ", resultado.Errors ?? []),
+                    Duration = 8000,
+                });
+                // A recusa quase sempre significa que a fase avançou desde o último refresh:
+                // recarregar deixa o estado da tela igual ao do servidor em vez de manter um
+                // botão habilitado que o servidor recusa.
+                await RefreshAsync();
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Erro inesperado ao excluir",
+                Detail = ex.Message,
+                Duration = 8000,
+            });
+        }
+        finally
+        {
+            _excluindo = null;
+            StateHasChanged();
         }
     }
 

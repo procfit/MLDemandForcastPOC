@@ -52,4 +52,44 @@ public sealed class SessaoEstadoTests
                 .BeFalse($"{estado} não deveria transicionar para si mesmo — a tabela atual não prevê nenhuma auto-transição");
         }
     }
+
+    [Theory]
+    [InlineData(SessaoStatus.AguardandoDados)]
+    [InlineData(SessaoStatus.Concluida)]
+    [InlineData(SessaoStatus.Inviavel)]
+    [InlineData(SessaoStatus.Falha)]
+    public void Fora_das_fases_em_andamento_a_sessao_pode_ser_excluida(SessaoStatus status)
+        => ComparacaoSessao.PodeExcluir(status).Should().BeTrue();
+
+    /// <summary>
+    /// A recusa protege o job, não o dado: nessas três fases existe uma carga, um treino ou
+    /// uma comparação trabalhando pela sessão, e apagá-la deixaria o worker terminando no
+    /// vazio — ou materializando resultado para uma sessão que não existe mais.
+    /// </summary>
+    [Theory]
+    [InlineData(SessaoStatus.ProcessandoDados)]
+    [InlineData(SessaoStatus.Treinando)]
+    [InlineData(SessaoStatus.Comparando)]
+    public void Fase_em_andamento_recusa_exclusao(SessaoStatus status)
+        => ComparacaoSessao.PodeExcluir(status).Should().BeFalse();
+
+    /// <summary>
+    /// Toda fase em andamento tem saída para um estado excluível — é isso que garante que
+    /// nenhuma sessão fique impossível de excluir para sempre, e é por isso que
+    /// <c>PodeExcluir</c> não precisa de um escape por "abandonada".
+    /// </summary>
+    [Theory]
+    [InlineData(SessaoStatus.ProcessandoDados)]
+    [InlineData(SessaoStatus.Treinando)]
+    [InlineData(SessaoStatus.Comparando)]
+    public void Toda_fase_em_andamento_tem_saida_para_um_estado_excluivel(SessaoStatus status)
+    {
+        var destinos = Enum.GetValues<SessaoStatus>()
+            .Where(d => ComparacaoSessao.PodeTransicionar(status, d))
+            .ToList();
+
+        destinos.Should().NotBeEmpty($"{status} precisa ter alguma transição de saída");
+        destinos.Should().Contain(d => ComparacaoSessao.PodeExcluir(d),
+            $"{status} precisa poder alcançar um estado excluível, senão a sessão fica presa para sempre");
+    }
 }

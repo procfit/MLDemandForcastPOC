@@ -40,6 +40,9 @@ public interface IComparacoesApi
     [Get("/api/comparacoes/{id}/analise")]
     Task<IApiResponse<SessaoAnaliseResposta>> AnaliseAsync(
         Guid id, [Query] int redeId, CancellationToken ct = default);
+
+    [Delete("/api/comparacoes/{id}")]
+    Task<IApiResponse> ExcluirAsync(Guid id, [Query] int redeId, CancellationToken ct = default);
 }
 
 public sealed record CreateSessaoRequest(string? Nome);

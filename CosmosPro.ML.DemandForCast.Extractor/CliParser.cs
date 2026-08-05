@@ -240,7 +240,8 @@ internal static class CliParser
               --suggestion-id <id>    Id da sugestão a extrair. Obrigatório com --extract.
               --output <pasta>        Pasta onde gravar o ZIP. Obrigatório com --extract.
               --months-back <n>       Quantos meses para trás procurar sugestões no PBS.
-                                      Padrão: {MesesRetroativosPadrao}. Vale para --list e para --extract.
+                                      Padrão: {MesesRetroativosPadrao}. Vale só para --list;
+                                      --extract busca a sugestão pelo id.
               --tsv                   Sai em TSV com cabeçalho, para script. Só com --list.
               {FlagStackTrace}           Diagnóstico: acrescenta o tipo do erro e a pilha de
                                       chamadas à mensagem de falha. Sem ele a saída já nomeia

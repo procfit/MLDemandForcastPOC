@@ -47,6 +47,12 @@ internal static class ComparacoesEndpoints
              .Produces<SessaoAnaliseView>()
              .Produces(StatusCodes.Status404NotFound);
 
+        group.MapDelete("/{id:guid}", ExcluirAsync)
+             .WithName("ExcluirComparacaoSessao")
+             .Produces(StatusCodes.Status204NoContent)
+             .Produces(StatusCodes.Status404NotFound)
+             .Produces<ValidationErrorResponse>(StatusCodes.Status409Conflict);
+
         return app;
     }
 
@@ -210,6 +216,71 @@ internal static class ComparacoesEndpoints
         logger.LogInformation("Sessao {SessaoId}: carga {CargaId} enfileirada", sessao.Id, carga.Id);
 
         return Results.Accepted($"/api/comparacoes/{sessao.Id}");
+    }
+
+    /// <summary>
+    /// Exclui a sessão e, por cascata do banco, o detalhe por item.
+    ///
+    /// <para>
+    /// <b>O que NÃO é excluído:</b> a <c>CargaStage</c>, o <c>TreinoJob</c> e a
+    /// <c>ComparacaoPbs</c> que a sessão apontava, nem o ZIP no MinIO. Os três ponteiros são
+    /// FKs lógicas justamente para o histórico do engine sobreviver à remoção de quem o
+    /// referencia (ver <c>EngineDbContext</c>) — e o inverso vale aqui: apagar a sessão não
+    /// apaga artefatos que existem por si. O dado importado no <c>Stage</c> também fica, e
+    /// fica de propósito: ele é por rede, não por sessão, e o próximo import o substitui
+    /// inteiro.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> ExcluirAsync(
+        Guid id,
+        EngineDbContext db,
+        ILogger<Program> logger,
+        CancellationToken ct,
+        [FromQuery] int redeId = 1)
+    {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
+        // DELETE condicional numa instrução, em vez de "ler, decidir, apagar": entre a
+        // leitura e a remoção o Worker pode avançar a fase, e apagar uma sessão que acabou
+        // de entrar em Treinando deixaria o job órfão terminando no vazio. O WHERE repete a
+        // condição de ComparacaoSessao.PodeExcluir — a decisão acontece no banco, junto com
+        // a escrita, no mesmo padrão do `UPDATE ... WHERE Status = <fase reclamada>` da
+        // materialização.
+        //
+        // Os itens saem por ON DELETE CASCADE da FK: ExecuteDelete emite um DELETE cru e não
+        // faz cascata do lado do cliente, então quem apaga o detalhe é o banco. Sem a
+        // cascata configurada no EngineDbContext isto falharia por violação de FK — e é
+        // melhor assim do que apagar a sessão e deixar o detalhe órfão.
+        var afetadas = await db.ComparacaoSessoes
+            .Where(s => s.Id == id && s.RedeId == redeId)
+            .Where(s => s.Status != SessaoStatus.ProcessandoDados
+                     && s.Status != SessaoStatus.Treinando
+                     && s.Status != SessaoStatus.Comparando)
+            .ExecuteDeleteAsync(ct);
+
+        if (afetadas > 0)
+        {
+            logger.LogInformation("Sessao {SessaoId} excluida (rede {RedeId})", id, redeId);
+            return Results.NoContent();
+        }
+
+        // Zero linhas tem duas causas com respostas diferentes, e só aqui vale a segunda
+        // consulta. Sessão de outra rede cai no `is null` e responde 404, não 403: um 403
+        // confirmaria a quem sondasse que a sessão existe em outro inquilino.
+        var status = await db.ComparacaoSessoes
+            .AsNoTracking()
+            .Where(s => s.Id == id && s.RedeId == redeId)
+            .Select(s => (SessaoStatus?)s.Status)
+            .FirstOrDefaultAsync(ct);
+
+        if (status is null) return Results.NotFound();
+
+        // 409 e não 400: a requisição está perfeitamente bem formada, e a mesma requisição
+        // vai funcionar quando a fase terminar. É o que distingue, para quem chama, "espere"
+        // de "corrija o que você mandou".
+        return Results.Conflict(new ValidationErrorResponse(
+            [$"A comparação está em '{status}' e não pode ser excluída enquanto o processamento corre. " +
+             "Espere a fase terminar — se ela falhar ou concluir, a exclusão passa a ser permitida."]));
     }
 
     /// <summary>

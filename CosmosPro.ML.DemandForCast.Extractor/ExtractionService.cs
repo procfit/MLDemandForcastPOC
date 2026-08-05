@@ -1,6 +1,7 @@
 using System.Data;
 using System.Globalization;
 using System.Reflection;
+using FluentResults;
 using Microsoft.Data.SqlClient;
 
 namespace CosmosPro.ML.DemandForCast.Extractor;
@@ -21,17 +22,21 @@ internal sealed class ExtractionService
     private const int CommandTimeoutSeconds = 0;
     private const int ProgressRowInterval = 25_000;
 
-    public ExtractionResult Run(ExtractionRequest request, IProgress<ExtractionProgress> progress, CancellationToken ct)
+    public Result<ExtractionResult> Run(ExtractionRequest request, IProgress<ExtractionProgress> progress, CancellationToken ct)
     {
-        Directory.CreateDirectory(request.OutputDirectory);
-        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture);
-        var zipPath = Path.Combine(request.OutputDirectory, $"extracao-pbs_{stamp}.zip");
+        var cronometro = System.Diagnostics.Stopwatch.StartNew();
+        var zipPath = string.Empty;
+        var zipBytes = 0L;
 
         var rows = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
 
         try
         {
+            Directory.CreateDirectory(request.OutputDirectory);
+            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture);
+            zipPath = Path.Combine(request.OutputDirectory, $"extracao-pbs_{stamp}.zip");
+
             using (var output = File.Create(zipPath))
             using (var zip = new CsvZipWriter(output))
             using (var connection = new SqlConnection(request.ConnectionString))
@@ -58,7 +63,7 @@ internal sealed class ExtractionService
                 progress.Report(new ExtractionProgress(StageContract.MercadoIqvia, 7, total, 0));
 
                 var cabecalho = CopySugestaoHeader(connection, zip, request.SugestaoId, 8, total, progress, ct)
-                    ?? throw new InvalidOperationException($"Sugestão {request.SugestaoId} não encontrada no PBS.");
+                    ?? throw new FalhaDeDominioException(new SugestaoNaoEncontradaErro(request.SugestaoId));
                 rows[StageContract.SugestoesCompra] = 1;
                 rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, 9, total, progress, ct);
 
@@ -72,13 +77,42 @@ internal sealed class ExtractionService
                     ZipManifest.VersaoAtual(),
                     skusFabricados)));
             }
+
+            // Dentro do try de propósito: uma falha aqui (antivírus travou o arquivo
+            // recém-fechado, por exemplo) é tão IOException quanto qualquer escrita
+            // deste método, e tem que passar pelo mesmo ponto único de tradução —
+            // não escapar crua e quebrar o contrato de que Run só devolve Result.
+            zipBytes = new FileInfo(zipPath).Length;
         }
-        catch
+        catch (OperationCanceledException)
+        {
+            // Cancelamento não é falha, mas o ZIP parcial tem de morrer igual: ele
+            // passa na validação de header do import e entraria no Stage como se
+            // estivesse completo. Antes da fronteira Result isto vinha de um catch
+            // pelado; os dois catches abaixo não o pegam de propósito, porque
+            // cancelamento sobe como exceção.
+            TryDelete(zipPath);
+            throw;
+        }
+        catch (FalhaDeDominioException falha)
         {
             // ZIP parcial é pior que nenhum: ele passa na validação de header do
             // import e entraria no Stage como se estivesse completo.
             TryDelete(zipPath);
-            throw;
+            return Result.Fail<ExtractionResult>(falha.Erro);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            TryDelete(zipPath);
+
+            // Cancelar um ExecuteReader síncrono chega aqui como SqlException, não
+            // como OperationCanceledException — sem esta guarda o cancelamento do
+            // usuário seria classificado como ConexaoPerdidaErro (transitório).
+            ct.ThrowIfCancellationRequested();
+
+            var etapa = ex is EtapaFalhouException etapaFalhou ? etapaFalhou.Etapa : new Etapa("extração", null);
+            return Result.Fail<ExtractionResult>(
+                ClassificadorDeFalha.Classificar(FalhaBruta.De(ex, conexaoJaAberta: true), etapa, cronometro.Elapsed));
         }
 
         if (rows[StageContract.Vendas] == 0)
@@ -90,194 +124,7 @@ internal sealed class ExtractionService
             warnings.Add("Nenhum estoque no período — o histórico de ESTOQUE_LANCAMENTOS costuma cobrir apenas os últimos meses.");
         }
 
-        return new ExtractionResult(zipPath, new FileInfo(zipPath).Length, rows, warnings);
-    }
-
-    /// <summary>Lê as lojas disponíveis — usado só como sanidade em "Testar conexão".</summary>
-    public static IReadOnlyList<LojaOption> LoadLojas(string connectionString, CancellationToken ct) =>
-        Step("lojas disponíveis (lojas_disponiveis.sql)", () =>
-        {
-            using var connection = new SqlConnection(connectionString);
-            connection.Open();
-            using var command = new SqlCommand(SqlResources.Load("lojas_disponiveis.sql"), connection);
-            using var reader = command.ExecuteReader();
-
-            var lojas = new List<LojaOption>();
-            while (reader.Read())
-            {
-                ct.ThrowIfCancellationRequested();
-                lojas.Add(new LojaOption(reader.GetInt32(0), reader.GetString(1)));
-            }
-            return (IReadOnlyList<LojaOption>)lojas;
-        });
-
-    /// <summary>
-    /// Catálogo para o usuário escolher a sugestão no grid do MainForm.
-    /// <para>
-    /// Duas idas ao banco de propósito. Uma única query que juntasse os cabeçalhos
-    /// a SUGESTOES_COMPRAS_RESULTADO para contar linhas e lojas obriga o servidor a
-    /// agregar a tabela de resultado inteira na faixa de datas pedida — medido na
-    /// instância real: 7 minutos sem resposta em 18 meses, timeout em 500s com 3
-    /// meses. Os mesmos totais pedidos para uma lista fechada de ids voltam na hora,
-    /// porque aí cada id é uma busca pelo índice de SUGESTAO_COMPRA. Então lê-se o
-    /// cabeçalho sozinho, e só depois as contagens dos ids que ele devolveu.
-    /// </para>
-    /// </summary>
-    public static IReadOnlyList<SugestaoCatalogo> LoadCatalogoSugestoes(string connectionString, DateOnly dataInicio, CancellationToken ct)
-    {
-        using var connection = new SqlConnection(connectionString);
-        connection.Open();
-
-        var cabecalhos = LoadCabecalhosDoCatalogo(connection, dataInicio, ct);
-        var contagens = LoadContagensDoCatalogo(connection, [.. cabecalhos.Select(c => c.SugestaoId)], ct);
-        return MesclarCatalogo(cabecalhos, contagens);
-    }
-
-    /// <summary>
-    /// Cabeçalho de uma sugestão pelo id, para quem já sabe qual quer extrair.
-    /// <para>
-    /// Existe porque a extração não precisa de catálogo: carregar a lista inteira só
-    /// para achar uma sugestão passava de 8 minutos na instância real, e tudo o que a
-    /// extração consome do catálogo é a data e a cobertura — que vivem no cabeçalho.
-    /// Devolve <c>null</c> quando o id não existe ou a sugestão não tem método de
-    /// cálculo declarado.
-    /// </para>
-    /// </summary>
-    public static SugestaoCatalogo? LoadSugestaoPorId(string connectionString, long sugestaoId, CancellationToken ct)
-    {
-        var cabecalho = Step("cabeçalho da sugestão (sugestao_por_id.sql)", () =>
-        {
-            using var connection = new SqlConnection(connectionString);
-            connection.Open();
-
-            using var command = new SqlCommand(
-                SqlResources.Load("sugestao_por_id.sql").Replace("{{SUGESTAO_ID}}", "@sugestaoId"), connection)
-            {
-                CommandTimeout = CommandTimeoutSeconds,
-            };
-            command.Parameters.Add("@sugestaoId", SqlDbType.BigInt).Value = sugestaoId;
-            using var cancelRegistration = ct.Register(command.Cancel);
-            using var reader = command.ExecuteReader();
-
-            return reader.Read() ? LerCabecalho(reader) : null;
-        });
-
-        // Contagens ficam zeradas: elas servem ao operador para dimensionar antes de
-        // escolher, e aqui a escolha já foi feita. Pagar a agregação seria refazer o
-        // custo que este caminho existe para evitar.
-        return cabecalho is null ? null : MesclarCatalogo([cabecalho], []).Single();
-    }
-
-    /// <summary>
-    /// Ordinais compartilhados por catalogo_sugestoes.sql e sugestao_por_id.sql —
-    /// as duas devolvem o mesmo cabeçalho, e ler em dois lugares deixaria uma
-    /// mudança de coluna aplicada só em um deles.
-    /// </summary>
-    private static SugestaoCatalogoCabecalho LerCabecalho(SqlDataReader reader) => new(
-        reader.GetInt64(0),
-        reader.IsDBNull(1) ? null : reader.GetString(1),
-        reader.GetDateTime(2),
-        reader.GetByte(3),
-        // NULL quando os cinco DIAS_CURVA_* da sugestão são todos NULL (ex.:
-        // sugestão TipoCalculo=2 sem curva configurada). 0 é o fallback seguro:
-        // a janela derivada (ExtractionWindow.Derive) fica só até a data da
-        // sugestão, sem cobertura futura — o comprador vê uma janela degenerada
-        // e escolhe outra sugestão, em vez do catálogo inteiro travar.
-        reader.IsDBNull(4) ? 0 : reader.GetInt32(4));
-
-    private static IReadOnlyList<SugestaoCatalogoCabecalho> LoadCabecalhosDoCatalogo(
-        SqlConnection connection, DateOnly dataInicio, CancellationToken ct) =>
-        Step("catálogo de sugestões (catalogo_sugestoes.sql)", () =>
-        {
-            using var command = new SqlCommand(SqlResources.Load("catalogo_sugestoes.sql").Replace("{{DATA_INICIO}}", "@dataInicio"), connection)
-            {
-                CommandTimeout = CommandTimeoutSeconds,
-            };
-            command.Parameters.Add("@dataInicio", SqlDbType.Date).Value = dataInicio.ToDateTime(TimeOnly.MinValue);
-            using var cancelRegistration = ct.Register(command.Cancel);
-            using var reader = command.ExecuteReader();
-
-            var cabecalhos = new List<SugestaoCatalogoCabecalho>();
-            while (reader.Read())
-            {
-                ct.ThrowIfCancellationRequested();
-                cabecalhos.Add(LerCabecalho(reader));
-            }
-            return (IReadOnlyList<SugestaoCatalogoCabecalho>)cabecalhos;
-        });
-
-    private static IReadOnlyList<SugestaoContagem> LoadContagensDoCatalogo(
-        SqlConnection connection, IReadOnlyList<long> sugestaoIds, CancellationToken ct) =>
-        Step("contagens do catálogo (catalogo_sugestoes_contagens.sql)", () =>
-        {
-            var sql = SqlResources.Load("catalogo_sugestoes_contagens.sql");
-            var contagens = new List<SugestaoContagem>();
-
-            foreach (var lote in LotesDeSugestoes(sugestaoIds))
-            {
-                using var command = CreateContagensCommand(connection, sql, lote);
-                using var cancelRegistration = ct.Register(command.Cancel);
-                using var reader = command.ExecuteReader();
-
-                while (reader.Read())
-                {
-                    ct.ThrowIfCancellationRequested();
-                    contagens.Add(new SugestaoContagem(reader.GetInt64(0), reader.GetInt32(1), reader.GetInt32(2)));
-                }
-            }
-
-            return (IReadOnlyList<SugestaoContagem>)contagens;
-        });
-
-    /// <summary>
-    /// Teto de parâmetros por comando no SQL Server. Não é configuração: é limite
-    /// do protocolo, e passar dele derruba o comando inteiro.
-    /// </summary>
-    internal const int MaxParametrosPorComando = 2100;
-
-    /// <summary>
-    /// Ids por comando na busca de contagens. 500 e não 2000: o catálogo de uma
-    /// faixa larga passa fácil do teto de <see cref="MaxParametrosPorComando"/>, e
-    /// encostar nele deixaria a próxima coluna que alguém acrescentar ao comando
-    /// sem folga. Além disso o texto da query varia com o tamanho do lote, então um
-    /// lote fixo faz todas as rodadas cheias compartilharem um único plano no cache
-    /// — só o resto final gera um segundo. 500 dá 4x de folga e mantém cada
-    /// comando numa ida rápida ao banco.
-    /// </summary>
-    internal const int SugestoesPorLote = 500;
-
-    /// <summary>
-    /// Quebra os ids em lotes que cabem no teto de parâmetros. Lista vazia devolve
-    /// zero lotes — nenhum comando é enviado quando não há cabeçalho nenhum.
-    /// </summary>
-    internal static IReadOnlyList<IReadOnlyList<long>> LotesDeSugestoes(IReadOnlyList<long> sugestaoIds) =>
-        [.. sugestaoIds.Chunk(SugestoesPorLote)];
-
-    /// <summary>
-    /// Junta cabeçalho e contagem. Uma sugestão pode não ter nenhuma linha em
-    /// SUGESTOES_COMPRAS_RESULTADO (visto na instância real: id 17658), e aí a
-    /// segunda query simplesmente não devolve linha para ela — o catálogo continua
-    /// mostrando a sugestão, com zero, porque sumir da lista faria o comprador
-    /// procurar por uma sugestão que existe no ERP e não está na tela.
-    /// </summary>
-    internal static IReadOnlyList<SugestaoCatalogo> MesclarCatalogo(
-        IReadOnlyList<SugestaoCatalogoCabecalho> cabecalhos,
-        IEnumerable<SugestaoContagem> contagens)
-    {
-        var porSugestao = contagens.ToDictionary(c => c.SugestaoId);
-
-        return [.. cabecalhos.Select(cabecalho =>
-        {
-            var achou = porSugestao.TryGetValue(cabecalho.SugestaoId, out var contagem);
-            return new SugestaoCatalogo(
-                cabecalho.SugestaoId,
-                cabecalho.Descricao,
-                cabecalho.DataHora,
-                cabecalho.TipoCalculo,
-                cabecalho.DiasCoberturaMax,
-                achou ? contagem!.QtdLinhas : 0,
-                achou ? contagem!.QtdLojas : 0);
-        })];
+        return Result.Ok(new ExtractionResult(zipPath, zipBytes, rows, warnings));
     }
 
     /// <summary>
@@ -288,10 +135,11 @@ internal sealed class ExtractionService
     private static (IReadOnlyList<int> LojaIds, IReadOnlySet<string> Skus) LoadEscopoSugestao(
         SqlConnection connection, long sugestaoId, CancellationToken ct)
     {
-        var (lojaIds, skus) = Step("escopo da sugestão (escopo_sugestao.sql)", () =>
+        var (lojaIds, skus) = Step(new Etapa("escopo da sugestão", "escopo_sugestao.sql"), () =>
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("escopo_sugestao.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             var ids = new HashSet<int>();
@@ -307,7 +155,7 @@ internal sealed class ExtractionService
 
         if (lojaIds.Count == 0)
         {
-            throw new InvalidOperationException($"Sugestão {sugestaoId} não tem itens no PBS — nada para extrair.");
+            throw new FalhaDeDominioException(new SugestaoSemItensErro(sugestaoId));
         }
 
         return ([.. lojaIds.Order()], skus);
@@ -318,10 +166,11 @@ internal sealed class ExtractionService
     /// sinal de que LojaId = FILIAL pode não valer nesta instalação do PBS.
     /// </summary>
     private static void AvisarDivergenciaEmpresaFilial(SqlConnection connection, long sugestaoId, List<string> warnings, CancellationToken ct) =>
-        Step("diagnóstico EMPRESA vs FILIAL (sugestoes_compra_diagnostico.sql)", () =>
+        Step(new Etapa("diagnóstico EMPRESA vs FILIAL", "sugestoes_compra_diagnostico.sql"), () =>
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra_diagnostico.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
             if (reader.Read() && !reader.IsDBNull(0))
             {
@@ -339,12 +188,13 @@ internal sealed class ExtractionService
     private static SugestaoCabecalho? CopySugestaoHeader(
         SqlConnection connection, CsvZipWriter zip, long sugestaoId,
         int fileIndex, int fileCount, IProgress<ExtractionProgress> progress, CancellationToken ct) =>
-        Step($"{StageContract.SugestoesCompra} (sugestoes_compra.sql)", () =>
+        Step(new Etapa(StageContract.SugestoesCompra, "sugestoes_compra.sql"), () =>
         {
             var header = StageContract.Headers[StageContract.SugestoesCompra];
             using var entry = zip.CreateEntry(StageContract.SugestoesCompra, header);
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             EnsureShape(reader, header, StageContract.SugestoesCompra);
@@ -377,12 +227,13 @@ internal sealed class ExtractionService
         SqlConnection connection, CsvZipWriter zip, IReadOnlySet<string> skusDaSugestao,
         int fileIndex, int fileCount, IProgress<ExtractionProgress> progress, CancellationToken ct,
         List<string> warnings) =>
-        Step($"{StageContract.Produtos} (produtos.sql)", () =>
+        Step(new Etapa(StageContract.Produtos, "produtos.sql"), () =>
         {
             var header = StageContract.Headers[StageContract.Produtos];
             using var entry = zip.CreateEntry(StageContract.Produtos, header);
             using var command = new SqlCommand(SqlResources.Load("produtos.sql"), connection) { CommandTimeout = CommandTimeoutSeconds };
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             EnsureShape(reader, header, StageContract.Produtos);
@@ -491,11 +342,12 @@ internal sealed class ExtractionService
         IProgress<ExtractionProgress> progress,
         CancellationToken ct,
         Action<IDataRecord>? inspect) =>
-        Step($"{entryName} ({queryFile})", () =>
+        Step(new Etapa(entryName, queryFile), () =>
         {
             var header = StageContract.Headers[entryName];
             using var entry = zip.CreateEntry(entryName, header);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             EnsureShape(reader, header, entryName);
@@ -525,12 +377,13 @@ internal sealed class ExtractionService
         int fileCount,
         IProgress<ExtractionProgress> progress,
         CancellationToken ct) =>
-        Step($"{StageContract.EstoquesDiarios} (estoques_movimentos.sql)", () =>
+        Step(new Etapa(StageContract.EstoquesDiarios, "estoques_movimentos.sql"), () =>
         {
             var header = StageContract.Headers[StageContract.EstoquesDiarios];
             using var entry = zip.CreateEntry(StageContract.EstoquesDiarios, header);
             using var command = CreateJanelaCommand(connection, SqlResources.Load("estoques_movimentos.sql"), lojaIds, dataInicial, dataFinal);
             using var cancelRegistration = ct.Register(command.Cancel);
+            ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
             foreach (var linha in StockCarryForward.Densify(ReadMovements(reader, ct), dataFinal))
@@ -595,29 +448,6 @@ internal sealed class ExtractionService
     }
 
     /// <summary>
-    /// Mesmo padrão de {{LOJAS}} em <see cref="CreateJanelaCommand"/>: um parâmetro
-    /// por id na lista IN. O chamador já quebrou os ids em lotes que cabem no teto
-    /// de <see cref="MaxParametrosPorComando"/>.
-    /// </summary>
-    private static SqlCommand CreateContagensCommand(SqlConnection connection, string sql, IReadOnlyList<long> sugestaoIds)
-    {
-        var placeholders = sugestaoIds
-            .Select((_, i) => "@sugestao" + i.ToString(CultureInfo.InvariantCulture))
-            .ToArray();
-
-        var command = new SqlCommand(sql.Replace("{{SUGESTOES}}", string.Join(',', placeholders)), connection)
-        {
-            CommandTimeout = CommandTimeoutSeconds,
-        };
-
-        for (var i = 0; i < sugestaoIds.Count; i++)
-        {
-            command.Parameters.Add(placeholders[i], SqlDbType.BigInt).Value = sugestaoIds[i];
-        }
-        return command;
-    }
-
-    /// <summary>
     /// {{SUGESTAO}} vira um parâmetro real (@sugestao), não concatenação de texto —
     /// o valor nasce de uma lista que o próprio PBS devolveu (catalogo_sugestoes.sql),
     /// mas usar parâmetro custa nada e elimina qualquer risco de injeção.
@@ -642,19 +472,21 @@ internal sealed class ExtractionService
     /// linha de comando distingue os dois pelo código de saída.
     /// </para>
     /// </summary>
-    internal static T Step<T>(string etapa, Func<T> acao)
+    internal static T Step<T>(Etapa etapa, Func<T> acao)
     {
         try
         {
             return acao();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException and not ExtractionStepException)
+        catch (Exception ex) when (ex is not OperationCanceledException
+                                      and not EtapaFalhouException
+                                      and not FalhaDeDominioException)
         {
-            throw new ExtractionStepException(etapa, ex);
+            throw new EtapaFalhouException(etapa, ex);
         }
     }
 
-    internal static void Step(string etapa, Action acao) =>
+    internal static void Step(Etapa etapa, Action acao) =>
         Step<object?>(etapa, () =>
         {
             acao();
@@ -669,16 +501,16 @@ internal sealed class ExtractionService
     {
         if (reader.FieldCount != header.Count)
         {
-            throw new InvalidOperationException(
-                $"'{entryName}': query devolveu {reader.FieldCount} colunas, esperado {header.Count}.");
+            throw new FalhaDeDominioException(new ContratoErro(entryName,
+                $"query devolveu {reader.FieldCount} colunas, esperado {header.Count}"));
         }
 
         for (var i = 0; i < header.Count; i++)
         {
             if (!string.Equals(reader.GetName(i), header[i], StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException(
-                    $"'{entryName}': coluna {i + 1} é '{reader.GetName(i)}', esperado '{header[i]}'.");
+                throw new FalhaDeDominioException(new ContratoErro(entryName,
+                    $"coluna {i + 1} é '{reader.GetName(i)}', esperado '{header[i]}'"));
             }
         }
     }
@@ -697,14 +529,22 @@ internal sealed class ExtractionService
 }
 
 /// <summary>
-/// Falha ocorrida dentro de uma etapa nomeada da extração. O nome da etapa cita a
-/// query e o arquivo de destino, que é a informação que faltava quando a extração
-/// morria com uma mensagem de conversão de tipo sem dizer onde.
+/// Falha dentro de uma etapa nomeada. Nunca sai desta classe: o único catch de
+/// <see cref="ExtractionService.Run"/> a traduz em <c>Result.Fail</c>. Existe porque
+/// a extração tem uma dúzia de etapas encadeadas, e devolver Result de cada método
+/// privado espalharia verificação sem acrescentar informação.
 /// </summary>
-internal sealed class ExtractionStepException(string etapa, Exception causa)
+internal sealed class EtapaFalhouException(Etapa etapa, Exception causa)
     : InvalidOperationException($"Falha na etapa '{etapa}': {causa.Message}", causa)
 {
-    public string Etapa { get; } = etapa;
+    public Etapa Etapa { get; } = etapa;
+}
+
+/// <summary>Falha de domínio já classificada, a caminho do catch único do Run.</summary>
+internal sealed class FalhaDeDominioException(ExtratorErro erro)
+    : InvalidOperationException(erro.Message)
+{
+    public ExtratorErro Erro { get; } = erro;
 }
 
 internal static class SqlResources

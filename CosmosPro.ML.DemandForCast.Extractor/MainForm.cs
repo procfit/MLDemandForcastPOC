@@ -1,13 +1,9 @@
-using System.Globalization;
+using FluentResults;
 
 namespace CosmosPro.ML.DemandForCast.Extractor;
 
 internal sealed class MainForm : Form
 {
-    // Sugestões mais antigas que isto não aparecem no catálogo — evita carregar
-    // anos de histórico que o comprador não vai reconhecer.
-    private const int MesesRetroativosCatalogo = 12;
-
     private readonly TextBox _servidor = new() { Width = 260 };
     private readonly NumericUpDown _porta = new() { Width = 80, Minimum = 1, Maximum = 65535, Value = 1433 };
     private readonly TextBox _banco = new() { Width = 260 };
@@ -18,6 +14,8 @@ internal sealed class MainForm : Form
     private readonly Button _testar = new() { Text = "Testar conexão", Width = 130 };
 
     private readonly Button _carregarSugestoes = new() { Text = "Carregar sugestões", Width = 140 };
+    private readonly NumericUpDown _meses = new() { Width = 60, Minimum = 1, Maximum = 60, Value = 12 };
+    private readonly TextBox _filtro = new() { Width = 200, PlaceholderText = "filtrar por id ou descrição" };
     private readonly DataGridView _sugestoes = new()
     {
         Width = 612,
@@ -38,14 +36,30 @@ internal sealed class MainForm : Form
     private readonly Button _extrair = new() { Text = "Extrair", Width = 120, Height = 32, Enabled = false };
     private readonly Button _cancelar = new() { Text = "Cancelar", Width = 120, Height = 32, Enabled = false };
     private readonly ProgressBar _progresso = new() { Width = 520, Height = 20, Style = ProgressBarStyle.Continuous, Maximum = StageContract.WriteOrder.Length };
+    private readonly Button _copiarLog = new() { Text = "Copiar log", Width = 100 };
     private readonly Label _status = new() { AutoSize = true, Text = "Pronto." };
-    private readonly TextBox _log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Width = 620, Height = 160 };
+    private readonly TextBox _painelDeLog = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Width = 620, Height = 160 };
+
+    private readonly GroupBox _conexaoBox = new() { Text = "Conexão", Location = new Point(12, 12), Size = new Size(636, 150) };
+    private readonly GroupBox _sugestaoBox = new() { Text = "Sugestão de compra", Location = new Point(12, 172), Size = new Size(636, 230) };
+    private readonly GroupBox _saidaBox = new() { Text = "Saída", Location = new Point(12, 412), Size = new Size(636, 60) };
 
     private readonly AppConfig _config = AppConfig.Load();
-    private CancellationTokenSource? _cts;
+    private readonly ExtratorLog _log;
+    private readonly CatalogoService _catalogoService;
+    private OperacaoUi? _operacao;
 
-    private IReadOnlyList<SugestaoCatalogo> _catalogo = [];
+    private IReadOnlyList<SugestaoCatalogoCabecalho> _catalogo = [];
     private ExtractionWindow? _janela;
+
+    // Contagem por seleção: fetch próprio, fora de ExecutarAsync (ver ContarSelecaoAsync).
+    // Um novo CTS por chamada -- trocar de linha rápido cancela a contagem anterior em
+    // vez de enfileirar as duas.
+    /// <summary>Sugestão cuja contagem já está em voo ou na tela. Ver <see cref="ContarSelecao"/>.</summary>
+    private long? _sugestaoContada;
+
+    /// <summary>Ordem das contagens: só a mais nova pode escrever na tela.</summary>
+    private long _contagemGeracao;
 
     public MainForm()
     {
@@ -53,31 +67,46 @@ internal sealed class MainForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(660, 720);
+        ClientSize = new Size(660, 760);
+
+        // ExtratorLog.Escrever roda este callback direto na thread de quem chamou --
+        // inclusive a thread do pool do Task.Run de ExecutarAsync, quando é Retentativa
+        // quem está logando um retry. ExtratorLog não pode fazer o marshaling (tem que
+        // ficar livre de WinForms), então tem que ser aqui.
+        _log = new ExtratorLog(
+            Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
+            tela: linha => MarshalParaPainelDeLog(linha));
+        _catalogoService = new CatalogoService(_config, _log);
 
         BuildLayout();
         ApplyConfig();
 
         _testar.Click += async (_, _) => await TestarConexaoAsync();
         _carregarSugestoes.Click += async (_, _) => await CarregarSugestoesAsync();
-        _sugestoes.SelectionChanged += (_, _) => AtualizarJanela();
+        _sugestoes.SelectionChanged += (_, _) =>
+        {
+            AtualizarJanela();
+            ContarSelecao();
+        };
         _escolherPasta.Click += (_, _) => EscolherPasta();
         _extrair.Click += async (_, _) => await ExtrairAsync();
-        _cancelar.Click += (_, _) => _cts?.Cancel();
+        _cancelar.Click += (_, _) => _operacao?.Cancelar();
         _authWindows.CheckedChanged += (_, _) => AtualizarCamposAuth();
+        _filtro.TextChanged += (_, _) => AplicarFiltro();
+        _copiarLog.Click += (_, _) => CopiarLog();
+        _meses.Value = _config.MesesRetroativos is >= 1 and <= 60 ? _config.MesesRetroativos : 12;
     }
 
     private void BuildLayout()
     {
-        var conexao = new GroupBox { Text = "Conexão", Location = new Point(12, 12), Size = new Size(636, 150) };
-        AddRow(conexao, "Servidor:", _servidor, 0);
-        AddRow(conexao, "Porta:", _porta, 1);
-        AddRow(conexao, "Banco:", _banco, 2);
+        AddRow(_conexaoBox, "Servidor:", _servidor, 0);
+        AddRow(_conexaoBox, "Porta:", _porta, 1);
+        AddRow(_conexaoBox, "Banco:", _banco, 2);
 
         var autenticacao = new FlowLayoutPanel { Location = new Point(100, 100), Size = new Size(260, 24), AutoSize = true };
         autenticacao.Controls.AddRange([_authSql, _authWindows]);
-        conexao.Controls.Add(new Label { Text = "Autenticação:", Location = new Point(12, 103), AutoSize = true });
-        conexao.Controls.Add(autenticacao);
+        _conexaoBox.Controls.Add(new Label { Text = "Autenticação:", Location = new Point(12, 103), AutoSize = true });
+        _conexaoBox.Controls.Add(autenticacao);
 
         var credenciais = new FlowLayoutPanel { Location = new Point(100, 124), Size = new Size(520, 26), AutoSize = true };
         credenciais.Controls.AddRange([
@@ -85,30 +114,34 @@ internal sealed class MainForm : Form
             new Label { Text = "Senha:", AutoSize = true, Margin = new Padding(12, 6, 4, 0) }, _senha,
             _testar,
         ]);
-        conexao.Controls.Add(credenciais);
+        _conexaoBox.Controls.Add(credenciais);
 
-        var sugestao = new GroupBox { Text = "Sugestão de compra", Location = new Point(12, 172), Size = new Size(636, 230) };
         _carregarSugestoes.Location = new Point(12, 24);
-        sugestao.Controls.Add(_carregarSugestoes);
+        _sugestaoBox.Controls.Add(_carregarSugestoes);
+        _sugestaoBox.Controls.Add(new Label { Text = "Meses:", Location = new Point(162, 27), AutoSize = true });
+        _meses.Location = new Point(210, 24);
+        _sugestaoBox.Controls.Add(_meses);
+        _filtro.Location = new Point(282, 24);
+        _sugestaoBox.Controls.Add(_filtro);
         _sugestoes.Location = new Point(12, 60);
-        sugestao.Controls.Add(_sugestoes);
+        _sugestaoBox.Controls.Add(_sugestoes);
         _janelaInfo.Location = new Point(12, 196);
-        sugestao.Controls.Add(_janelaInfo);
+        _sugestaoBox.Controls.Add(_janelaInfo);
 
-        var saida = new GroupBox { Text = "Saída", Location = new Point(12, 412), Size = new Size(636, 60) };
-        saida.Controls.Add(new Label { Text = "Pasta:", Location = new Point(12, 26), AutoSize = true });
+        _saidaBox.Controls.Add(new Label { Text = "Pasta:", Location = new Point(12, 26), AutoSize = true });
         _pastaSaida.Location = new Point(100, 23);
         _escolherPasta.Location = new Point(470, 22);
-        saida.Controls.Add(_pastaSaida);
-        saida.Controls.Add(_escolherPasta);
+        _saidaBox.Controls.Add(_pastaSaida);
+        _saidaBox.Controls.Add(_escolherPasta);
 
         _extrair.Location = new Point(12, 486);
         _cancelar.Location = new Point(140, 486);
         _progresso.Location = new Point(12, 528);
+        _copiarLog.Location = new Point(540, 526);
         _status.Location = new Point(12, 556);
-        _log.Location = new Point(12, 580);
+        _painelDeLog.Location = new Point(12, 580);
 
-        Controls.AddRange([conexao, sugestao, saida, _extrair, _cancelar, _progresso, _status, _log]);
+        Controls.AddRange([_conexaoBox, _sugestaoBox, _saidaBox, _extrair, _cancelar, _progresso, _copiarLog, _status, _painelDeLog]);
     }
 
     private static void AddRow(Control parent, string label, Control field, int row)
@@ -152,42 +185,186 @@ internal sealed class MainForm : Form
 
     private string BuildConnectionString() => ConnectionStringFactory.Build(CaptureConfig(), _senha.Text);
 
-    private async Task TestarConexaoAsync()
+    // Mesma forma de OperacaoUi.Marshal: quem chama pode estar na thread do pool (o
+    // callback de log de Retentativa, dentro do Task.Run de ExecutarAsync), e uma
+    // linha de log perdida não pode derrubar a operação que a gerou.
+    private void MarshalParaPainelDeLog(string linha)
     {
-        await RunGuardedAsync("Testando conexão...", async () =>
+        try
         {
-            var connectionString = BuildConnectionString();
-            var lojas = await Task.Run(() => ExtractionService.LoadLojas(connectionString, CancellationToken.None));
-            Log($"Conexão OK. {lojas.Count} lojas ativas encontradas.");
-            _config.Save();
-        });
+            if (_painelDeLog.InvokeRequired) _painelDeLog.BeginInvoke(() => _painelDeLog.AppendText(linha + Environment.NewLine));
+            else _painelDeLog.AppendText(linha + Environment.NewLine);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Form fechado no meio da operação: sem painel para receber a linha.
+        }
+        catch (InvalidOperationException)
+        {
+            // Handle ainda não criado (form fechado antes de aparecer, ou ainda não
+            // mostrado): mesmo motivo do caso acima.
+        }
     }
 
-    private async Task CarregarSugestoesAsync()
+    /// <summary>
+    /// Uma operação longa, com tudo o que ela deve ao operador: inputs travados,
+    /// Cancelar ativo, relógio andando e o desfecho no log — inclusive quando falha.
+    /// </summary>
+    private async Task ExecutarAsync<T>(
+        string titulo, int? totalDeEtapas, Func<CancellationToken, Result<T>> operacao, Action<T> aoConcluir)
     {
-        await RunGuardedAsync("Carregando sugestões...", async () =>
-        {
-            var connectionString = BuildConnectionString();
-            var dataInicio = DateOnly.FromDateTime(DateTime.Today).AddMonths(-MesesRetroativosCatalogo);
-            var catalogo = await Task.Run(() => ExtractionService.LoadCatalogoSugestoes(connectionString, dataInicio, CancellationToken.None));
+        var alvos = new AlvosDaOperacao(
+            [_conexaoBox, _sugestaoBox, _saidaBox, _extrair, _testar, _carregarSugestoes],
+            _cancelar, _progresso, _status);
 
-            _catalogo = catalogo;
-            PopularGrid(catalogo);
-            Log($"{catalogo.Count} sugestões carregadas.");
-        });
+        try
+        {
+            // Bloco explicito, não using-declaração: uma using-declaração só descartaria
+            // a OperacaoUi no fim do método, depois deste finally -- e o Dispose() dela
+            // restaura _extrair.Enabled (e os demais alvos) ao valor de ANTES da operação,
+            // desfazendo o que AtualizarJanela() está prestes a recalcular a partir da
+            // seleção atual. Fechando o bloco aqui, o Dispose roda primeiro: restaura o
+            // estado genérico, e só depois AtualizarJanela decide o estado de verdade.
+            using (var escopo = OperacaoUi.Iniciar(alvos, titulo, totalDeEtapas))
+            {
+                _operacao = escopo;
+                _log.Escrever($"{titulo}...");
+
+                try
+                {
+                    var resultado = await Task.Run(() => operacao(escopo.Token), escopo.Token);
+
+                    // A operação pode devolver Result.Ok mesmo depois de cancelada -- por
+                    // exemplo, um passo de leitura que já tinha o dado em mãos quando o
+                    // token virou. Sem este checkpoint o rodapé diria "Concluído" para uma
+                    // extração que o operador cancelou, com o catch abaixo nunca disparando.
+                    escopo.Token.ThrowIfCancellationRequested();
+
+                    if (resultado.IsSuccess)
+                    {
+                        aoConcluir(resultado.Value);
+                        escopo.Concluir($"Concluído em {escopo.Decorrido}.");
+                    }
+                    else
+                    {
+                        var erro = resultado.ErroOuFallback();
+                        escopo.Concluir("Falhou.");
+                        _log.Escrever($"ERRO: {erro.Message}");
+                        foreach (var (chave, valor) in erro.Metadata)
+                        {
+                            _log.EscreverSoNoArquivo($"  {chave}: {valor}");
+                        }
+                        MessageBox.Show(this, erro.Message + Environment.NewLine + Environment.NewLine
+                            + $"Detalhe completo em {_log.CaminhoDeHoje}", "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    escopo.Concluir("Cancelado.");
+                    _log.Escrever("Cancelado pelo usuário.");
+                }
+            }
+        }
+        finally
+        {
+            _operacao = null;
+            AtualizarJanela();
+        }
     }
 
-    private void PopularGrid(IReadOnlyList<SugestaoCatalogo> catalogo)
+    private Task TestarConexaoAsync() =>
+        ExecutarAsync("Testando conexão", null,
+            ct => _catalogoService.Lojas(BuildConnectionString(), ct),
+            lojas =>
+            {
+                _log.Escrever($"Conexão OK. {lojas.Count} lojas ativas encontradas.");
+                _config.Save();
+            });
+
+    private Task CarregarSugestoesAsync()
     {
-        _sugestoes.DataSource = catalogo
-            .Select(c => new SugestaoLinha(c.SugestaoId, c.Descricao ?? "(sem descrição)", c.DataHora, MetodoTexto(c.TipoCalculo), c.QtdLinhas, c.QtdLojas))
+        var meses = (int)_meses.Value;
+        var dataInicio = DateOnly.FromDateTime(DateTime.Today).AddMonths(-meses);
+
+        return ExecutarAsync($"Carregando sugestões dos últimos {meses} meses", null,
+            ct => _catalogoService.Carregar(BuildConnectionString(), dataInicio, ct),
+            catalogo =>
+            {
+                _catalogo = catalogo;
+                _config.MesesRetroativos = meses;
+                _config.Save();
+                _log.Escrever($"{catalogo.Count:N0} sugestões carregadas.");
+                AplicarFiltro();
+            });
+    }
+
+    /// <summary>
+    /// Contagem é conforto do operador, não pré-condição: não passa por ExecutarAsync,
+    /// não trava input nenhum, não usa OperacaoUi e nunca abre MessageBox.
+    /// <para>
+    /// Uma contagem em voo <b>não</b> é cancelada quando outra começa. Cancelar um
+    /// <c>SqlCommand</c> em execução derruba a consulta com exceção, e para 10 ms de
+    /// trabalho isso não compra nada — só produz uma OperationCanceledException por
+    /// troca de seleção, que para o depurador de quem estiver desenvolvendo. O que
+    /// importa é não escrever resposta velha na tela, e para isso basta o número da
+    /// geração: quem volta fora de época se cala.
+    /// </para>
+    /// </summary>
+    private async Task ContarSelecaoAsync(long sugestaoId, string textoDaJanela)
+    {
+        var geracao = ++_contagemGeracao;
+        var connectionString = BuildConnectionString();
+
+        var resultado = await Task.Run(() => _catalogoService.Contar(connectionString, sugestaoId, CancellationToken.None));
+
+        // await sobre Task.Run recupera aqui o SynchronizationContext da UI (o
+        // WindowsFormsSynchronizationContext que Application.Run instala) porque
+        // este método nunca usa ConfigureAwait(false) -- a continuação volta para a
+        // thread da UI sozinha, então escrever em _janelaInfo direto é seguro, sem
+        // o Marshal que OperacaoUi.Reportar precisa para o callback do Progress<T>
+        // (que nasce sem SynchronizationContext nenhum -- ver ExtrairAsync).
+        if (geracao != _contagemGeracao) return;
+
+        if (resultado.IsSuccess)
+        {
+            var contagem = resultado.Value;
+            _janelaInfo.Text = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s) · {textoDaJanela}";
+        }
+        else
+        {
+            var erro = resultado.ErroOuFallback();
+            _janelaInfo.Text = $"Não foi possível contar os itens da sugestão {sugestaoId}: {erro.Message}";
+            _log.Escrever($"ERRO ao contar itens da sugestão {sugestaoId}: {erro.Message}");
+            foreach (var (chave, valor) in erro.Metadata)
+            {
+                _log.EscreverSoNoArquivo($"  {chave}: {valor}");
+            }
+
+            // A contagem que falhou não fica marcada como feita: selecionar a mesma
+            // linha de novo tem de poder tentar outra vez.
+            _sugestaoContada = null;
+        }
+    }
+
+    private void AplicarFiltro()
+    {
+        var visiveis = CatalogoService.Filtrar(_catalogo, _filtro.Text);
+        _sugestoes.DataSource = visiveis
+            .Select(c => new SugestaoLinha(
+                c.SugestaoId, c.Descricao ?? "(sem descrição)", c.DataHora,
+                MetodoTexto(c.TipoCalculo), c.DiasCoberturaMax))
             .ToList();
         ConfigurarColunas();
 
-        if (catalogo.Count == 0)
+        if (_catalogo.Count == 0)
         {
             _janela = null;
             _janelaInfo.Text = "Nenhuma sugestão encontrada no período.";
+            _extrair.Enabled = false;
+        }
+        else if (visiveis.Count == 0)
+        {
+            _janelaInfo.Text = $"Nenhuma das {_catalogo.Count:N0} sugestões carregadas casa com o filtro.";
             _extrair.Enabled = false;
         }
     }
@@ -203,8 +380,7 @@ internal sealed class MainForm : Form
         Renomear(nameof(SugestaoLinha.Descricao), "Descrição");
         Renomear(nameof(SugestaoLinha.DataHora), "Data");
         Renomear(nameof(SugestaoLinha.Metodo), "Método");
-        Renomear(nameof(SugestaoLinha.QtdLinhas), "Linhas");
-        Renomear(nameof(SugestaoLinha.QtdLojas), "Lojas");
+        Renomear(nameof(SugestaoLinha.Cobertura), "Cobert.");
     }
 
     private static string MetodoTexto(byte tipoCalculo) => tipoCalculo switch
@@ -219,7 +395,11 @@ internal sealed class MainForm : Form
         if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada)
         {
             _janela = null;
-            _janelaInfo.Text = string.Empty;
+            // Só limpa quando há linhas navegáveis mas nenhuma selecionada. Com grid
+            // vazio (0 linhas), AplicarFiltro já escreveu a única explicação que o
+            // operador vê -- período sem sugestão, ou filtro sem match -- e apagar
+            // aqui deixaria a tela com grade vazia e nenhum motivo.
+            if (_sugestoes.Rows.Count > 0) _janelaInfo.Text = string.Empty;
             _extrair.Enabled = false;
             return;
         }
@@ -230,7 +410,7 @@ internal sealed class MainForm : Form
             // DataBoundItem ficou apontando para uma seleção que não existe mais no
             // _catalogo atual (ex.: grid recarregado entre o clique e este handler).
             _janela = null;
-            _janelaInfo.Text = string.Empty;
+            if (_sugestoes.Rows.Count > 0) _janelaInfo.Text = string.Empty;
             _extrair.Enabled = false;
             return;
         }
@@ -240,7 +420,10 @@ internal sealed class MainForm : Form
 
         if (_janela.Viavel)
         {
-            _janelaInfo.Text = $"Janela de dados a extrair: {_janela.Inicio:dd/MM/yyyy} a {_janela.Fim:dd/MM/yyyy}.";
+            // Não escreve a linha de informação: quem a escreve é ContarSelecao, no
+            // fluxo da seleção. Este método também roda no finally do ExecutarAsync,
+            // e escrever aqui apagaria as contagens já na tela toda vez que uma
+            // operação terminasse.
             _extrair.Enabled = true;
         }
         else
@@ -250,18 +433,45 @@ internal sealed class MainForm : Form
         }
     }
 
+    private static string TextoDaJanela(ExtractionWindow janela) =>
+        $"janela de dados {janela.Inicio:dd/MM/yyyy} a {janela.Fim:dd/MM/yyyy}";
+
+    /// <summary>
+    /// Contar é reação a trocar de seleção, e só a isso — por isso mora aqui e não
+    /// dentro de <see cref="AtualizarJanela"/>. Um clique em "Carregar sugestões"
+    /// chama AtualizarJanela duas vezes: uma pelo SelectionChanged que a ligação do
+    /// DataSource dispara, outra pelo finally do ExecutarAsync. Com o disparo dentro
+    /// dela, a segunda cancelava a contagem que a primeira tinha começado, e o caminho
+    /// feliz custava duas consultas ao ERP e uma OperationCanceledException por clique.
+    /// </summary>
+    private void ContarSelecao()
+    {
+        if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada) return;
+        if (_janela is not { Viavel: true } janela) return;
+
+        // DataGridView levanta SelectionChanged várias vezes ao ligar o DataSource, e
+        // todas trazem a mesma linha. Sem esta guarda, um único "Carregar sugestões"
+        // dispara várias contagens idênticas contra o ERP do cliente.
+        if (_sugestaoContada == selecionada.SugestaoId) return;
+        _sugestaoContada = selecionada.SugestaoId;
+
+        var textoDaJanela = TextoDaJanela(janela);
+        _janelaInfo.Text = textoDaJanela;
+        _ = ContarSelecaoAsync(selecionada.SugestaoId, textoDaJanela);
+    }
+
     private void EscolherPasta()
     {
         using var dialog = new FolderBrowserDialog { SelectedPath = _pastaSaida.Text };
         if (dialog.ShowDialog(this) == DialogResult.OK) _pastaSaida.Text = dialog.SelectedPath;
     }
 
-    private async Task ExtrairAsync()
+    private Task ExtrairAsync()
     {
         if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada || _janela is not { Viavel: true } janela)
         {
             MessageBox.Show(this, "Selecione uma sugestão com janela viável.", "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
+            return Task.CompletedTask;
         }
 
         var request = new ExtractionRequest
@@ -274,81 +484,30 @@ internal sealed class MainForm : Form
         };
         _config.Save();
 
-        _cts = new CancellationTokenSource();
-        _cancelar.Enabled = true;
-        _progresso.Value = 0;
+        // Progress<T> captura o SynchronizationContext no momento em que é construído.
+        // Precisa nascer aqui, na thread da UI, antes do Task.Run que ExecutarAsync faz
+        // internamente -- construído dentro do delegate (thread do pool), o callback
+        // chegaria sem contexto nenhum. OperacaoUi.Reportar faz marshaling defensivo
+        // para esse caso, mas depender disso seria apostar ao contrário do que este
+        // ponto deveria garantir.
+        var progresso = new Progress<ExtractionProgress>(p =>
+            _operacao?.Reportar($"[{p.FileIndex}/{p.FileCount}] {p.FileName} — {p.RowsWritten:N0} linhas", p.FileIndex));
 
-        var progress = new Progress<ExtractionProgress>(p =>
-        {
-            _progresso.Value = Math.Min(p.FileIndex, _progresso.Maximum);
-            _status.Text = $"[{p.FileIndex}/{p.FileCount}] {p.FileName} — {p.RowsWritten:N0} linhas";
-        });
-
-        await RunGuardedAsync("Extraindo...", async () =>
-        {
-            var service = new ExtractionService();
-            var token = _cts.Token;
-            var result = await Task.Run(() => service.Run(request, progress, token), token);
-
-            Log($"ZIP gerado: {result.ZipPath} ({result.ZipBytes / 1024d / 1024d:N1} MB)");
-            foreach (var (file, count) in result.RowsByFile) Log($"  {file}: {count:N0} linhas");
-            foreach (var warning in result.Warnings) Log($"  AVISO: {warning}");
-            _progresso.Value = _progresso.Maximum;
-        });
-
-        _cancelar.Enabled = false;
-        _cts.Dispose();
-        _cts = null;
+        return ExecutarAsync("Extraindo", StageContract.WriteOrder.Length,
+            ct => new ExtractionService().Run(request, progresso, ct),
+            resultado =>
+            {
+                _log.Escrever($"ZIP gerado: {resultado.ZipPath} ({resultado.ZipBytes / 1024d / 1024d:N1} MB)");
+                foreach (var (file, count) in resultado.RowsByFile) _log.Escrever($"  {file}: {count:N0} linhas");
+                foreach (var warning in resultado.Warnings) _log.Escrever($"  AVISO: {warning}");
+            });
     }
 
-    /// <summary>Centraliza o tratamento de erro para a UI nunca quebrar por exceção de I/O ou SQL.</summary>
-    private async Task RunGuardedAsync(string statusInicial, Func<Task> action)
+    private void CopiarLog()
     {
-        _extrair.Enabled = false;
-        _testar.Enabled = false;
-        _carregarSugestoes.Enabled = false;
-        _status.Text = statusInicial;
-        Log(statusInicial);
-
-        try
-        {
-            await action();
-            _status.Text = "Concluído.";
-        }
-        catch (OperationCanceledException)
-        {
-            _status.Text = "Cancelado.";
-            Log("Cancelado pelo usuário — o ZIP parcial foi descartado.");
-        }
-        catch (Exception ex)
-        {
-            _status.Text = "Falhou.";
-            var mensagem = ex.Message + DicaLogonTrigger(ex);
-            Log($"ERRO: {mensagem}");
-            MessageBox.Show(this, mensagem, "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-        finally
-        {
-            _testar.Enabled = true;
-            _carregarSugestoes.Enabled = true;
-            AtualizarJanela(); // reabilita "Extrair" conforme a seleção atual, não incondicionalmente
-        }
+        if (_painelDeLog.TextLength > 0) Clipboard.SetText(_painelDeLog.Text);
+        _log.Escrever("Log copiado para a área de transferência.");
     }
 
-    /// <summary>
-    /// Erro 17892 = logon trigger recusou a sessão. No PBS isso costuma ser
-    /// filtro por APP_NAME(), e a mensagem crua do SQL Server não ajuda em nada.
-    /// </summary>
-    private static string DicaLogonTrigger(Exception ex) =>
-        ex is Microsoft.Data.SqlClient.SqlException { Number: 17892 }
-            ? Environment.NewLine + Environment.NewLine
-              + "O servidor tem um logon trigger que recusou a conexão — normalmente por causa do "
-              + "nome da aplicação. Ajuste 'ApplicationName' em extrator.config.json (vazio usa o "
-              + "padrão do provider) e tente de novo."
-            : string.Empty;
-
-    private void Log(string message) =>
-        _log.AppendText($"{DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture)}  {message}{Environment.NewLine}");
-
-    private sealed record SugestaoLinha(long SugestaoId, string Descricao, DateTime DataHora, string Metodo, int QtdLinhas, int QtdLojas);
+    private sealed record SugestaoLinha(long SugestaoId, string Descricao, DateTime DataHora, string Metodo, int Cobertura);
 }

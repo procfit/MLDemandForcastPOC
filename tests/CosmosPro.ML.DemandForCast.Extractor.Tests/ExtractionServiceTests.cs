@@ -9,8 +9,25 @@ namespace CosmosPro.ML.DemandForCast.Extractor.Tests;
 /// sujeita a erro desta fase: fabricar (ou deixar de fabricar) uma linha de
 /// placeholder na hora errada quebra a FK composta (RedeId, Sku) no import.
 /// </summary>
-public sealed class ExtractionServiceTests
+public sealed class ExtractionServiceTests : IDisposable
 {
+    private readonly List<string> _pastasTemporarias = [];
+
+    public void Dispose()
+    {
+        foreach (var pasta in _pastasTemporarias)
+        {
+            if (Directory.Exists(pasta)) Directory.Delete(pasta, recursive: true);
+        }
+    }
+
+    private string NovaPastaTemporaria()
+    {
+        var pasta = Path.Combine(Path.GetTempPath(), "extrator-teste-" + Guid.NewGuid().ToString("N"));
+        _pastasTemporarias.Add(pasta);
+        return pasta;
+    }
+
     [Fact]
     public void Sku_da_sugestao_ausente_do_cadastro_e_reportado()
     {
@@ -71,7 +88,7 @@ public sealed class ExtractionServiceTests
     [Fact]
     public void Etapa_sem_erro_devolve_o_valor_intacto()
     {
-        ExtractionService.Step("lojas.csv (lojas.sql)", () => 42).Should().Be(42);
+        ExtractionService.Step(new Etapa("lojas.csv", "lojas.sql"), () => 42).Should().Be(42);
     }
 
     [Fact]
@@ -81,11 +98,12 @@ public sealed class ExtractionServiceTests
         // 'System.Decimal' to type 'System.Int32'" e nada mais — nem a query, nem
         // o arquivo de destino. Sem isso, achar a coluna é adivinhação.
         var causa = new InvalidCastException("Unable to cast object of type 'System.Decimal' to type 'System.Int32'.");
+        var etapa = new Etapa("escopo da sugestão", "escopo_sugestao.sql");
 
-        var acao = () => ExtractionService.Step<int>("escopo da sugestão (escopo_sugestao.sql)", () => throw causa);
+        var acao = () => ExtractionService.Step<int>(etapa, () => throw causa);
 
-        acao.Should().Throw<ExtractionStepException>()
-            .Where(ex => ex.Etapa == "escopo da sugestão (escopo_sugestao.sql)")
+        acao.Should().Throw<EtapaFalhouException>()
+            .Where(ex => ex.Etapa == etapa)
             .Where(ex => ReferenceEquals(ex.InnerException, causa))
             .WithMessage("*escopo_sugestao.sql*")
             .WithMessage("*System.Decimal*");
@@ -96,10 +114,10 @@ public sealed class ExtractionServiceTests
     {
         // A etapa mais interna é a que sabe onde quebrou; embrulhar de novo a cada
         // nível deixaria a mensagem com uma trilha de prefixos e a causa no fim.
-        var acao = () => ExtractionService.Step<int>("externa", () =>
-            ExtractionService.Step<int>("interna", () => throw new InvalidOperationException("raiz")));
+        var acao = () => ExtractionService.Step<int>(new Etapa("externa", null), () =>
+            ExtractionService.Step<int>(new Etapa("interna", null), () => throw new InvalidOperationException("raiz")));
 
-        acao.Should().Throw<ExtractionStepException>().Where(ex => ex.Etapa == "interna");
+        acao.Should().Throw<EtapaFalhouException>().Where(ex => ex.Etapa == new Etapa("interna", null));
     }
 
     [Fact]
@@ -107,8 +125,75 @@ public sealed class ExtractionServiceTests
     {
         // O modo linha de comando separa cancelamento de falha pelo código de
         // saída, e essa separação é feita pelo tipo da exceção.
-        var acao = () => ExtractionService.Step<int>("vendas.csv (vendas.sql)", () => throw new OperationCanceledException());
+        var acao = () => ExtractionService.Step<int>(new Etapa("vendas.csv", "vendas.sql"), () => throw new OperationCanceledException());
 
         acao.Should().Throw<OperationCanceledException>();
+    }
+
+    [Fact]
+    public void Run_com_pasta_de_saida_invalida_devolve_falha_e_nao_lanca()
+    {
+        // Caminho impossível: a falha tem de chegar como Result, não como exceção
+        // atravessando a borda do serviço.
+        var request = new ExtractionRequest
+        {
+            ConnectionString = "Data Source=nao.existe;Initial Catalog=x;User ID=u;Password=p;Connect Timeout=1",
+            SugestaoId = 1,
+            DataInicial = new DateOnly(2025, 1, 1),
+            DataFinal = new DateOnly(2025, 1, 31),
+            OutputDirectory = NovaPastaTemporaria(),
+        };
+
+        var resultado = new ExtractionService().Run(request, new Progress<ExtractionProgress>(), CancellationToken.None);
+
+        resultado.IsFailed.Should().BeTrue();
+        resultado.Errors.Single().Should().BeAssignableTo<ExtratorErro>();
+    }
+
+    [Fact]
+    public void Falha_de_conexao_na_extracao_nao_deixa_zip_parcial()
+    {
+        // ZIP parcial é pior que nenhum: ele passa na validação de header do import e
+        // entraria no Stage como se estivesse completo.
+        var pasta = NovaPastaTemporaria();
+        var request = new ExtractionRequest
+        {
+            ConnectionString = "Data Source=nao.existe;Initial Catalog=x;User ID=u;Password=p;Connect Timeout=1",
+            SugestaoId = 1,
+            DataInicial = new DateOnly(2025, 1, 1),
+            DataFinal = new DateOnly(2025, 1, 31),
+            OutputDirectory = pasta,
+        };
+
+        new ExtractionService().Run(request, new Progress<ExtractionProgress>(), CancellationToken.None);
+
+        Directory.GetFiles(pasta, "*.zip").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Cancelamento_pedido_lanca_em_vez_de_devolver_falha_e_nao_deixa_zip_parcial()
+    {
+        // Cancelar um ExecuteReader síncrono chega como SqlException, não como
+        // OperationCanceledException — sem a guarda em Run, isso seria classificado
+        // como falha comum (ConexaoPerdidaErro, transitório) em vez de reconhecido
+        // como pedido do operador. Forçado sem banco: a conexão nunca abre, mas o
+        // que se pina é que, com o token já cancelado, Run lança em vez de
+        // devolver Result — qualquer que seja a exceção crua que o disparou.
+        var pasta = NovaPastaTemporaria();
+        var request = new ExtractionRequest
+        {
+            ConnectionString = "Data Source=nao.existe;Initial Catalog=x;User ID=u;Password=p;Connect Timeout=1",
+            SugestaoId = 1,
+            DataInicial = new DateOnly(2025, 1, 1),
+            DataFinal = new DateOnly(2025, 1, 31),
+            OutputDirectory = pasta,
+        };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var acao = () => new ExtractionService().Run(request, new Progress<ExtractionProgress>(), cts.Token);
+
+        acao.Should().Throw<OperationCanceledException>();
+        Directory.GetFiles(pasta, "*.zip").Should().BeEmpty();
     }
 }
