@@ -27,13 +27,28 @@ internal sealed record LojaOption(int LojaId, string Nome)
     public override string ToString() => $"{LojaId} - {Nome}";
 }
 
-/// <summary>Cabeçalho de uma sugestão, como vem de SUGESTOES_COMPRAS sozinha.</summary>
+/// <summary>
+/// Cabeçalho de uma sugestão, como vem de SUGESTOES_COMPRAS sozinha.
+/// <para>
+/// <b>Sem cobertura aqui.</b> Ela morava neste registro, lida do
+/// <c>MAX(DIAS_CURVA_A..E)</c>, e o campo estava errado: é o parâmetro do método 2 e vem
+/// zerado em 83% das sugestões de eMax/eSeg — o método que este projeto compara. Passou a
+/// vir em <see cref="SugestaoContagem.DiasCoberturaMax"/>, do <c>DIAS_ESTOQUE</c> dos itens.
+/// </para>
+/// </summary>
 internal sealed record SugestaoCatalogoCabecalho(
     long SugestaoId,
     string? Descricao,
     DateTime DataHora,
-    byte TipoCalculo,
-    int DiasCoberturaMax);
+    byte TipoCalculo);
 
-/// <summary>Linhas e lojas de uma sugestão, contadas em SUGESTOES_COMPRAS_RESULTADO.</summary>
-internal sealed record SugestaoContagem(long SugestaoId, int QtdLinhas, int QtdLojas);
+/// <summary>
+/// Linhas, lojas e cobertura de uma sugestão, de SUGESTOES_COMPRAS_RESULTADO.
+/// <para>
+/// <see cref="DiasCoberturaMax"/> é o maior <c>DIAS_ESTOQUE</c> entre os itens — até onde a
+/// janela precisa ir para cobrir o item mais longo. Zero quando a sugestão não tem item
+/// nenhum, e aí a janela derivada é inviável por construção.
+/// </para>
+/// </summary>
+internal sealed record SugestaoContagem(
+    long SugestaoId, int QtdLinhas, int QtdLojas, int DiasCoberturaMax);

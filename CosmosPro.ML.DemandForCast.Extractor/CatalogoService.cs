@@ -102,21 +102,26 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
         registro.GetInt64(0),
         registro.IsDBNull(1) ? null : registro.GetString(1),
         registro.GetDateTime(2),
-        registro.GetByte(3),
-        // NULL quando os cinco DIAS_CURVA_* são todos NULL. Zero é o fallback seguro:
-        // a janela derivada fica só até a data da sugestão, e o comprador escolhe
-        // outra, em vez de o catálogo inteiro travar.
-        registro.IsDBNull(4) ? 0 : registro.GetInt32(4));
+        registro.GetByte(3));
 
     /// <summary>
     /// Zero linhas é resposta legítima: a sugestão pode existir em SUGESTOES_COMPRAS
     /// e não ter nenhuma linha em SUGESTOES_COMPRAS_RESULTADO (id 17658 na instância
     /// real). Quem recusa a extração é LoadEscopoSugestao, não a contagem.
+    /// <para>
+    /// Cobertura zero na ausência de linhas é o fallback correto, e não um chute: sem item
+    /// não há o que cobrir, e a janela derivada dessa cobertura sai inviável — que é
+    /// exatamente o desfecho desejado.
+    /// </para>
     /// </summary>
     internal static SugestaoContagem LerContagem(long sugestaoId, IDataReader reader) =>
         reader.Read()
-            ? new SugestaoContagem(reader.GetInt64(0), reader.GetInt32(1), reader.GetInt32(2))
-            : new SugestaoContagem(sugestaoId, 0, 0);
+            ? new SugestaoContagem(
+                reader.GetInt64(0),
+                reader.GetInt32(1),
+                reader.GetInt32(2),
+                reader.IsDBNull(3) ? 0 : reader.GetInt32(3))
+            : new SugestaoContagem(sugestaoId, 0, 0, 0);
 
     /// <summary>
     /// Filtro em memória sobre o catálogo já carregado: doze meses são ~19.500

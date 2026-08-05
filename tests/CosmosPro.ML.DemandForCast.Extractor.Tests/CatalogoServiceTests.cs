@@ -15,40 +15,40 @@ namespace CosmosPro.ML.DemandForCast.Extractor.Tests;
 public sealed class CatalogoServiceTests
 {
     private static DataTableReader LeitorDeCabecalho(
-        long id = 18172, string? descricao = "ACHE RX", byte tipoCalculo = 1, object? diasCobertura = null)
+        long id = 18172, string? descricao = "ACHE RX", byte tipoCalculo = 1)
     {
         var tabela = new DataTable();
         tabela.Columns.Add("SugestaoId", typeof(long));
         tabela.Columns.Add("Descricao", typeof(string));
         tabela.Columns.Add("DataHora", typeof(DateTime));
         tabela.Columns.Add("TipoCalculo", typeof(byte));
-        tabela.Columns.Add("DiasCoberturaMax", typeof(int));
         tabela.Rows.Add(
             id,
             descricao ?? (object)DBNull.Value,
             new DateTime(2026, 6, 9, 14, 30, 0),
-            tipoCalculo,
-            diasCobertura ?? DBNull.Value);
+            tipoCalculo);
         return tabela.CreateDataReader();
     }
 
-    private static DataTableReader LeitorDeContagem(params (long Id, int Linhas, int Lojas)[] linhas)
+    private static DataTableReader LeitorDeContagem(params (long Id, int Linhas, int Lojas, object? Cobertura)[] linhas)
     {
         var tabela = new DataTable();
         tabela.Columns.Add("SugestaoId", typeof(long));
         tabela.Columns.Add("QtdLinhas", typeof(int));
         tabela.Columns.Add("QtdLojas", typeof(int));
-        foreach (var (id, qtdLinhas, qtdLojas) in linhas) tabela.Rows.Add(id, qtdLinhas, qtdLojas);
+        tabela.Columns.Add("DiasCoberturaMax", typeof(int));
+        foreach (var (id, qtdLinhas, qtdLojas, cobertura) in linhas)
+            tabela.Rows.Add(id, qtdLinhas, qtdLojas, cobertura ?? DBNull.Value);
         return tabela.CreateDataReader();
     }
 
     private static SugestaoCatalogoCabecalho Cabecalho(long id, string? descricao) =>
-        new(id, descricao, new DateTime(2026, 3, 1, 8, 0, 0), 1, 30);
+        new(id, descricao, new DateTime(2026, 3, 1, 8, 0, 0), 1);
 
     [Fact]
     public void Cabecalho_e_lido_na_ordem_dos_ordinais_da_query()
     {
-        using var reader = LeitorDeCabecalho(diasCobertura: 5);
+        using var reader = LeitorDeCabecalho();
         reader.Read();
 
         var cabecalho = CatalogoService.LerCabecalho(reader);
@@ -57,39 +57,47 @@ public sealed class CatalogoServiceTests
         cabecalho.Descricao.Should().Be("ACHE RX");
         cabecalho.DataHora.Should().Be(new DateTime(2026, 6, 9, 14, 30, 0));
         cabecalho.TipoCalculo.Should().Be(1);
-        cabecalho.DiasCoberturaMax.Should().Be(5);
     }
 
     [Fact]
     public void Descricao_nula_no_pbs_vira_nulo_e_nao_quebra()
     {
-        using var reader = LeitorDeCabecalho(descricao: null, diasCobertura: 5);
+        using var reader = LeitorDeCabecalho(descricao: null);
         reader.Read();
 
         CatalogoService.LerCabecalho(reader).Descricao.Should().BeNull();
     }
 
+    /// <summary>
+    /// MAX(DIAS_ESTOQUE) volta NULL quando a sugestao nao tem item nenhum. Zero e o valor
+    /// certo: sem item nao ha o que cobrir, e ExtractionWindow.Derive recusa cobertura zero
+    /// com motivo — em vez de o catalogo travar ou de a extracao seguir sem gabarito.
+    /// </summary>
     [Fact]
-    public void Cobertura_nula_vira_zero_para_a_janela_ficar_degenerada_em_vez_de_o_catalogo_travar()
+    public void Cobertura_nula_na_contagem_vira_zero_e_a_janela_recusa()
     {
-        // Os cinco DIAS_CURVA_* podem ser todos NULL. Zero faz ExtractionWindow.Derive
-        // devolver uma janela sem cobertura futura, que o comprador vê e descarta.
-        using var reader = LeitorDeCabecalho(diasCobertura: null);
-        reader.Read();
+        using var reader = LeitorDeContagem((18172, 0, 0, null));
 
-        CatalogoService.LerCabecalho(reader).DiasCoberturaMax.Should().Be(0);
+        var contagem = CatalogoService.LerContagem(18172, reader);
+
+        contagem.DiasCoberturaMax.Should().Be(0);
+
+        var janela = ExtractionWindow.Derive(
+            new DateOnly(2026, 3, 1), contagem.DiasCoberturaMax, new DateOnly(2026, 7, 28));
+        janela.Viavel.Should().BeFalse("cobertura zero nao produz um dia de gabarito");
     }
 
     [Fact]
     public void Contagem_da_sugestao_e_lida_da_linha_que_veio()
     {
-        using var reader = LeitorDeContagem((18172, 365, 1));
+        using var reader = LeitorDeContagem((18172, 365, 1, 5));
 
         var contagem = CatalogoService.LerContagem(18172, reader);
 
         contagem.SugestaoId.Should().Be(18172);
         contagem.QtdLinhas.Should().Be(365);
         contagem.QtdLojas.Should().Be(1);
+        contagem.DiasCoberturaMax.Should().Be(5);
     }
 
     [Fact]
@@ -102,7 +110,7 @@ public sealed class CatalogoServiceTests
 
         var contagem = CatalogoService.LerContagem(17658, reader);
 
-        contagem.Should().Be(new SugestaoContagem(17658, 0, 0));
+        contagem.Should().Be(new SugestaoContagem(17658, 0, 0, 0));
     }
 
     [Fact]

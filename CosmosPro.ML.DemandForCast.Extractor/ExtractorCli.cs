@@ -110,7 +110,15 @@ internal static class ExtractorCli
         if (cabecalho.IsFailed) return Falhar(cabecalho, options.StackTrace);
 
         var sugestao = cabecalho.Value;
-        var janela = ExtractionWindow.Derive(DateOnly.FromDateTime(sugestao.DataHora), sugestao.DiasCoberturaMax, hoje);
+
+        // Segunda ida ao banco, e obrigatória: a cobertura vive no DIAS_ESTOQUE dos itens,
+        // não no cabeçalho (ver catalogo_sugestoes_contagens.sql). É um seek pelo índice de
+        // SUGESTAO_COMPRA — o mesmo custo que a contagem já tinha.
+        var contagem = servico.Contar(connectionString, options.SugestaoId, ct);
+        if (contagem.IsFailed) return Falhar(contagem, options.StackTrace);
+
+        var diasCobertura = contagem.Value.DiasCoberturaMax;
+        var janela = ExtractionWindow.Derive(DateOnly.FromDateTime(sugestao.DataHora), diasCobertura, hoje);
         if (!janela.Viavel)
         {
             Console.Error.WriteLine(janela.MotivoInviabilidade);
@@ -118,7 +126,8 @@ internal static class ExtractorCli
         }
 
         Console.WriteLine($"Sugestão {sugestao.SugestaoId} — {Descricao(sugestao)} — {sugestao.DataHora:dd/MM/yyyy HH:mm} — {Metodo(sugestao.TipoCalculo)}");
-        Console.WriteLine($"Janela de dados: {janela.Inicio:dd/MM/yyyy} a {janela.Fim:dd/MM/yyyy} ({sugestao.DiasCoberturaMax} dias de cobertura).");
+        Console.WriteLine($"{contagem.Value.QtdLinhas:N0} itens em {contagem.Value.QtdLojas:N0} loja(s).");
+        Console.WriteLine($"Janela de dados: {janela.Inicio:dd/MM/yyyy} a {janela.Fim:dd/MM/yyyy} ({diasCobertura} dias de cobertura).");
         Console.WriteLine($"Pasta de saída: {options.OutputDirectory}");
         Console.WriteLine();
 
@@ -175,22 +184,21 @@ internal static class ExtractorCli
     private static void EscreverTabela(IReadOnlyList<SugestaoCatalogoCabecalho> catalogo, DateOnly hoje)
     {
         var saida = new StringBuilder();
-        saida.AppendLine($"{"Sugestão",10}  {"Data",16}  {"Método",20}  {"Cobert.",7}  {"Janela",23}  Descrição");
+        saida.AppendLine($"{"Sugestão",10}  {"Data",16}  {"Método",20}  Descrição");
 
         foreach (var c in catalogo)
         {
-            var janela = ExtractionWindow.Derive(DateOnly.FromDateTime(c.DataHora), c.DiasCoberturaMax, hoje);
-            var textoJanela = janela.Viavel
-                ? $"{janela.Inicio:dd/MM/yyyy}-{janela.Fim:dd/MM/yyyy}"
-                : "inviável";
-
             saida.AppendLine(
-                $"{c.SugestaoId,10}  {c.DataHora,16:dd/MM/yyyy HH:mm}  {Truncar(Metodo(c.TipoCalculo), 20),20}  " +
-                $"{c.DiasCoberturaMax,7}  {textoJanela,23}  {Descricao(c)}");
+                $"{c.SugestaoId,10}  {c.DataHora,16:dd/MM/yyyy HH:mm}  {Truncar(Metodo(c.TipoCalculo), 20),20}  {Descricao(c)}");
         }
 
         saida.AppendLine();
-        saida.AppendLine($"{catalogo.Count} sugestão(ões). 'inviável' = a cobertura ainda não terminou, então não há como julgar quem acertou.");
+        saida.AppendLine($"{catalogo.Count} sugestão(ões).");
+        saida.AppendLine(
+            "Cobertura e janela não aparecem aqui: elas vêm do DIAS_ESTOQUE dos itens, e agregar " +
+            "SUGESTOES_COMPRAS_RESULTADO para o catálogo inteiro custava ~20 min na instância real. " +
+            "O `--extract <id>` faz essa leitura para a sugestão escolhida e recusa, com o motivo, " +
+            "se a cobertura for zero, ainda não tiver terminado, ou passar do horizonte do modelo.");
         Console.Out.Write(saida.ToString());
     }
 
@@ -198,22 +206,20 @@ internal static class ExtractorCli
     private static void EscreverTsv(IReadOnlyList<SugestaoCatalogoCabecalho> catalogo, DateOnly hoje)
     {
         var saida = new StringBuilder();
+
+        // Colunas de cobertura/janela/viabilidade saíram: elas exigiriam agregar
+        // SUGESTOES_COMPRAS_RESULTADO para o catálogo inteiro. O consumidor de TSV que quiser
+        // isso pede por sugestão. Ver EscreverTabela.
         saida.AppendLine(string.Join('\t',
-            "SugestaoId", "DataHora", "TipoCalculo", "Metodo", "DiasCobertura",
-            "Viavel", "JanelaInicio", "JanelaFim", "Descricao"));
+            "SugestaoId", "DataHora", "TipoCalculo", "Metodo", "Descricao"));
 
         foreach (var c in catalogo)
         {
-            var janela = ExtractionWindow.Derive(DateOnly.FromDateTime(c.DataHora), c.DiasCoberturaMax, hoje);
             saida.AppendLine(string.Join('\t',
                 c.SugestaoId.ToString(CultureInfo.InvariantCulture),
                 c.DataHora.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture),
                 c.TipoCalculo.ToString(CultureInfo.InvariantCulture),
                 Metodo(c.TipoCalculo),
-                c.DiasCoberturaMax.ToString(CultureInfo.InvariantCulture),
-                janela.Viavel ? "true" : "false",
-                janela.Inicio.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                janela.Fim.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 SemTabulacao(Descricao(c))));
         }
 

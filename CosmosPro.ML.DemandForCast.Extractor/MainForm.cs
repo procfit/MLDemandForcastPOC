@@ -299,8 +299,13 @@ internal sealed class MainForm : Form
     }
 
     /// <summary>
-    /// Contagem é conforto do operador, não pré-condição: não passa por ExecutarAsync,
-    /// não trava input nenhum, não usa OperacaoUi e nunca abre MessageBox.
+    /// Contagem **é pré-condição** desde que a cobertura passou a vir do <c>DIAS_ESTOQUE</c>
+    /// dos itens: é ela que traz o número do qual a janela é derivada, então o Extrair só
+    /// habilita quando ela volta viável. Antes era só conforto do operador — a janela saía do
+    /// cabeçalho, que estava errado.
+    /// <para>
+    /// Segue fora de <see cref="ExecutarAsync"/>: não trava input, não usa OperacaoUi e nunca
+    /// abre MessageBox. O que ela ganhou foi o direito de habilitar o botão.
     /// <para>
     /// Uma contagem em voo <b>não</b> é cancelada quando outra começa. Cancelar um
     /// <c>SqlCommand</c> em execução derruba a consulta com exceção, e para 10 ms de
@@ -310,7 +315,7 @@ internal sealed class MainForm : Form
     /// geração: quem volta fora de época se cala.
     /// </para>
     /// </summary>
-    private async Task ContarSelecaoAsync(long sugestaoId, string textoDaJanela)
+    private async Task ContarSelecaoAsync(long sugestaoId, DateTime dataSugestao)
     {
         var geracao = ++_contagemGeracao;
         var connectionString = BuildConnectionString();
@@ -328,11 +333,33 @@ internal sealed class MainForm : Form
         if (resultado.IsSuccess)
         {
             var contagem = resultado.Value;
-            _janelaInfo.Text = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s) · {textoDaJanela}";
+
+            // A janela nasce aqui, e o botão com ela: a cobertura acabou de chegar.
+            _janela = ExtractionWindow.Derive(
+                DateOnly.FromDateTime(dataSugestao),
+                contagem.DiasCoberturaMax,
+                DateOnly.FromDateTime(DateTime.Today));
+
+            var itens = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s)";
+
+            if (_janela.Viavel)
+            {
+                _janelaInfo.Text = $"{itens} · {TextoDaJanela(_janela)} · cobertura {contagem.DiasCoberturaMax} dia(s)";
+                _extrair.Enabled = true;
+            }
+            else
+            {
+                // O motivo por extenso, e não um "inviável" seco: ele diz o que escolher em
+                // vez desta, que é a única coisa acionável para quem está na tela.
+                _janelaInfo.Text = $"{itens} · {_janela.MotivoInviabilidade}";
+                _extrair.Enabled = false;
+            }
         }
         else
         {
             var erro = resultado.ErroOuFallback();
+            _janela = null;
+            _extrair.Enabled = false;
             _janelaInfo.Text = $"Não foi possível contar os itens da sugestão {sugestaoId}: {erro.Message}";
             _log.Escrever($"ERRO ao contar itens da sugestão {sugestaoId}: {erro.Message}");
             foreach (var (chave, valor) in erro.Metadata)
@@ -352,7 +379,7 @@ internal sealed class MainForm : Form
         _sugestoes.DataSource = visiveis
             .Select(c => new SugestaoLinha(
                 c.SugestaoId, c.Descricao ?? "(sem descrição)", c.DataHora,
-                MetodoTexto(c.TipoCalculo), c.DiasCoberturaMax))
+                MetodoTexto(c.TipoCalculo)))
             .ToList();
         ConfigurarColunas();
 
@@ -380,7 +407,6 @@ internal sealed class MainForm : Form
         Renomear(nameof(SugestaoLinha.Descricao), "Descrição");
         Renomear(nameof(SugestaoLinha.DataHora), "Data");
         Renomear(nameof(SugestaoLinha.Metodo), "Método");
-        Renomear(nameof(SugestaoLinha.Cobertura), "Cobert.");
     }
 
     private static string MetodoTexto(byte tipoCalculo) => tipoCalculo switch
@@ -415,22 +441,16 @@ internal sealed class MainForm : Form
             return;
         }
 
-        _janela = ExtractionWindow.Derive(
-            DateOnly.FromDateTime(catalogo.DataHora), catalogo.DiasCoberturaMax, DateOnly.FromDateTime(DateTime.Today));
-
-        if (_janela.Viavel)
-        {
-            // Não escreve a linha de informação: quem a escreve é ContarSelecao, no
-            // fluxo da seleção. Este método também roda no finally do ExecutarAsync,
-            // e escrever aqui apagaria as contagens já na tela toda vez que uma
-            // operação terminasse.
-            _extrair.Enabled = true;
-        }
-        else
-        {
-            _janelaInfo.Text = _janela.MotivoInviabilidade;
-            _extrair.Enabled = false;
-        }
+        // A janela **não** é decidida aqui, e essa é a mudança: a cobertura vem do
+        // DIAS_ESTOQUE dos itens, que só a contagem conhece. Antes ela saía do cabeçalho e
+        // este método podia decidir na hora — o campo do cabeçalho estava errado (era do
+        // método 2 e vinha zerado em 83% das sugestões de eMax/eSeg), e a consequência foi
+        // uma extração de 879 MB sem um dia de gabarito.
+        //
+        // Enquanto a contagem não volta, não há janela e o Extrair fica desabilitado:
+        // habilitar antes seria oferecer uma extração cuja viabilidade ninguém conferiu.
+        _janela = null;
+        _extrair.Enabled = false;
     }
 
     private static string TextoDaJanela(ExtractionWindow janela) =>
@@ -447,7 +467,6 @@ internal sealed class MainForm : Form
     private void ContarSelecao()
     {
         if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada) return;
-        if (_janela is not { Viavel: true } janela) return;
 
         // DataGridView levanta SelectionChanged várias vezes ao ligar o DataSource, e
         // todas trazem a mesma linha. Sem esta guarda, um único "Carregar sugestões"
@@ -455,9 +474,8 @@ internal sealed class MainForm : Form
         if (_sugestaoContada == selecionada.SugestaoId) return;
         _sugestaoContada = selecionada.SugestaoId;
 
-        var textoDaJanela = TextoDaJanela(janela);
-        _janelaInfo.Text = textoDaJanela;
-        _ = ContarSelecaoAsync(selecionada.SugestaoId, textoDaJanela);
+        _janelaInfo.Text = "Consultando itens e cobertura da sugestão…";
+        _ = ContarSelecaoAsync(selecionada.SugestaoId, selecionada.DataHora);
     }
 
     private void EscolherPasta()
@@ -509,5 +527,9 @@ internal sealed class MainForm : Form
         _log.Escrever("Log copiado para a área de transferência.");
     }
 
-    private sealed record SugestaoLinha(long SugestaoId, string Descricao, DateTime DataHora, string Metodo, int Cobertura);
+    // Sem coluna de cobertura: ela vem do DIAS_ESTOQUE dos itens, e agregar
+    // SUGESTOES_COMPRAS_RESULTADO para o catalogo inteiro custava ~20 min na instancia real
+    // (ver CatalogoService). O grid lista; quem descobre cobertura e viabilidade e a
+    // contagem da linha selecionada.
+    private sealed record SugestaoLinha(long SugestaoId, string Descricao, DateTime DataHora, string Metodo);
 }

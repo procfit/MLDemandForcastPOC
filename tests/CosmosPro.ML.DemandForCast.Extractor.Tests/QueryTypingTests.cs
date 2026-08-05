@@ -26,22 +26,22 @@ public sealed class QueryTypingTests
     // lojas_disponiveis.sql -> ExtractionService.LoadLojas (GetInt32, GetString)
     [InlineData("lojas_disponiveis.sql", "LojaId")]
     [InlineData("lojas_disponiveis.sql", "Nome")]
-    // catalogo_sugestoes.sql -> LoadCabecalhosDoCatalogo (GetInt64, GetString, GetDateTime, GetByte, GetInt32)
+    // catalogo_sugestoes.sql -> LerCabecalho (GetInt64, GetString, GetDateTime, GetByte)
     [InlineData("catalogo_sugestoes.sql", "SugestaoId")]
     [InlineData("catalogo_sugestoes.sql", "Descricao")]
     [InlineData("catalogo_sugestoes.sql", "DataHora")]
     [InlineData("catalogo_sugestoes.sql", "TipoCalculo")]
-    [InlineData("catalogo_sugestoes.sql", "DiasCoberturaMax")]
     // sugestao_por_id.sql -> LoadSugestaoPorId, mesmos ordinais do catálogo
     [InlineData("sugestao_por_id.sql", "SugestaoId")]
     [InlineData("sugestao_por_id.sql", "Descricao")]
     [InlineData("sugestao_por_id.sql", "DataHora")]
     [InlineData("sugestao_por_id.sql", "TipoCalculo")]
-    [InlineData("sugestao_por_id.sql", "DiasCoberturaMax")]
-    // catalogo_sugestoes_contagens.sql -> LoadContagensDoCatalogo (GetInt64, GetInt32, GetInt32)
+    // catalogo_sugestoes_contagens.sql -> LerContagem (GetInt64, GetInt32, GetInt32, GetInt32).
+    // DiasCoberturaMax mora aqui, e nao no cabecalho: e o MAX(DIAS_ESTOQUE) dos itens.
     [InlineData("catalogo_sugestoes_contagens.sql", "SugestaoId")]
     [InlineData("catalogo_sugestoes_contagens.sql", "QtdLinhas")]
     [InlineData("catalogo_sugestoes_contagens.sql", "QtdLojas")]
+    [InlineData("catalogo_sugestoes_contagens.sql", "DiasCoberturaMax")]
     // sugestoes_compra_diagnostico.sql -> AvisarDivergenciaEmpresaFilial (GetInt32)
     [InlineData("sugestoes_compra_diagnostico.sql", "QtdDivergencias")]
     // sugestoes_compra.sql -> CopySugestaoHeader (GetString, GetDateTime, GetByte)
