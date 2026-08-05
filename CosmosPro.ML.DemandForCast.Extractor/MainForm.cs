@@ -79,7 +79,11 @@ internal sealed class MainForm : Form
 
         _testar.Click += async (_, _) => await TestarConexaoAsync();
         _carregarSugestoes.Click += async (_, _) => await CarregarSugestoesAsync();
-        _sugestoes.SelectionChanged += (_, _) => AtualizarJanela();
+        _sugestoes.SelectionChanged += (_, _) =>
+        {
+            AtualizarJanela();
+            ContarSelecao();
+        };
         _escolherPasta.Click += (_, _) => EscolherPasta();
         _extrair.Click += async (_, _) => await ExtrairAsync();
         _cancelar.Click += (_, _) => _operacao?.Cancelar();
@@ -423,21 +427,38 @@ internal sealed class MainForm : Form
 
         if (_janela.Viavel)
         {
-            var textoDaJanela = $"janela de dados {_janela.Inicio:dd/MM/yyyy} a {_janela.Fim:dd/MM/yyyy}";
-            _janelaInfo.Text = textoDaJanela;
+            // Não escreve a linha de informação: quem a escreve é ContarSelecao, no
+            // fluxo da seleção. Este método também roda no finally do ExecutarAsync,
+            // e escrever aqui apagaria as contagens já na tela toda vez que uma
+            // operação terminasse.
             _extrair.Enabled = true;
-
-            // Contagem é conforto do operador, não pré-condição: roda de novo a cada
-            // recálculo de janela, mesmo para a mesma seleção -- ContarSelecaoAsync é
-            // barata e cancela a anterior sozinha, e não passa por ExecutarAsync, então
-            // não há recursão (ExecutarAsync termina chamando AtualizarJanela; isto não).
-            _ = ContarSelecaoAsync(catalogo.SugestaoId, textoDaJanela);
         }
         else
         {
             _janelaInfo.Text = _janela.MotivoInviabilidade;
             _extrair.Enabled = false;
         }
+    }
+
+    private static string TextoDaJanela(ExtractionWindow janela) =>
+        $"janela de dados {janela.Inicio:dd/MM/yyyy} a {janela.Fim:dd/MM/yyyy}";
+
+    /// <summary>
+    /// Contar é reação a trocar de seleção, e só a isso — por isso mora aqui e não
+    /// dentro de <see cref="AtualizarJanela"/>. Um clique em "Carregar sugestões"
+    /// chama AtualizarJanela duas vezes: uma pelo SelectionChanged que a ligação do
+    /// DataSource dispara, outra pelo finally do ExecutarAsync. Com o disparo dentro
+    /// dela, a segunda cancelava a contagem que a primeira tinha começado, e o caminho
+    /// feliz custava duas consultas ao ERP e uma OperationCanceledException por clique.
+    /// </summary>
+    private void ContarSelecao()
+    {
+        if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada) return;
+        if (_janela is not { Viavel: true } janela) return;
+
+        var textoDaJanela = TextoDaJanela(janela);
+        _janelaInfo.Text = textoDaJanela;
+        _ = ContarSelecaoAsync(selecionada.SugestaoId, textoDaJanela);
     }
 
     private void EscolherPasta()
