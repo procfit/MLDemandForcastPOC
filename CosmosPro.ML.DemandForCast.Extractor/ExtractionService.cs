@@ -48,13 +48,27 @@ internal sealed class ExtractionService
 
                 var total = StageContract.WriteOrder.Length;
 
+                // Escopo por SKU: vendas, estoque, compras, promocoes e o cadastro de produtos
+                // passam a trazer **so os itens da sugestao**. Sem isto o extrator levava o
+                // historico de todos os produtos das lojas — medido numa sugestao real de 1.695
+                // SKUs: 16,8 milhoes de linhas de venda e 52,9 milhoes de estoque diario, 242 MB
+                // de ZIP e 5 minutos de extracao, para o treino descartar quase tudo.
+                //
+                // Escopar o estoque nao tem custo metodologico: ele existe para mascarar ruptura
+                // dos SKUs previstos, e so os da sugestao sao previstos. Escopar as **vendas**
+                // muda o que o modelo global ve — ele deixa de aprender padroes de outros
+                // produtos. Para esta comparacao e defensavel (so os itens da sugestao sao
+                // pontuados, e o proprio ERP nao usa os outros para calcular estes), mas e uma
+                // escolha, nao um detalhe de implementacao.
+                var skusCsv = JuntarSkus(skusDaSugestao);
+
                 rows[StageContract.Lojas] = CopyQuery(connection, "lojas.sql", StageContract.Lojas, zip, lojaIds, request.DataInicial, request.DataFinal, 1, total, progress, ct, InspectLoja(warnings));
                 var (produtosRowCount, skusFabricados) = CopyProdutosGarantindoUniao(connection, zip, skusDaSugestao, 2, total, progress, ct, warnings);
                 rows[StageContract.Produtos] = produtosRowCount;
-                rows[StageContract.Vendas] = CopyQuery(connection, "vendas.sql", StageContract.Vendas, zip, lojaIds, request.DataInicial, request.DataFinal, 3, total, progress, ct);
-                rows[StageContract.EstoquesDiarios] = CopyEstoques(connection, zip, lojaIds, request.DataInicial, request.DataFinal, 4, total, progress, ct);
-                rows[StageContract.Compras] = CopyQuery(connection, "compras.sql", StageContract.Compras, zip, lojaIds, request.DataInicial, request.DataFinal, 5, total, progress, ct);
-                rows[StageContract.Promocoes] = CopyQuery(connection, "promocoes.sql", StageContract.Promocoes, zip, lojaIds, request.DataInicial, request.DataFinal, 6, total, progress, ct);
+                rows[StageContract.Vendas] = CopyQuery(connection, "vendas.sql", StageContract.Vendas, zip, lojaIds, request.DataInicial, request.DataFinal, 3, total, progress, ct, skusCsv: skusCsv);
+                rows[StageContract.EstoquesDiarios] = CopyEstoques(connection, zip, lojaIds, request.DataInicial, request.DataFinal, 4, total, progress, ct, skusCsv);
+                rows[StageContract.Compras] = CopyQuery(connection, "compras.sql", StageContract.Compras, zip, lojaIds, request.DataInicial, request.DataFinal, 5, total, progress, ct, skusCsv: skusCsv);
+                rows[StageContract.Promocoes] = CopyQuery(connection, "promocoes.sql", StageContract.Promocoes, zip, lojaIds, request.DataInicial, request.DataFinal, 6, total, progress, ct, skusCsv: skusCsv);
 
                 // Sem fonte no ERP: o IQVIA é dado de mercado externo. O arquivo
                 // precisa existir porque o validador do import exige os sete CSVs.
@@ -232,6 +246,11 @@ internal sealed class ExtractionService
             var header = StageContract.Headers[StageContract.Produtos];
             using var entry = zip.CreateEntry(StageContract.Produtos, header);
             using var command = new SqlCommand(SqlResources.Load("produtos.sql"), connection) { CommandTimeout = CommandTimeoutSeconds };
+            // O cadastro tambem e escopado: 79.749 produtos da rede viravam 79.749 linhas para
+            // uma sugestao de 1.695 SKUs. A checagem de SKU sem cadastro logo abaixo continua
+            // valendo — com o filtro, "ausente" passa a significar "nao existe em PRODUTOS",
+            // que e exatamente o que ela quer saber.
+            command.Parameters.Add("@skus", SqlDbType.NVarChar, -1).Value = JuntarSkus(skusDaSugestao);
             using var cancelRegistration = ct.Register(command.Cancel);
             ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
@@ -311,9 +330,10 @@ internal sealed class ExtractionService
         int fileCount,
         IProgress<ExtractionProgress> progress,
         CancellationToken ct,
-        Action<IDataRecord>? inspect = null)
+        Action<IDataRecord>? inspect = null,
+        string? skusCsv = null)
     {
-        using var command = CreateJanelaCommand(connection, SqlResources.Load(queryFile), lojaIds, dataInicial, dataFinal);
+        using var command = CreateJanelaCommand(connection, SqlResources.Load(queryFile), lojaIds, dataInicial, dataFinal, skusCsv);
         return CopyQueryCore(entryName, queryFile, zip, command, fileIndex, fileCount, progress, ct, inspect);
     }
 
@@ -376,12 +396,13 @@ internal sealed class ExtractionService
         int fileIndex,
         int fileCount,
         IProgress<ExtractionProgress> progress,
-        CancellationToken ct) =>
+        CancellationToken ct,
+        string skusCsv) =>
         Step(new Etapa(StageContract.EstoquesDiarios, "estoques_movimentos.sql"), () =>
         {
             var header = StageContract.Headers[StageContract.EstoquesDiarios];
             using var entry = zip.CreateEntry(StageContract.EstoquesDiarios, header);
-            using var command = CreateJanelaCommand(connection, SqlResources.Load("estoques_movimentos.sql"), lojaIds, dataInicial, dataFinal);
+            using var command = CreateJanelaCommand(connection, SqlResources.Load("estoques_movimentos.sql"), lojaIds, dataInicial, dataFinal, skusCsv);
             using var cancelRegistration = ct.Register(command.Cancel);
             ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
@@ -426,8 +447,22 @@ internal sealed class ExtractionService
         }
     };
 
+    /// <summary>
+    /// Os SKUs da sugestão vão num **único** parâmetro delimitado, lido por
+    /// <c>STRING_SPLIT</c> dentro da consulta, e não um parâmetro por SKU.
+    /// <para>
+    /// O SQL Server aceita no máximo 2.100 parâmetros por comando, e as lojas já consomem
+    /// dezenas deles. Medido numa sugestão real (id 9589): 1.695 SKUs distintos e 93 lojas —
+    /// 1.788 parâmetros, a 312 do teto. Uma sugestão maior estouraria, e estouraria **em
+    /// produção contra o ERP do cliente**, não aqui. Um parâmetro só não tem teto que dependa
+    /// do tamanho da sugestão.
+    /// </para>
+    /// </summary>
+    private static string JuntarSkus(IReadOnlySet<string> skus) => string.Join(',', skus);
+
     private static SqlCommand CreateJanelaCommand(
-        SqlConnection connection, string sql, IReadOnlyList<int> lojaIds, DateOnly dataInicial, DateOnly dataFinal)
+        SqlConnection connection, string sql, IReadOnlyList<int> lojaIds, DateOnly dataInicial, DateOnly dataFinal,
+        string? skusCsv = null)
     {
         var placeholders = lojaIds
             .Select((_, i) => "@loja" + i.ToString(CultureInfo.InvariantCulture))
@@ -444,6 +479,15 @@ internal sealed class ExtractionService
         }
         command.Parameters.Add("@dataInicial", SqlDbType.Date).Value = dataInicial.ToDateTime(TimeOnly.MinValue);
         command.Parameters.Add("@dataFinal", SqlDbType.Date).Value = dataFinal.ToDateTime(TimeOnly.MinValue);
+
+        // Só as consultas escopadas por SKU declaram @skus; lojas.sql não. Declarar um
+        // parâmetro que a consulta não usa é aceito pelo SQL Server, mas passar null aqui
+        // deixa explícito no chamador quais consultas são escopadas e quais não.
+        if (skusCsv is not null)
+        {
+            command.Parameters.Add("@skus", SqlDbType.NVarChar, -1).Value = skusCsv;
+        }
+
         return command;
     }
 

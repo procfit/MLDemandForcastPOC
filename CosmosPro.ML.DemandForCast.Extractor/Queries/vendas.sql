@@ -1,3 +1,6 @@
+-- ESCOPO POR SKU: @skus traz os produtos da sugestao, num parametro unico lido por
+-- STRING_SPLIT. Um parametro por SKU estouraria o teto de 2.100 do SQL Server numa
+-- sugestao grande (1.695 SKUs + 93 lojas ja da 1.788) -- e estouraria em producao.
 -- Stage.Vendas <- VENDAS_ANALITICAS, agregado para o grão diário (Data, Loja, Sku).
 -- MOVIMENTO é a data do movimento; DATA é o getdate() da inclusão e não serve.
 -- Não há preço unitário na origem — é derivado do valor líquido sobre a quantidade.
@@ -19,6 +22,7 @@ WHERE V.EMPRESA IN ({{LOJAS}})
   AND V.MOVIMENTO >= @dataInicial
   AND V.MOVIMENTO <= @dataFinal
   AND V.GERA_DEMANDA = 1
+  AND V.PRODUTO IN (SELECT CONVERT(numeric(15,0), value) FROM STRING_SPLIT(@skus, ','))
 GROUP BY V.MOVIMENTO, V.EMPRESA, V.PRODUTO
 HAVING SUM(V.QUANTIDADE) <> 0
 ORDER BY V.MOVIMENTO, V.EMPRESA, V.PRODUTO;

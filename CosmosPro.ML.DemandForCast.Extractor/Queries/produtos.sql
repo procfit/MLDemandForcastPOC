@@ -1,6 +1,11 @@
+-- ESCOPO POR SKU: @skus traz os produtos da sugestao, num parametro unico lido por
+-- STRING_SPLIT. Um parametro por SKU estouraria o teto de 2.100 do SQL Server numa
+-- sugestao grande (1.695 SKUs + 93 lojas ja da 1.788) -- e estouraria em producao.
 -- Stage.Produtos <- PRODUTOS (+ EAN, hierarquia, marca, DCB)
--- Exporta o mestre inteiro (não filtra por loja) para garantir a FK de
--- Vendas/Estoques/Compras/Promocoes no Stage.
+-- Escopado aos SKUs da sugestao (@skus), nao o mestre inteiro: 79.749 produtos da
+-- rede viravam 79.749 linhas para uma sugestao de 1.695 SKUs. As FKs de
+-- Vendas/Estoques/Compras/Promocoes no Stage continuam satisfeitas porque essas
+-- quatro tabelas passaram a ser escopadas pelo MESMO conjunto.
 -- RegistroAnvisa e ClasseTerapeutica não têm fonte confiável no PBS:
 -- ABC_FARMA_EDI_PRODUTOS está vazia e INDICACOES_TERAPEUTICAS é degenerada.
 -- ListaControle segue pendente de definição da fonte (LISTA_PNU vs CONTROLADO).
@@ -37,4 +42,5 @@ OUTER APPLY (
     JOIN dbo.DCB_MEDICAMENTOS M ON M.DCB = PD.DCB
     WHERE PD.PRODUTO = P.PRODUTO
 ) PA
+WHERE P.PRODUTO IN (SELECT CONVERT(numeric(15,0), value) FROM STRING_SPLIT(@skus, ','))
 ORDER BY P.PRODUTO;

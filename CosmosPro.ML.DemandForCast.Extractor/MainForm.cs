@@ -28,7 +28,44 @@ internal sealed class MainForm : Form
         SelectionMode = DataGridViewSelectionMode.FullRowSelect,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
     };
-    private readonly Label _janelaInfo = new() { Width = 612, Height = 30, AutoSize = false };
+    // Largura menor que os 612 originais para abrir espaço ao semáforo à esquerda e ao
+    // indicador de análise à direita, na mesma linha — o box da sugestão não tem altura
+    // sobrando, e mover o resto do formulário significaria recalcular todas as posições
+    // absolutas abaixo dele.
+    private readonly Label _janelaInfo = new() { Width = 460, Height = 30, AutoSize = false };
+
+    /// <summary>
+    /// Verde ou vermelho ao lado do texto: o desfecho da análise legível de relance.
+    /// <para>
+    /// Um <c>Panel</c> colorido, e não um caractere com <c>ForeColor</c>, para não depender de
+    /// fonte instalada nem de tamanho de glifo. Escondido enquanto a análise corre — quem
+    /// sinaliza processo em curso é a barra em marquee, e um semáforo aceso durante a consulta
+    /// afirmaria um desfecho que ainda não existe.
+    /// </para>
+    /// <para>
+    /// A cor não carrega a informação sozinha: o texto ao lado continua dizendo o motivo por
+    /// extenso, para quem não distingue as duas cores e para quem precisa saber <i>por quê</i>.
+    /// </para>
+    /// </summary>
+    private readonly Panel _semaforo = new() { Width = 12, Height = 12, Visible = false };
+
+    /// <summary>
+    /// Indicador indeterminado da análise da sugestão selecionada (itens, cobertura, janela).
+    /// <para>
+    /// Existe porque trocar o texto do rótulo não é suficiente: quem olha de relance não
+    /// distingue "estou consultando" de "terminei e a sugestão não serve" — as duas coisas são
+    /// uma frase parada na tela. A barra em marquee só existe enquanto a consulta corre, então
+    /// ausência dela significa desfecho, e a cor do rótulo diz qual.
+    /// </para>
+    /// </summary>
+    private readonly ProgressBar _analisando = new()
+    {
+        Width = 124,
+        Height = 14,
+        Style = ProgressBarStyle.Marquee,
+        MarqueeAnimationSpeed = 30,
+        Visible = false,
+    };
 
     private readonly TextBox _pastaSaida = new() { Width = 360 };
     private readonly Button _escolherPasta = new() { Text = "...", Width = 40 };
@@ -40,9 +77,9 @@ internal sealed class MainForm : Form
     private readonly Label _status = new() { AutoSize = true, Text = "Pronto." };
     private readonly TextBox _painelDeLog = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Width = 620, Height = 160 };
 
-    private readonly GroupBox _conexaoBox = new() { Text = "Conexão", Location = new Point(12, 12), Size = new Size(636, 150) };
-    private readonly GroupBox _sugestaoBox = new() { Text = "Sugestão de compra", Location = new Point(12, 172), Size = new Size(636, 230) };
-    private readonly GroupBox _saidaBox = new() { Text = "Saída", Location = new Point(12, 412), Size = new Size(636, 60) };
+    private readonly GroupBox _conexaoBox = new() { Text = "Conexão", Location = new Point(12, 12), Size = new Size(696, 150) };
+    private readonly GroupBox _sugestaoBox = new() { Text = "Sugestão de compra", Location = new Point(12, 172), Size = new Size(696, 230) };
+    private readonly GroupBox _saidaBox = new() { Text = "Saída", Location = new Point(12, 412), Size = new Size(696, 60) };
 
     private readonly AppConfig _config = AppConfig.Load();
     private readonly ExtratorLog _log;
@@ -67,7 +104,10 @@ internal sealed class MainForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(660, 760);
+        // 720 e nao 660: o painel de credenciais (usuario + senha + botao Testar) mede ~570px
+        // a partir de x=100, entao passava da borda e cortava o botao. Alargar o form e as
+        // tres caixas mantem todas as posicoes verticais absolutas intactas.
+        ClientSize = new Size(720, 760);
 
         // ExtratorLog.Escrever roda este callback direto na thread de quem chamou --
         // inclusive a thread do pool do Task.Run de ExecutarAsync, quando é Retentativa
@@ -125,8 +165,12 @@ internal sealed class MainForm : Form
         _sugestaoBox.Controls.Add(_filtro);
         _sugestoes.Location = new Point(12, 60);
         _sugestaoBox.Controls.Add(_sugestoes);
-        _janelaInfo.Location = new Point(12, 196);
+        _semaforo.Location = new Point(12, 200);
+        _sugestaoBox.Controls.Add(_semaforo);
+        _janelaInfo.Location = new Point(32, 196);
         _sugestaoBox.Controls.Add(_janelaInfo);
+        _analisando.Location = new Point(500, 200);
+        _sugestaoBox.Controls.Add(_analisando);
 
         _saidaBox.Controls.Add(new Label { Text = "Pasta:", Location = new Point(12, 26), AutoSize = true });
         _pastaSaida.Location = new Point(100, 23);
@@ -344,14 +388,16 @@ internal sealed class MainForm : Form
 
             if (_janela.Viavel)
             {
-                _janelaInfo.Text = $"{itens} · {TextoDaJanela(_janela)} · cobertura {contagem.DiasCoberturaMax} dia(s)";
+                MostrarDesfecho(
+                    $"{itens} · {TextoDaJanela(_janela)} · cobertura {contagem.DiasCoberturaMax} dia(s)",
+                    viavel: true);
                 _extrair.Enabled = true;
             }
             else
             {
                 // O motivo por extenso, e não um "inviável" seco: ele diz o que escolher em
                 // vez desta, que é a única coisa acionável para quem está na tela.
-                _janelaInfo.Text = $"{itens} · {_janela.MotivoInviabilidade}";
+                MostrarDesfecho($"{itens} · {_janela.MotivoInviabilidade}", viavel: false);
                 _extrair.Enabled = false;
             }
         }
@@ -360,7 +406,9 @@ internal sealed class MainForm : Form
             var erro = resultado.ErroOuFallback();
             _janela = null;
             _extrair.Enabled = false;
-            _janelaInfo.Text = $"Não foi possível contar os itens da sugestão {sugestaoId}: {erro.Message}";
+            MostrarDesfecho(
+                $"Não foi possível contar os itens da sugestão {sugestaoId}: {erro.Message}",
+                viavel: false);
             _log.Escrever($"ERRO ao contar itens da sugestão {sugestaoId}: {erro.Message}");
             foreach (var (chave, valor) in erro.Metadata)
             {
@@ -386,12 +434,12 @@ internal sealed class MainForm : Form
         if (_catalogo.Count == 0)
         {
             _janela = null;
-            _janelaInfo.Text = "Nenhuma sugestão encontrada no período.";
+            MostrarDesfecho("Nenhuma sugestão encontrada no período.", viavel: false);
             _extrair.Enabled = false;
         }
         else if (visiveis.Count == 0)
         {
-            _janelaInfo.Text = $"Nenhuma das {_catalogo.Count:N0} sugestões carregadas casa com o filtro.";
+            MostrarDesfecho($"Nenhuma das {_catalogo.Count:N0} sugestões carregadas casa com o filtro.", viavel: false);
             _extrair.Enabled = false;
         }
     }
@@ -425,7 +473,7 @@ internal sealed class MainForm : Form
             // vazio (0 linhas), AplicarFiltro já escreveu a única explicação que o
             // operador vê -- período sem sugestão, ou filtro sem match -- e apagar
             // aqui deixaria a tela com grade vazia e nenhum motivo.
-            if (_sugestoes.Rows.Count > 0) _janelaInfo.Text = string.Empty;
+            if (_sugestoes.Rows.Count > 0) LimparAnalise();
             _extrair.Enabled = false;
             return;
         }
@@ -436,7 +484,7 @@ internal sealed class MainForm : Form
             // DataBoundItem ficou apontando para uma seleção que não existe mais no
             // _catalogo atual (ex.: grid recarregado entre o clique e este handler).
             _janela = null;
-            if (_sugestoes.Rows.Count > 0) _janelaInfo.Text = string.Empty;
+            if (_sugestoes.Rows.Count > 0) LimparAnalise();
             _extrair.Enabled = false;
             return;
         }
@@ -464,6 +512,42 @@ internal sealed class MainForm : Form
     /// dela, a segunda cancelava a contagem que a primeira tinha começado, e o caminho
     /// feliz custava duas consultas ao ERP e uma OperationCanceledException por clique.
     /// </summary>
+    /// <summary>
+    /// Estado "analisando": barra indeterminada visível e rótulo em cor neutra. A barra é o que
+    /// separa processo em curso de desfecho — texto sozinho não separa, porque uma frase parada
+    /// na tela parece igual nos dois casos.
+    /// </summary>
+    private void MostrarAnalise(string texto)
+    {
+        _semaforo.Visible = false;
+        _janelaInfo.ForeColor = SystemColors.GrayText;
+        _janelaInfo.Text = texto;
+        _analisando.Visible = true;
+    }
+
+    /// <summary>
+    /// Estado terminal: barra escondida (o sinal de que acabou) e cor dizendo qual desfecho.
+    /// Vermelho para recusa e falha, cor normal para viável — cor sozinha não carrega a
+    /// informação, o texto continua explicando o motivo por extenso.
+    /// </summary>
+    private void MostrarDesfecho(string texto, bool viavel)
+    {
+        _analisando.Visible = false;
+        _semaforo.BackColor = viavel ? Color.SeaGreen : Color.Firebrick;
+        _semaforo.Visible = true;
+        _janelaInfo.ForeColor = viavel ? SystemColors.ControlText : Color.Firebrick;
+        _janelaInfo.Text = texto;
+    }
+
+    /// <summary>Sem seleção não há o que analisar nem desfecho a mostrar.</summary>
+    private void LimparAnalise()
+    {
+        _analisando.Visible = false;
+        _semaforo.Visible = false;
+        _janelaInfo.ForeColor = SystemColors.ControlText;
+        _janelaInfo.Text = string.Empty;
+    }
+
     private void ContarSelecao()
     {
         if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada) return;
@@ -474,7 +558,10 @@ internal sealed class MainForm : Form
         if (_sugestaoContada == selecionada.SugestaoId) return;
         _sugestaoContada = selecionada.SugestaoId;
 
-        _janelaInfo.Text = "Consultando itens e cobertura da sugestão…";
+        // Diz **qual** sugestão está sendo analisada: trocar de linha rápido deixa a resposta
+        // anterior sendo descartada em silêncio (pela geração), e sem o id na tela o operador
+        // não sabe a qual linha a frase se refere.
+        MostrarAnalise($"Analisando a sugestão {selecionada.SugestaoId}: itens, cobertura e janela…");
         _ = ContarSelecaoAsync(selecionada.SugestaoId, selecionada.DataHora);
     }
 
@@ -510,6 +597,16 @@ internal sealed class MainForm : Form
         // ponto deveria garantir.
         var progresso = new Progress<ExtractionProgress>(p =>
             _operacao?.Reportar($"[{p.FileIndex}/{p.FileCount}] {p.FileName} — {p.RowsWritten:N0} linhas", p.FileIndex));
+
+        // Identifica **o que** está sendo extraído antes de começar. Sem esta linha o log dizia
+        // "Extraindo…" e depois "ZIP gerado", e não havia como saber de qual sugestão o arquivo
+        // era — trocar a seleção depois de extrair deixava tela e arquivo discordando, sem nada
+        // no log para desempatar. Aconteceu: um ZIP da sugestão 7840 foi lido como sendo da
+        // 7823, que era a linha selecionada no momento em que se olhou.
+        _log.Escrever(
+            $"Extraindo a sugestão {selecionada.SugestaoId} ({selecionada.Metodo}) de " +
+            $"{selecionada.DataHora:dd/MM/yyyy HH:mm} — janela {janela.Inicio:dd/MM/yyyy} a " +
+            $"{janela.Fim:dd/MM/yyyy}.");
 
         return ExecutarAsync("Extraindo", StageContract.WriteOrder.Length,
             ct => new ExtractionService().Run(request, progresso, ct),

@@ -1,3 +1,6 @@
+-- ESCOPO POR SKU: @skus traz os produtos da sugestao, num parametro unico lido por
+-- STRING_SPLIT. Um parametro por SKU estouraria o teto de 2.100 do SQL Server numa
+-- sugestao grande (1.695 SKUs + 93 lojas ja da 1.788) -- e estouraria em producao.
 -- Stage.Promocoes <- PROMOCOES_FLEXIVEIS (+ _EMPRESAS, _LEVE, _GANHE).
 -- A tabela PROMOCOES "simples" está vazia no PBS analisado; o que a rede usa
 -- são as promoções flexíveis, que trazem o percentual pronto
@@ -28,6 +31,7 @@ CROSS APPLY (
 WHERE PE.EMPRESA IN ({{LOJAS}})
   AND PF.VALIDADE_FIM >= @dataInicial
   AND PF.VALIDADE_INI <  DATEADD(day, 1, @dataFinal)
+  AND X.PRODUTO IN (SELECT CONVERT(numeric(15,0), value) FROM STRING_SPLIT(@skus, ','))
 GROUP BY
     CONVERT(date, PF.VALIDADE_INI),
     CONVERT(date, PF.VALIDADE_FIM),

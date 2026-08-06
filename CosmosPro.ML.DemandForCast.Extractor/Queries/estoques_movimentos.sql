@@ -1,3 +1,6 @@
+-- ESCOPO POR SKU: @skus traz os produtos da sugestao, num parametro unico lido por
+-- STRING_SPLIT. Um parametro por SKU estouraria o teto de 2.100 do SQL Server numa
+-- sugestao grande (1.695 SKUs + 93 lojas ja da 1.788) -- e estouraria em producao.
 -- Saldo de fim de dia por (Loja, Sku), reconstruído a partir dos movimentos.
 --
 -- ATENÇÃO: ESTOQUE_LANCAMENTOS.ESTOQUE_SALDO (saldo corrente) vem NULL em 100%
@@ -25,6 +28,7 @@ WITH Diario AS (
     WHERE CE.TIPO_ESTOQUE = 2
       AND CE.EMPRESA IN ({{LOJAS}})
       AND L.DATA >= @dataInicial
+      AND L.PRODUTO IN (SELECT CONVERT(numeric(15,0), value) FROM STRING_SPLIT(@skus, ','))
     GROUP BY CE.EMPRESA, L.CENTRO_ESTOQUE, L.PRODUTO, CONVERT(date, L.DATA)
 ),
 Reconstruido AS (
