@@ -53,4 +53,38 @@ internal sealed record ZipManifest(
     /// <summary>Versão do assembly do extrator — nunca hardcoded, para o manifesto refletir o build real.</summary>
     public static string VersaoAtual() =>
         typeof(ZipManifest).Assembly.GetName().Version?.ToString() ?? "0.0.0";
+
+    /// <summary>
+    /// Quando este executável foi gerado. Mora ao lado de <see cref="VersaoAtual"/> porque as
+    /// duas respondem à mesma pergunta — <i>que binário é este?</i> — e separá-las convidaria
+    /// uma delas a divergir.
+    /// <para>
+    /// Vem da data de escrita do arquivo, e <b>não</b> do timestamp do cabeçalho PE: o SDK do
+    /// .NET compila de forma determinística por default, e nesse modo aquele campo é um hash
+    /// do conteúdo, não uma data — exibi-lo daria "1976" ou algo igualmente absurdo.
+    /// </para>
+    /// <para>
+    /// Devolve <c>null</c> quando o caminho do processo não existe (host que roda o assembly
+    /// sem executável próprio, como o runner de testes) em vez de inventar um instante: a tela
+    /// que mostra isto precisa poder dizer "desconhecido".
+    /// </para>
+    /// </summary>
+    public static DateTime? GeradoEm()
+    {
+        var caminho = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(caminho) || !File.Exists(caminho)) return null;
+
+        try
+        {
+            return File.GetLastWriteTime(caminho);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }

@@ -75,6 +75,14 @@ internal sealed class MainForm : Form
     private readonly ProgressBar _progresso = new() { Width = 520, Height = 20, Style = ProgressBarStyle.Continuous, Maximum = StageContract.WriteOrder.Length };
     private readonly Button _copiarLog = new() { Text = "Copiar log", Width = 100 };
     private readonly Label _status = new() { AutoSize = true, Text = "Pronto." };
+
+    /// <summary>
+    /// Identidade do binário: versão e quando foi gerado. A UI Web mostra isto do extrator
+    /// publicado (versão + checksum na página da sessão, versão + data em /admin/extrator), e
+    /// sem o equivalente aqui não havia como o operador conferir se o .exe que ele abriu é o
+    /// mesmo que a aplicação distribui.
+    /// </summary>
+    private readonly Label _versaoInfo = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
     private readonly TextBox _painelDeLog = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Width = 620, Height = 160 };
 
     private readonly GroupBox _conexaoBox = new() { Text = "Conexão", Location = new Point(12, 12), Size = new Size(696, 150) };
@@ -120,6 +128,11 @@ internal sealed class MainForm : Form
 
         BuildLayout();
         ApplyConfig();
+
+        var geradoEm = ZipManifest.GeradoEm();
+        _versaoInfo.Text = geradoEm is { } quando
+            ? $"Extrator {ZipManifest.VersaoAtual()} · gerado em {quando:dd/MM/yyyy HH:mm}"
+            : $"Extrator {ZipManifest.VersaoAtual()} · data de geração desconhecida";
 
         _testar.Click += async (_, _) => await TestarConexaoAsync();
         _carregarSugestoes.Click += async (_, _) => await CarregarSugestoesAsync();
@@ -184,8 +197,9 @@ internal sealed class MainForm : Form
         _copiarLog.Location = new Point(540, 526);
         _status.Location = new Point(12, 556);
         _painelDeLog.Location = new Point(12, 580);
+        _versaoInfo.Location = new Point(12, 744);
 
-        Controls.AddRange([_conexaoBox, _sugestaoBox, _saidaBox, _extrair, _cancelar, _progresso, _copiarLog, _status, _painelDeLog]);
+        Controls.AddRange([_conexaoBox, _sugestaoBox, _saidaBox, _extrair, _cancelar, _progresso, _copiarLog, _status, _painelDeLog, _versaoInfo]);
     }
 
     private static void AddRow(Control parent, string label, Control field, int row)

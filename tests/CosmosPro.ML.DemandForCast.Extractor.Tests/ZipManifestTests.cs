@@ -112,6 +112,30 @@ public sealed class ManifestoContratoTests : IDisposable
         leitura.Manifesto.Should().BeEquivalentTo(escrito, o => o.ComparingRecordsByMembers());
     }
 
+    [Fact]
+    public void Versao_atual_nao_e_vazia()
+        => ZipManifest.VersaoAtual().Should().NotBeNullOrWhiteSpace();
+
+    /// <summary>
+    /// A data de geração sai da data de escrita do executável, **não** do timestamp do
+    /// cabeçalho PE. O SDK do .NET compila de forma determinística por default, e nesse modo
+    /// aquele campo do PE é um hash do conteúdo interpretado como data — costuma render
+    /// algo como 1976 ou 2103. Este teste falha se alguém "melhorar" a implementação para
+    /// lê-lo, porque a tela passaria a exibir uma data absurda com toda a confiança.
+    /// </summary>
+    [Fact]
+    public void Data_de_geracao_e_plausivel_ou_ausente_nunca_absurda()
+    {
+        var geradoEm = ZipManifest.GeradoEm();
+
+        if (geradoEm is null) return; // host sem executável próprio — ausência é resposta válida
+
+        geradoEm.Value.Should().BeAfter(new DateTime(2024, 1, 1),
+            "data anterior a isto denuncia leitura do timestamp do PE, que em build determinístico é um hash");
+        geradoEm.Value.Should().BeBefore(DateTime.Now.AddDays(2),
+            "data no futuro também denuncia hash lido como data");
+    }
+
     /// <summary>
     /// Parâmetros do construtor primário na ordem declarada. Records posicionais também
     /// expõem um construtor de cópia, então o critério é "o de mais parâmetros".
