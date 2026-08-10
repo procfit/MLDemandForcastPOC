@@ -14,13 +14,12 @@ conhece o acordo; o software não.
 
 ## 1. Por que agora
 
-Duas razões independentes, e as duas medidas na instância real da Natus.
+**A razão é confidencialidade, e ela vale por si.** A rede topou exportar algumas lojas,
+de algumas regiões. Dado de venda, preço de compra e política de estoque é estratégico e
+não pode chegar a concorrente. Hoje o extrator exporta **todas** as lojas que a sugestão
+cita, sem escolha — e não há nada que o comprador possa fazer a respeito.
 
-**Confidencialidade.** A rede topou exportar algumas lojas, de algumas regiões. Dado de
-venda e de política comercial é estratégico e não pode chegar a concorrente. Hoje o
-extrator exporta **todas** as lojas que a sugestão cita, sem escolha.
-
-**Viabilidade.** Sugestões recentes, contando lojas e itens:
+Sugestões recentes da Natus, para dimensionar o problema:
 
 | sugestão | lojas | itens |
 |---|---|---|
@@ -28,33 +27,65 @@ extrator exporta **todas** as lojas que a sugestão cita, sem escolha.
 | 22136 · MEDLEY LOJA | 98 | 16.072 |
 | 22137 · ENCOMENDAS | 8 | 24 |
 | 22135 · PECCIN | 1 | 20 |
-| 18172 · ACHE RX | 1 | 365 |
 
-A extração de **uma** loja (18172) produziu 3.502.333 linhas de estoque, 12,2 MB, em
-37 s. As tabelas pesadas são escopadas por loja e por 12 meses de janela, então uma
-sugestão de 98 lojas tende a centenas de milhões de linhas. Hoje essas sugestões são,
-na prática, inextraíveis.
+Uma sugestão de 98 lojas exporta hoje o histórico de 98 lojas. Não há como pedir menos.
+
+### O que este spec NÃO afirma
+
+Uma versão anterior deste documento dizia que uma sugestão de 98 lojas é "inextraível", com
+base numa extração que produziu 3.502.333 linhas de estoque para **uma** loja. Aquela
+medição foi feita antes de `e2a4480` estar na árvore, que escopou a extração aos SKUs da
+sugestão. **Os volumes de hoje são muito menores e não foram remedidos**, então
+inviabilidade por volume fica como hipótese não provada, não como justificativa.
+
+O que continua verdade sem medição nova: o volume das tabelas pesadas cresce linearmente
+com o número de lojas, e o filtro é o que dá ao comprador controle sobre esse fator.
+
+### Interação com a guarda de horizonte
+
+`a7b4446` fez o extrator **recusar** sugestão cuja cobertura passe dos 7 dias que o modelo
+prevê, lendo a cobertura dos itens. Amostrando 25 sugestões de julho, as coberturas de
+curva são 0, 10, 18, 20, 30 e 35 dias — então boa parte do catálogo é recusada antes de o
+filtro de lojas importar.
+
+Isso **não** enfraquece este trabalho: a autorização da rede vale independentemente de
+quantas sugestões passam pela guarda, e o filtro é ortogonal a ela. Mas quem for verificar
+esta feature contra o banco real precisa escolher uma sugestão que o extrator aceite — ver
+§9.
 
 ## 2. O que já é escopado por loja, e o que não é
 
-| arquivo do ZIP | escopado hoje | depois |
-|---|---|---|
-| `lojas`, `vendas`, `estoques_diarios`, `compras`, `promocoes` | sim, por `{{LOJAS}}` = lojas da sugestão | `{{LOJAS}}` = lojas **escolhidas** |
-| `sugestoes_compra_itens` | **não** | ganha `AND R.FILIAL IN ({{LOJAS}})` |
-| `produtos` | não (mestre inteiro, 79.711 SKUs) | **continua inteiro** |
-| `sugestoes_compra` (cabeçalho), `mercado_iqvia` (vazio) | sem dimensão de loja | inalterado |
+Dois eixos de escopo já existem, e é preciso não confundi-los. **SKU:** desde `e2a4480`,
+`produtos`, `vendas`, `estoques_diarios`, `compras` e `promocoes` recebem `@skus` — os SKUs
+da sugestão, num parâmetro único lido por `STRING_SPLIT`, porque um parâmetro por SKU
+estouraria o teto de 2.100 do SQL Server. **Loja:** `{{LOJAS}}` vira um parâmetro por id.
 
-`sugestoes_compra_itens` não é opcional por dois motivos que se somam. É o arquivo mais
-sensível do ZIP — demanda/dia calculada pelo ERP, estoque de segurança, estoque máximo,
-compra sugerida, compra autorizada e **preço de compra**, por loja e por SKU. E sem o
-filtro ele cita lojas que não estão em `lojas.csv`, o que quebra a FK composta
-`(RedeId, LojaId)` no `SqlBulkCopy` do Worker: o import falharia inteiro.
+| arquivo do ZIP | escopo por SKU | escopo por loja hoje | depois |
+|---|---|---|---|
+| `vendas`, `estoques_diarios`, `compras`, `promocoes` | sim, `@skus` | sim, `{{LOJAS}}` = lojas da sugestão | `{{LOJAS}}` = lojas **escolhidas** |
+| `lojas` | n/a | sim, `{{LOJAS}}` | idem |
+| `produtos` | sim, `@skus` | n/a (não tem `LojaId`) | inalterado |
+| `sugestoes_compra_itens` | é a **fonte** dos SKUs | **não** | ganha `AND R.FILIAL IN ({{LOJAS}})` |
+| `sugestoes_compra` (cabeçalho), `mercado_iqvia` (vazio) | n/a | n/a | inalterado |
 
-`produtos.csv` fica inteiro por decisão do usuário: o sortimento de uma farmácia é
-visível na prateleira, e o que é estratégico (volume, margem, preço, política de estoque)
-vive nos arquivos que têm `LojaId`. Fechar esse buraco depois custa uma consulta a mais
-para levantar a união de SKUs das lojas escolhidas, e exige garantir que nenhum SKU
-citado por venda/estoque/compra fique de fora — senão a FK `(RedeId, Sku)` quebra.
+**O único arquivo que precisa de query nova é `sugestoes_compra_itens`**, e não é opcional,
+por dois motivos que se somam. É o arquivo mais sensível do ZIP — demanda/dia calculada
+pelo ERP, estoque de segurança, estoque máximo, compra sugerida, compra autorizada e
+**preço de compra**, por loja e por SKU. E sem o filtro ele cita lojas que não estão em
+`lojas.csv`, o que quebra a FK composta `(RedeId, LojaId)` no `SqlBulkCopy` do Worker: o
+import falharia inteiro.
+
+`produtos.csv` **não** leva o mestre da rede — leva os SKUs da sugestão, e só. Uma versão
+anterior deste spec afirmava o contrário, e a pergunta feita ao usuário sobre sortimento
+partiu dessa premissa errada. A resposta dele ("sortimento não é segredo") continua válida
+e o desfecho é melhor do que ele aceitou: não há buraco de sortimento a fechar.
+
+**Efeito colateral que o filtro de loja produz sozinho:** com menos lojas, o conjunto de
+SKUs da sugestão diminui — `escopo_sugestao.sql` devolve pares (loja, SKU), e restringir
+lojas restringe os SKUs. Logo `@skus` encolhe junto, e `produtos`/`vendas`/`estoques`/
+`compras`/`promocoes` encolhem por dois eixos ao mesmo tempo. Isso é desejável, mas
+significa que o recorte de loja **muda o conteúdo de `produtos.csv`** — algo a conferir na
+verificação, porque um SKU que só existe nas lojas descartadas não deve mais aparecer.
 
 ## 3. Decisões tomadas
 
@@ -140,14 +171,39 @@ campos novos do manifesto; o teste de contrato existente, estendido; a leitura d
 `lojas_da_sugestao.sql` por `DataTableReader`; e a junção com os nomes, inclusive a loja
 sem cadastro.
 
-**Com banco, no fim:** extrair a sugestão 22136 (98 lojas) escolhendo 2, e conferir que
-**nenhum** dos sete CSVs contém `LojaId` fora das duas escolhidas. É a verificação que
-transforma "filtramos" em "está provado que filtramos", e é a única que fecha o requisito
-de confidencialidade de ponta a ponta.
+**Com banco, no fim.** A verificação que transforma "filtramos" em "está provado que
+filtramos" — e a única que fecha o requisito de confidencialidade de ponta a ponta.
+
+Ela precisa de uma sugestão que satisfaça **três** condições ao mesmo tempo: mais de uma
+loja, cobertura dentro dos 7 dias que a guarda de horizonte aceita, e itens em
+`SUGESTOES_COMPRAS_RESULTADO`. **Nenhum id fica cravado neste spec**: a versão anterior
+mandava usar a 22136, que tem cobertura 0 e é recusada antes de chegar ao filtro. Quem
+executar acha o candidato assim:
+
+1. `--list` e escolher uma sugestão com mais de uma loja;
+2. tentar `--extract` sem `--stores`; se a guarda recusar (exit 5), tentar a próxima;
+3. a primeira que passar é a sugestão do teste.
+
+Com ela em mãos, extrair duas vezes — sem `--stores` e com `--stores` de duas lojas — e
+conferir, nos CSVs dos dois ZIPs:
+
+- **nenhum** dos sete CSVs do ZIP recortado contém `LojaId` fora das duas escolhidas;
+- `lojas.csv` tem exatamente duas linhas;
+- `sugestoes_compra_itens.csv` encolheu, e todo `LojaId` dele está entre as duas;
+- `produtos.csv` do recorte é subconjunto do produtos do ZIP inteiro (ver §2: restringir
+  loja restringe SKU);
+- o `manifesto.json` declara as duas lojas e o total da sugestão.
+
+Se nenhuma sugestão do catálogo passar pela guarda de horizonte, a verificação de ponta a
+ponta **não pode ser feita** — e isso é resultado, não desculpa: registre no relatório em
+vez de declarar verificado.
 
 ## 10. Fora de escopo
 
-- **Restringir `produtos.csv`** ao sortimento das lojas escolhidas (§2).
+- **A limitação de horizonte** (o modelo prevê 7 dias, a sugestão do ERP cobre 10 a 35).
+  É o que hoje recusa boa parte do catálogo, é maior que este trabalho e merece
+  brainstorming próprio. O filtro de lojas é ortogonal e vale por si — a autorização da
+  rede não depende de quantas sugestões passam pela guarda.
 - **Mostrar a restrição na tela da comparação** — o dado passa a existir no manifesto;
   exibi-lo toca Worker, ApiService, Engine (migration) e Web.
 - **Teto configurado de lojas autorizadas**, que transformaria "não vaza" de disciplina em
