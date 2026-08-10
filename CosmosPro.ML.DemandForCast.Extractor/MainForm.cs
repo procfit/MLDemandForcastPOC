@@ -31,8 +31,9 @@ internal sealed class MainForm : Form
     // Largura menor que os 612 originais para abrir espaço ao semáforo à esquerda e ao
     // indicador de análise à direita, na mesma linha — o box da sugestão não tem altura
     // sobrando, e mover o resto do formulário significaria recalcular todas as posições
-    // absolutas abaixo dele.
-    private readonly Label _janelaInfo = new() { Width = 460, Height = 30, AutoSize = false };
+    // absolutas abaixo dele. Reduzida de 460 para 320 quando "Escolher lojas…" entrou na
+    // mesma linha, entre este rótulo e o indicador de análise.
+    private readonly Label _janelaInfo = new() { Width = 320, Height = 30, AutoSize = false };
 
     /// <summary>
     /// Verde ou vermelho ao lado do texto: o desfecho da análise legível de relance.
@@ -67,6 +68,8 @@ internal sealed class MainForm : Form
         Visible = false,
     };
 
+    private readonly Button _escolherLojas = new() { Text = "Escolher lojas…", Width = 130, Enabled = false };
+
     private readonly TextBox _pastaSaida = new() { Width = 360 };
     private readonly Button _escolherPasta = new() { Text = "...", Width = 40 };
 
@@ -96,6 +99,9 @@ internal sealed class MainForm : Form
 
     private IReadOnlyList<SugestaoCatalogoCabecalho> _catalogo = [];
     private ExtractionWindow? _janela;
+
+    private IReadOnlyList<LojaDaSugestao> _lojasDaSugestao = [];
+    private IReadOnlyList<int> _lojasEscolhidas = [];
 
     // Contagem por seleção: fetch próprio, fora de ExecutarAsync (ver ContarSelecaoAsync).
     // Um novo CTS por chamada -- trocar de linha rápido cancela a contagem anterior em
@@ -141,6 +147,7 @@ internal sealed class MainForm : Form
             AtualizarJanela();
             ContarSelecao();
         };
+        _escolherLojas.Click += async (_, _) => await EscolherLojasAsync();
         _escolherPasta.Click += (_, _) => EscolherPasta();
         _extrair.Click += async (_, _) => await ExtrairAsync();
         _cancelar.Click += (_, _) => _operacao?.Cancelar();
@@ -182,6 +189,8 @@ internal sealed class MainForm : Form
         _sugestaoBox.Controls.Add(_semaforo);
         _janelaInfo.Location = new Point(32, 196);
         _sugestaoBox.Controls.Add(_janelaInfo);
+        _escolherLojas.Location = new Point(362, 196);
+        _sugestaoBox.Controls.Add(_escolherLojas);
         _analisando.Location = new Point(500, 200);
         _sugestaoBox.Controls.Add(_analisando);
 
@@ -489,6 +498,9 @@ internal sealed class MainForm : Form
             // aqui deixaria a tela com grade vazia e nenhum motivo.
             if (_sugestoes.Rows.Count > 0) LimparAnalise();
             _extrair.Enabled = false;
+            _escolherLojas.Enabled = false;
+            _lojasDaSugestao = [];
+            _lojasEscolhidas = [];
             return;
         }
 
@@ -500,6 +512,9 @@ internal sealed class MainForm : Form
             _janela = null;
             if (_sugestoes.Rows.Count > 0) LimparAnalise();
             _extrair.Enabled = false;
+            _escolherLojas.Enabled = false;
+            _lojasDaSugestao = [];
+            _lojasEscolhidas = [];
             return;
         }
 
@@ -577,6 +592,49 @@ internal sealed class MainForm : Form
         // não sabe a qual linha a frase se refere.
         MostrarAnalise($"Analisando a sugestão {selecionada.SugestaoId}: itens, cobertura e janela…");
         _ = ContarSelecaoAsync(selecionada.SugestaoId, selecionada.DataHora);
+
+        _lojasDaSugestao = [];
+        _lojasEscolhidas = [];
+        _escolherLojas.Enabled = true;
+    }
+
+    /// <summary>
+    /// As lojas só são buscadas quando o comprador pede para escolher: é uma ida ao
+    /// banco por sugestão, e a maioria das seleções não termina em extração.
+    /// </summary>
+    private async Task EscolherLojasAsync()
+    {
+        if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada) return;
+
+        if (_lojasDaSugestao.Count == 0)
+        {
+            var connectionString = BuildConnectionString();
+            var lidas = await Task.Run(() => _catalogoService.LojasDaSugestao(connectionString, selecionada.SugestaoId, CancellationToken.None));
+
+            if (lidas.IsFailed)
+            {
+                var erro = lidas.ErroOuFallback();
+                _log.Escrever($"ERRO ao listar as lojas da sugestão {selecionada.SugestaoId}: {erro.Message}");
+                MessageBox.Show(this, erro.Message, "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            _lojasDaSugestao = lidas.Value;
+        }
+
+        if (SelecaoDeLojasDialog.Escolher(this, _lojasDaSugestao, _lojasEscolhidas) is not { } escolhidas) return;
+
+        _lojasEscolhidas = escolhidas;
+        _log.Escrever($"Lojas escolhidas ({escolhidas.Count} de {_lojasDaSugestao.Count}): "
+            + string.Join(", ", _lojasDaSugestao.Where(l => escolhidas.Contains(l.LojaId)).Select(l => $"{l.LojaId} {l.Nome}")));
+        AtualizarResumoDaSelecao();
+    }
+
+    private void AtualizarResumoDaSelecao()
+    {
+        if (_lojasEscolhidas.Count == 0 || _lojasDaSugestao.Count == 0) return;
+
+        _janelaInfo.Text = $"{_lojasEscolhidas.Count} de {_lojasDaSugestao.Count} loja(s) · {_janelaInfo.Text}";
     }
 
     private void EscolherPasta()
@@ -600,6 +658,7 @@ internal sealed class MainForm : Form
             DataInicial = janela.Inicio,
             DataFinal = janela.Fim,
             OutputDirectory = _pastaSaida.Text.Trim(),
+            LojaIds = _lojasEscolhidas.Count > 0 ? _lojasEscolhidas : null,
         };
         _config.Save();
 
@@ -627,6 +686,7 @@ internal sealed class MainForm : Form
             resultado =>
             {
                 _log.Escrever($"ZIP gerado: {resultado.ZipPath} ({resultado.ZipBytes / 1024d / 1024d:N1} MB)");
+                _log.Escrever($"Lojas exportadas: {resultado.LojasExportadas.Count} de {resultado.LojasNaSugestao}.");
                 foreach (var (file, count) in resultado.RowsByFile) _log.Escrever($"  {file}: {count:N0} linhas");
                 foreach (var warning in resultado.Warnings) _log.Escrever($"  AVISO: {warning}");
             });
