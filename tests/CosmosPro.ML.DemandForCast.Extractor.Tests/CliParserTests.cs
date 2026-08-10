@@ -66,6 +66,7 @@ public sealed class CliParserTests
         // que não aconteceu.
         CliParser.Parse(["--list", "--suggestion-id", "1"]).Erro.Should().Contain("--suggestion-id");
         CliParser.Parse(["--list", "--output", @"C:\x"]).Erro.Should().Contain("--output");
+        CliParser.Parse(["--list", "--stores", "12"]).Erro.Should().Contain("--stores");
         CliParser.Parse(["--extract", "--suggestion-id", "1", "--output", @"C:\x", "--tsv"]).Erro.Should().Contain("--tsv");
     }
 
@@ -132,6 +133,7 @@ public sealed class CliParserTests
     [InlineData("--suggestion-id")]
     [InlineData("--output")]
     [InlineData("--months-back")]
+    [InlineData("--stores")]
     [InlineData("--tsv")]
     [InlineData("--env-prefix")]
     [InlineData("--port")]
@@ -143,6 +145,46 @@ public sealed class CliParserTests
         // A ajuda é o único lugar onde o operador descobre a flag; flag nova sem
         // linha na ajuda é flag que ninguém acha.
         CliParser.HelpText.Should().Contain(flag);
+    }
+
+    [Fact]
+    public void Sem_stores_significa_todas_as_lojas_da_sugestao()
+    {
+        var options = CliParser.Parse(["--extract", "--suggestion-id", "1", "--output", "C:\\x"]).Options!;
+
+        options.LojaIds.Should().BeNull();
+    }
+
+    [Fact]
+    public void Stores_le_a_lista_de_ids()
+    {
+        var options = CliParser.Parse(["--extract", "--suggestion-id", "1", "--output", "C:\\x", "--stores", "12,45,78"]).Options!;
+
+        options.LojaIds.Should().Equal(12, 45, 78);
+    }
+
+    [Fact]
+    public void Stores_tolera_espaco_e_id_repetido()
+    {
+        var options = CliParser.Parse(["--extract", "--suggestion-id", "1", "--output", "C:\\x", "--stores", " 12 , 45 , 12 "]).Options!;
+
+        options.LojaIds.Should().Equal(12, 45);
+    }
+
+    [Fact]
+    public void Stores_com_id_nao_numerico_e_argumento_invalido()
+    {
+        CliParser.Parse(["--extract", "--suggestion-id", "1", "--output", "C:\\x", "--stores", "12,abc"]).Erro
+            .Should().NotBeNull().And.Subject.As<string>().Should().Contain("abc");
+    }
+
+    [Fact]
+    public void Stores_vazio_e_argumento_invalido()
+    {
+        // Lista vazia nao significa "todas": e engano de digitacao, e tratar como todas
+        // exportaria o oposto do pedido.
+        CliParser.Parse(["--extract", "--suggestion-id", "1", "--output", "C:\\x", "--stores", "  "]).Erro
+            .Should().NotBeNull();
     }
 
     [Fact]
