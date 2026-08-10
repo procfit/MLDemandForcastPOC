@@ -60,3 +60,6 @@ internal sealed record SugestaoCatalogoCabecalho(
 /// </summary>
 internal sealed record SugestaoContagem(
     long SugestaoId, int QtdLinhas, int QtdLojas, int DiasCoberturaMax);
+
+/// <summary>Uma loja citada pela sugestão, com o peso que ela tem nela.</summary>
+internal sealed record LojaDaSugestao(int LojaId, string Nome, int Itens);
