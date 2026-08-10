@@ -33,7 +33,9 @@ internal sealed class SelecaoDeLojasDialog : Form
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = false;
         MaximizeBox = false;
-        ClientSize = new Size(500, 420);
+        // 538, não 500: a linha filtro+botões (12 + 300 + 8 + 110 + 6 + 90) só cabe com
+        // margem direita de 12px simétrica à esquerda se o cliente tiver 538px de largura.
+        ClientSize = new Size(538, 420);
         AcceptButton = _ok;
         CancelButton = _cancelar;
 
