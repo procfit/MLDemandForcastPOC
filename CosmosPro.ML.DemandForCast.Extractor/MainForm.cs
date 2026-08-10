@@ -103,6 +103,18 @@ internal sealed class MainForm : Form
     private IReadOnlyList<LojaDaSugestao> _lojasDaSugestao = [];
     private IReadOnlyList<int> _lojasEscolhidas = [];
 
+    // Geração própria do fetch de lojas -- separada de _contagemGeracao (ver
+    // ContarSelecaoAsync, área protegida): são dois fetches independentes, cada um
+    // com seu próprio "quem volta fora de época se cala".
+    private long _lojasFetchGeracao;
+
+    // Base do resumo amarrada ao id da sugestão em vez de zerada num ponto fixo:
+    // ContarSelecao já zera _lojasDaSugestao/_lojasEscolhidas na troca de seleção,
+    // mas é área protegida (não pode ganhar mais uma responsabilidade). Comparar o
+    // id na hora de usar (AtualizarResumoDaSelecao) faz a troca de sugestão
+    // recapturar a base sozinha, sem depender de mais um ponto de reset espalhado.
+    private (long SugestaoId, string Texto)? _baseResumoLojas;
+
     // Contagem por seleção: fetch próprio, fora de ExecutarAsync (ver ContarSelecaoAsync).
     // Um novo CTS por chamada -- trocar de linha rápido cancela a contagem anterior em
     // vez de enfileirar as duas.
@@ -606,20 +618,39 @@ internal sealed class MainForm : Form
     {
         if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada) return;
 
+        var sugestaoId = selecionada.SugestaoId;
+
         if (_lojasDaSugestao.Count == 0)
         {
+            var geracao = ++_lojasFetchGeracao;
+            _escolherLojas.Enabled = false;
+
             var connectionString = BuildConnectionString();
-            var lidas = await Task.Run(() => _catalogoService.LojasDaSugestao(connectionString, selecionada.SugestaoId, CancellationToken.None));
+            var lidas = await Task.Run(() => _catalogoService.LojasDaSugestao(connectionString, sugestaoId, CancellationToken.None));
+
+            // Mesmo padrão de _contagemGeracao em ContarSelecaoAsync: quem volta fora de
+            // época se cala. "Fora de época" é geração superada (um clique novo já está
+            // em voo, e esse clique é quem deve religar o botão) OU seleção trocada (a
+            // troca já religou o botão via ContarSelecao/AtualizarJanela; tocar nele de
+            // novo aqui reabriria a corrida que esta checagem existe para fechar --
+            // aplicar as lojas de A, ou abrir o diálogo com elas, sobre a sugestão B).
+            var aindaAtual = geracao == _lojasFetchGeracao
+                && _sugestoes.CurrentRow?.DataBoundItem is SugestaoLinha atual
+                && atual.SugestaoId == sugestaoId;
+
+            if (!aindaAtual) return;
 
             if (lidas.IsFailed)
             {
                 var erro = lidas.ErroOuFallback();
-                _log.Escrever($"ERRO ao listar as lojas da sugestão {selecionada.SugestaoId}: {erro.Message}");
+                _log.Escrever($"ERRO ao listar as lojas da sugestão {sugestaoId}: {erro.Message}");
+                _escolherLojas.Enabled = true;
                 MessageBox.Show(this, erro.Message, "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
             _lojasDaSugestao = lidas.Value;
+            _escolherLojas.Enabled = true;
         }
 
         if (SelecaoDeLojasDialog.Escolher(this, _lojasDaSugestao, _lojasEscolhidas) is not { } escolhidas) return;
@@ -627,14 +658,25 @@ internal sealed class MainForm : Form
         _lojasEscolhidas = escolhidas;
         _log.Escrever($"Lojas escolhidas ({escolhidas.Count} de {_lojasDaSugestao.Count}): "
             + string.Join(", ", _lojasDaSugestao.Where(l => escolhidas.Contains(l.LojaId)).Select(l => $"{l.LojaId} {l.Nome}")));
-        AtualizarResumoDaSelecao();
+        AtualizarResumoDaSelecao(sugestaoId);
     }
 
-    private void AtualizarResumoDaSelecao()
+    private void AtualizarResumoDaSelecao(long sugestaoId)
     {
         if (_lojasEscolhidas.Count == 0 || _lojasDaSugestao.Count == 0) return;
 
-        _janelaInfo.Text = $"{_lojasEscolhidas.Count} de {_lojasDaSugestao.Count} loja(s) · {_janelaInfo.Text}";
+        // Recompor sempre a partir da base, nunca do texto atual: prepender no texto
+        // atual (versão anterior) empilha "5 de 10 loja(s) · 3 de 10 loja(s) · ..." a
+        // cada reconfirmação. A base é amarrada ao id em vez de zerada por fora (ver
+        // campo _baseResumoLojas): se o id não bate, a sugestão trocou e a base velha
+        // não serve -- recaptura aqui mesmo, sem depender de outro método limpá-la.
+        if (_baseResumoLojas is not { } baseAtual || baseAtual.SugestaoId != sugestaoId)
+        {
+            baseAtual = (sugestaoId, _janelaInfo.Text);
+            _baseResumoLojas = baseAtual;
+        }
+
+        _janelaInfo.Text = $"{_lojasEscolhidas.Count} de {_lojasDaSugestao.Count} loja(s) · {baseAtual.Texto}";
     }
 
     private void EscolherPasta()
