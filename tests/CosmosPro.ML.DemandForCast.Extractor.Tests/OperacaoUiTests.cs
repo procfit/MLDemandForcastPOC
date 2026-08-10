@@ -38,4 +38,40 @@ public sealed class OperacaoUiTests
     {
         OperacaoUi.TextoDeStatus("Testando conexão", TimeSpan.Zero, null).Should().Contain("0s");
     }
+
+    private static (AlvosDaOperacao Alvos, ProgressBar Barra) Alvos()
+    {
+        var barra = new ProgressBar();
+        return (new AlvosDaOperacao([new Button()], new Button(), barra, new Label()), barra);
+    }
+
+    [Fact]
+    public void Barra_volta_a_zero_quando_a_operacao_termina()
+    {
+        // Uma extração cancelada no passo 5 de 9 deixava a barra parada em 55% para
+        // sempre, afirmando que algo está meio pronto quando nada está rodando.
+        var (alvos, barra) = Alvos();
+
+        using (var escopo = OperacaoUi.Iniciar(alvos, "Extraindo", totalDeEtapas: 9))
+        {
+            escopo.Reportar("[5/9] compras.csv", 5);
+            barra.Value.Should().Be(5);
+        }
+
+        barra.Value.Should().Be(barra.Minimum);
+    }
+
+    [Fact]
+    public void Barra_para_de_animar_quando_a_operacao_termina()
+    {
+        var (alvos, barra) = Alvos();
+        var estiloAntes = barra.Style;
+
+        using (OperacaoUi.Iniciar(alvos, "Carregando sugestões", totalDeEtapas: null))
+        {
+            barra.Style.Should().Be(ProgressBarStyle.Marquee);
+        }
+
+        barra.Style.Should().Be(estiloAntes);
+    }
 }
