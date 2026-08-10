@@ -27,6 +27,7 @@ internal sealed class ExtractionService
         var cronometro = System.Diagnostics.Stopwatch.StartNew();
         var zipPath = string.Empty;
         var zipBytes = 0L;
+        Result<EscopoRecortado> recorte = null!;
 
         var rows = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
@@ -43,7 +44,12 @@ internal sealed class ExtractionService
             {
                 connection.Open();
 
-                var (lojaIds, skusDaSugestao) = LoadEscopoSugestao(connection, request.SugestaoId, ct);
+                var pares = LoadEscopoSugestao(connection, request.SugestaoId, ct);
+                recorte = RecorteDeLojas.Aplicar(pares, request.LojaIds);
+                if (recorte.IsFailed) throw new FalhaDeDominioException(recorte.ErroOuFallback());
+
+                var lojaIds = recorte.Value.LojaIds;
+                var skusDaSugestao = recorte.Value.Skus;
                 AvisarDivergenciaEmpresaFilial(connection, request.SugestaoId, warnings, ct);
 
                 var total = StageContract.WriteOrder.Length;
@@ -79,7 +85,7 @@ internal sealed class ExtractionService
                 var cabecalho = CopySugestaoHeader(connection, zip, request.SugestaoId, 8, total, progress, ct)
                     ?? throw new FalhaDeDominioException(new SugestaoNaoEncontradaErro(request.SugestaoId));
                 rows[StageContract.SugestoesCompra] = 1;
-                rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, 9, total, progress, ct);
+                rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, lojaIds, 9, total, progress, ct);
 
                 zip.WriteText(ZipManifest.EntryName, ZipManifest.Escrever(new ZipManifest(
                     request.SugestaoId,
@@ -138,41 +144,41 @@ internal sealed class ExtractionService
             warnings.Add("Nenhum estoque no período — o histórico de ESTOQUE_LANCAMENTOS costuma cobrir apenas os últimos meses.");
         }
 
-        return Result.Ok(new ExtractionResult(zipPath, zipBytes, rows, warnings));
+        return Result.Ok(new ExtractionResult(
+            zipPath, zipBytes, rows, warnings, recorte.Value.LojaIds, recorte.Value.LojasNaSugestao));
     }
 
     /// <summary>
-    /// Lojas e SKUs citados pela sugestão, para escopar as demais tabelas e
-    /// garantir a união dos produtos (ver <see cref="CopyProdutosGarantindoUniao"/>).
-    /// Uma query só, mais barata que bufferizar as 17 colunas dos itens.
+    /// Pares (loja, SKU) citados pela sugestão, para <see cref="RecorteDeLojas.Aplicar"/>
+    /// recortar e para garantir a união dos produtos (ver
+    /// <see cref="CopyProdutosGarantindoUniao"/>). Uma query só, mais barata que
+    /// bufferizar as 17 colunas dos itens.
     /// </summary>
-    private static (IReadOnlyList<int> LojaIds, IReadOnlySet<string> Skus) LoadEscopoSugestao(
+    private static IReadOnlyList<ParLojaSku> LoadEscopoSugestao(
         SqlConnection connection, long sugestaoId, CancellationToken ct)
     {
-        var (lojaIds, skus) = Step(new Etapa("escopo da sugestão", "escopo_sugestao.sql"), () =>
+        var pares = Step(new Etapa("escopo da sugestão", "escopo_sugestao.sql"), () =>
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("escopo_sugestao.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
             ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
-            var ids = new HashSet<int>();
-            var achados = new HashSet<string>(StringComparer.Ordinal);
+            var lidos = new List<ParLojaSku>();
             while (reader.Read())
             {
                 ct.ThrowIfCancellationRequested();
-                ids.Add(reader.GetInt32(0));
-                achados.Add(reader.GetString(1));
+                lidos.Add(new ParLojaSku(reader.GetInt32(0), reader.GetString(1)));
             }
-            return (ids, achados);
+            return (IReadOnlyList<ParLojaSku>)lidos;
         });
 
-        if (lojaIds.Count == 0)
+        if (pares.Count == 0)
         {
             throw new FalhaDeDominioException(new SugestaoSemItensErro(sugestaoId));
         }
 
-        return ([.. lojaIds.Order()], skus);
+        return pares;
     }
 
     /// <summary>
@@ -343,12 +349,13 @@ internal sealed class ExtractionService
         string entryName,
         CsvZipWriter zip,
         long sugestaoId,
+        IReadOnlyList<int> lojaIds,
         int fileIndex,
         int fileCount,
         IProgress<ExtractionProgress> progress,
         CancellationToken ct)
     {
-        using var command = CreateSugestaoCommand(connection, SqlResources.Load(queryFile), sugestaoId);
+        using var command = CreateSugestaoCommand(connection, SqlResources.Load(queryFile), sugestaoId, lojaIds);
         return CopyQueryCore(entryName, queryFile, zip, command, fileIndex, fileCount, progress, ct, inspect: null);
     }
 
@@ -495,14 +502,29 @@ internal sealed class ExtractionService
     /// {{SUGESTAO}} vira um parâmetro real (@sugestao), não concatenação de texto —
     /// o valor nasce de uma lista que o próprio PBS devolveu (catalogo_sugestoes.sql),
     /// mas usar parâmetro custa nada e elimina qualquer risco de injeção.
+    /// <paramref name="lojaIds"/> é opcional: só as queries que declaram {{LOJAS}}
+    /// passam algo, e o default null preserva o comportamento das que não escopam
+    /// por loja.
     /// </summary>
-    private static SqlCommand CreateSugestaoCommand(SqlConnection connection, string sql, long sugestaoId)
+    private static SqlCommand CreateSugestaoCommand(
+        SqlConnection connection, string sql, long sugestaoId, IReadOnlyList<int>? lojaIds = null)
     {
-        var command = new SqlCommand(sql.Replace("{{SUGESTAO}}", "@sugestao"), connection)
-        {
-            CommandTimeout = CommandTimeoutSeconds,
-        };
+        var texto = sql.Replace("{{SUGESTAO}}", "@sugestao");
+
+        var placeholders = lojaIds is null
+            ? []
+            : lojaIds.Select((_, i) => "@loja" + i.ToString(CultureInfo.InvariantCulture)).ToArray();
+
+        if (lojaIds is not null) texto = texto.Replace("{{LOJAS}}", string.Join(',', placeholders));
+
+        var command = new SqlCommand(texto, connection) { CommandTimeout = CommandTimeoutSeconds };
         command.Parameters.Add("@sugestao", SqlDbType.BigInt).Value = sugestaoId;
+
+        for (var i = 0; lojaIds is not null && i < lojaIds.Count; i++)
+        {
+            command.Parameters.Add(placeholders[i], SqlDbType.Int).Value = lojaIds[i];
+        }
+
         return command;
     }
 

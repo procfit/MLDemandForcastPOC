@@ -26,7 +26,9 @@ internal sealed record ExtractionResult(
     string ZipPath,
     long ZipBytes,
     IReadOnlyDictionary<string, long> RowsByFile,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<int> LojasExportadas,
+    int LojasNaSugestao);
 
 internal sealed record LojaOption(int LojaId, string Nome)
 {
