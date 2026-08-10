@@ -55,6 +55,9 @@ public sealed class QueryTypingTests
     [InlineData("estoques_movimentos.sql", "Sku")]
     [InlineData("estoques_movimentos.sql", "Data")]
     [InlineData("estoques_movimentos.sql", "QuantidadeEmEstoque")]
+    // lojas_da_sugestao.sql -> CatalogoService.LojasDaSugestao (GetInt32, GetInt32)
+    [InlineData("lojas_da_sugestao.sql", "LojaId")]
+    [InlineData("lojas_da_sugestao.sql", "Itens")]
     public void Coluna_lida_com_tipo_declara_o_tipo_na_query(string arquivo, string coluna)
     {
         var sql = SqlResources.Load(arquivo);
