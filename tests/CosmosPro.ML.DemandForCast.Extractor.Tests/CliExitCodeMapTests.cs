@@ -49,6 +49,15 @@ public sealed class CliExitCodeMapTests
         CliExitCodeMap.De(new JanelaInviavelErro("m")).Should().Be(CliExitCode.JanelaInviavel);
     }
 
+    [Fact]
+    public void Recorte_de_lojas_invalido_e_erro_de_argumento()
+    {
+        // Entrada errada do operador, não falha de infraestrutura: o remédio é digitar
+        // outro número, e um script que veja 6 tentaria de novo à toa.
+        CliExitCodeMap.De(new LojasNaoSelecionadasErro()).Should().Be(CliExitCode.ArgumentosInvalidos);
+        CliExitCodeMap.De(new LojaForaDaSugestaoErro([99])).Should().Be(CliExitCode.ArgumentosInvalidos);
+    }
+
     [Theory]
     [InlineData(typeof(ContratoErro))]
     [InlineData(typeof(EscritaErro))]

@@ -12,6 +12,12 @@ internal sealed record ExtractionRequest
     public required DateOnly DataInicial { get; init; }
     public required DateOnly DataFinal { get; init; }
     public required string OutputDirectory { get; init; }
+
+    /// <summary>
+    /// Recorte de lojas DENTRO da sugestão -- não escolha livre de lojas, que é o que a
+    /// F14 removeu. <c>null</c> significa todas as lojas que a sugestão cita.
+    /// </summary>
+    public IReadOnlyList<int>? LojaIds { get; init; }
 }
 
 internal sealed record ExtractionProgress(string FileName, int FileIndex, int FileCount, long RowsWritten);

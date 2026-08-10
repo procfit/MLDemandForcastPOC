@@ -15,6 +15,7 @@ internal static class CliExitCodeMap
         ConexaoErro or ConexaoPerdidaErro or LogonTriggerErro => CliExitCode.FalhaDeConexao,
         SugestaoNaoEncontradaErro or SugestaoSemItensErro => CliExitCode.SugestaoNaoEncontrada,
         JanelaInviavelErro => CliExitCode.JanelaInviavel,
+        LojasNaoSelecionadasErro or LojaForaDaSugestaoErro => CliExitCode.ArgumentosInvalidos,
         _ => CliExitCode.FalhaNaExtracao,
     };
 }
