@@ -95,7 +95,9 @@ internal sealed class ExtractionService
                     request.DataInicial,
                     request.DataFinal,
                     ZipManifest.VersaoAtual(),
-                    skusFabricados)));
+                    skusFabricados,
+                    recorte.Value.LojaIds,
+                    recorte.Value.LojasNaSugestao)));
             }
 
             // Dentro do try de propósito: uma falha aqui (antivírus travou o arquivo

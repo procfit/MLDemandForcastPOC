@@ -24,7 +24,9 @@ internal sealed record ManifestoDaSugestao(
     DateOnly JanelaInicio,
     DateOnly JanelaFim,
     string VersaoExtractor,
-    int SkusSemCadastro);
+    int SkusSemCadastro,
+    IReadOnlyList<int> LojasExportadas,
+    int LojasNaSugestao);
 
 /// <summary>
 /// Ou o retrato da sugestão, ou o motivo pelo qual o envio não sustenta comparação
