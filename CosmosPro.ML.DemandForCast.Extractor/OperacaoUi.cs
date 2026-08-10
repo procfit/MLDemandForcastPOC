@@ -134,6 +134,12 @@ internal sealed class OperacaoUi : IDisposable
         _alvos.Cancelar.Enabled = false;
         _alvos.Progresso.Style = _estiloAnterior;
 
+        // A barra significa "tem operação em voo". Sem zerar aqui, uma extração
+        // cancelada no passo 5 de 9 deixava 55% na tela para sempre — afirmando que
+        // algo está meio pronto quando nada está rodando. Vale para os três desfechos:
+        // o resultado quem conta é o rodapé e o log, não a barra.
+        _alvos.Progresso.Value = _alvos.Progresso.Minimum;
+
         _cts.Dispose();
     }
 }
