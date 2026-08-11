@@ -169,6 +169,25 @@ public sealed class ManifestoLeitorTests : IDisposable
             "o comprador precisa ver a data da sugestão que ele escolheu, não um id interno");
     }
 
+    /// <summary>
+    /// LojasExportadas é campo novo (filtro de lojas). Todo ZIP escrito por um extrator
+    /// anterior a ele -- como este manifesto de teste, que reproduz de propósito a forma
+    /// antiga -- não o declara no JSON, e a desserialização não estoura por isso: o campo
+    /// simplesmente chega null. Sem o saneamento em ManifestoLeitor, a próxima fase que
+    /// ler manifesto.LojasExportadas.Count estouraria NullReferenceException no primeiro
+    /// ZIP antigo que passasse por aqui -- o tipo não anulável estaria mentindo.
+    /// </summary>
+    [Fact]
+    public void Manifesto_sem_lojas_exportadas_declaradas_usa_lista_vazia_em_vez_de_null()
+    {
+        Escrever(Manifesto(janelaInicio: "2025-03-10", janelaFim: "2026-04-09"));
+
+        var leitura = ManifestoLeitor.Ler(_dir);
+
+        leitura.Manifesto.Should().NotBeNull();
+        leitura.Manifesto!.LojasExportadas.Should().NotBeNull().And.BeEmpty();
+    }
+
     [Fact]
     public void Periodo_que_comeca_no_dia_da_sugestao_e_inviavel()
     {

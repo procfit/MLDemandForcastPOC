@@ -228,7 +228,8 @@ public sealed class CatalogoServiceTests
         casadas.Should().ContainSingle();
         casadas[0].LojaId.Should().Be(86);
         casadas[0].Itens.Should().Be(7);
-        casadas[0].Nome.Should().Contain("sem cadastro");
+        casadas[0].Nome.Should().Contain("inativa",
+            "lojas_disponiveis.sql filtra ATIVO = 'S' -- o caso comum é loja desativada, não inexistente");
     }
 
     [Fact]

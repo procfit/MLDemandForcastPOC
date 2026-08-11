@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FluentResults;
 
 namespace CosmosPro.ML.DemandForCast.Extractor;
@@ -684,7 +685,13 @@ internal sealed class MainForm : Form
             _baseResumoLojas = baseAtual;
         }
 
-        _janelaInfo.Text = $"{escolhidas.Count} de {_lojasDaSugestao.Count} loja(s) · {baseAtual.Texto}";
+        // A base já traz sua própria contagem de lojas (o total da sugestão, escrito por
+        // ContarSelecaoAsync) -- sem remover daqui, "2 de 10 loja(s)" e "10 loja(s)" apareceriam
+        // juntos na mesma linha, dizendo o mesmo número duas vezes com significados diferentes.
+        // Regex e não índice fixo porque a forma da base muda entre viável, inviável e erro.
+        var baseSemContagemDeLojas = Regex.Replace(baseAtual.Texto, @"\s*·\s*[\d.,]+\s+loja\(s\)", "");
+
+        _janelaInfo.Text = $"{escolhidas.Count} de {_lojasDaSugestao.Count} loja(s) · {baseSemContagemDeLojas}";
     }
 
     private void EscolherPasta()

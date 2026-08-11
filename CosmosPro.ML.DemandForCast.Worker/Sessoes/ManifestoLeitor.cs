@@ -81,6 +81,16 @@ internal static class ManifestoLeitor
             return Inviavel(Danificada);
         }
 
+        // LojasExportadas é campo novo (filtro de lojas): todo ZIP escrito por um extrator
+        // anterior a ele desserializa com null aqui, não com erro -- o campo simplesmente
+        // não existia no JSON. Sem este saneamento, o não-anulável do tipo mentiria: quem
+        // ler manifesto.LojasExportadas.Count numa fase futura estouraria
+        // NullReferenceException no primeiro ZIP antigo que passar por aqui.
+        if (manifesto.LojasExportadas is null)
+        {
+            manifesto = manifesto with { LojasExportadas = [] };
+        }
+
         // O ERP calcula sugestão por um de dois métodos, e é contra um deles que a disputa
         // acontece. Fora dessa faixa não há baseline — e o valor ausente chega aqui como zero,
         // indistinguível de um número inventado. A recusa mora nesta fronteira porque as outras

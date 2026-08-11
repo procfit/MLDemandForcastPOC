@@ -126,11 +126,15 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
     {
         var nomes = cadastro.ToDictionary(l => l.LojaId, l => l.Nome);
 
+        // "Inativa" e não "sem cadastro": lojas_disponiveis.sql filtra ATIVO = 'S', então o
+        // caso comum de uma loja não aparecer aqui é ela ter sido desativada no PBS -- não
+        // deixar de existir. "Sem cadastro" diria ao comprador algo que normalmente não
+        // aconteceu.
         return [.. daSugestao
             .OrderBy(l => l.LojaId)
             .Select(l => new LojaDaSugestao(
                 l.LojaId,
-                nomes.TryGetValue(l.LojaId, out var nome) ? nome : "(sem cadastro)",
+                nomes.TryGetValue(l.LojaId, out var nome) ? nome : "(inativa ou sem cadastro)",
                 l.Itens))];
     }
 

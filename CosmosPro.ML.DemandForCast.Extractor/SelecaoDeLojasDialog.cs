@@ -29,7 +29,10 @@ internal sealed class SelecaoDeLojasDialog : Form
         _marcadas = [.. jaEscolhidas];
 
         Text = "Escolher lojas";
-        FormBorderStyle = FormBorderStyle.Sizable;
+        // FixedDialog, não Sizable: os controles usam posição absoluta e nenhum tem
+        // âncora -- arrastar a borda para dentro cortava OK/Cancelar, e o diálogo não
+        // tem motivo para redimensionar (a lista já tem scroll próprio).
+        FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = false;
         MaximizeBox = false;
@@ -50,8 +53,8 @@ internal sealed class SelecaoDeLojasDialog : Form
 
         _filtro.TextChanged += (_, _) => Popular();
         _lista.ItemCheck += (_, e) => AoMarcar(e);
-        _todas.Click += (_, _) => MarcarVisiveis(true);
-        _nenhuma.Click += (_, _) => MarcarVisiveis(false);
+        _todas.Click += (_, _) => MarcarTodas(true);
+        _nenhuma.Click += (_, _) => MarcarTodas(false);
 
         Popular();
     }
@@ -98,9 +101,19 @@ internal sealed class SelecaoDeLojasDialog : Form
         BeginInvoke(AtualizarResumo);
     }
 
-    private void MarcarVisiveis(bool marcar)
+    /// <summary>
+    /// Atua sobre TODAS as lojas da sugestão, não só sobre as que o filtro deixa visíveis
+    /// na lista -- filtrar, clicar Desmarcar e confirmar tem que zerar a escolha de
+    /// verdade. Antes desta correção, filtrar escondia o resto e Desmarcar deixava as
+    /// lojas escondidas marcadas do jeito que estavam.
+    /// </summary>
+    private void MarcarTodas(bool marcar)
     {
+        if (marcar) foreach (var loja in _lojas) _marcadas.Add(loja.LojaId);
+        else _marcadas.Clear();
+
         for (var i = 0; i < _lista.Items.Count; i++) _lista.SetItemChecked(i, marcar);
+        AtualizarResumo();
     }
 
     private void AtualizarResumo()
