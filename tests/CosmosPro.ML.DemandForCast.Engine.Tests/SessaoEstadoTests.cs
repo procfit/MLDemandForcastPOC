@@ -10,9 +10,13 @@ public sealed class SessaoEstadoTests
     [InlineData(SessaoStatus.AguardandoDados, SessaoStatus.ProcessandoDados, true)]
     [InlineData(SessaoStatus.ProcessandoDados, SessaoStatus.Treinando, true)]
     [InlineData(SessaoStatus.Treinando, SessaoStatus.Comparando, true)]
-    [InlineData(SessaoStatus.Comparando, SessaoStatus.Concluida, true)]
+    [InlineData(SessaoStatus.Comparando, SessaoStatus.AguardandoQuestionario, true)]
+    [InlineData(SessaoStatus.AguardandoQuestionario, SessaoStatus.Concluida, true)]
     [InlineData(SessaoStatus.AguardandoDados, SessaoStatus.Concluida, false)]
     [InlineData(SessaoStatus.Concluida, SessaoStatus.Treinando, false)]
+    // Comparar não conclui mais a sessão: o questionário é a última fase, então o pulo direto
+    // deixaria uma sessão "concluída" sem ninguém ter avaliado.
+    [InlineData(SessaoStatus.Comparando, SessaoStatus.Concluida, false)]
     public void Transicoes_permitidas(SessaoStatus de, SessaoStatus para, bool permitida)
         => ComparacaoSessao.PodeTransicionar(de, para).Should().Be(permitida);
 
@@ -55,11 +59,38 @@ public sealed class SessaoEstadoTests
 
     [Theory]
     [InlineData(SessaoStatus.AguardandoDados)]
-    [InlineData(SessaoStatus.Concluida)]
+    [InlineData(SessaoStatus.AguardandoQuestionario)]
     [InlineData(SessaoStatus.Inviavel)]
     [InlineData(SessaoStatus.Falha)]
     public void Fora_das_fases_em_andamento_a_sessao_pode_ser_excluida(SessaoStatus status)
         => ComparacaoSessao.PodeExcluir(status).Should().BeTrue();
+
+    /// <summary>
+    /// A segunda recusa de <c>PodeExcluir</c>, por motivo diferente das fases em andamento:
+    /// aqui não há job a proteger, há dado. Concluída significa que o comprador respondeu o
+    /// questionário, e resposta de pesquisa não desaparece por clique. Vale notar que a
+    /// equivalência "concluída ⟺ respondida" é o que a migration garante ao reclassificar as
+    /// sessões que já estavam concluídas antes do questionário existir.
+    /// </summary>
+    [Fact]
+    public void Concluida_recusa_exclusao_porque_a_resposta_esta_selada()
+        => ComparacaoSessao.PodeExcluir(SessaoStatus.Concluida).Should().BeFalse();
+
+    /// <summary>
+    /// O questionário é fase de humano: nenhuma fila a reclama, então não há job que possa
+    /// falhar nem pré-condição que possa torná-la inviável. Uma aresta para <c>Falha</c> aqui
+    /// seria código morto — e pior, sugeriria a quem lê a tabela que existe um worker por trás.
+    /// A sessão sai daqui por envio (<c>Concluida</c>) ou por exclusão.
+    /// </summary>
+    [Fact]
+    public void Aguardando_questionario_so_sai_por_envio()
+    {
+        var destinos = Enum.GetValues<SessaoStatus>()
+            .Where(d => ComparacaoSessao.PodeTransicionar(SessaoStatus.AguardandoQuestionario, d))
+            .ToList();
+
+        destinos.Should().Equal(SessaoStatus.Concluida);
+    }
 
     /// <summary>
     /// A recusa protege o job, não o dado: nessas três fases existe uma carga, um treino ou

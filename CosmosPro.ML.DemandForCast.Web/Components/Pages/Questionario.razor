@@ -1,0 +1,405 @@
+@page "/comparacoes/{Id:guid}/questionario"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject QuestionariosApiClient QuestionariosApi
+@inject NotificationService Notifications
+@inject NavigationManager Nav
+@using CosmosPro.ML.DemandForCast.Engine.Questionarios
+
+<PageTitle>Avaliação da comparação</PageTitle>
+
+<RadzenStack Orientation="Orientation.Vertical" Gap="1.5rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenButton Icon="arrow_back" Variant="Variant.Text" Click="@Voltar" />
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Avaliação da comparação</RadzenText>
+    </RadzenStack>
+
+    @if (!_carregou && _erro is null)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+            <RadzenText TextStyle="TextStyle.Body2">Carregando…</RadzenText>
+        </RadzenStack>
+    }
+    else if (_catalogo is null || _questionario is null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">
+            <strong>Não foi possível abrir o questionário.</strong>
+            <div style="margin-top: 0.5rem">@(_erro ?? "Esta comparação não existe ou não é da sua rede.")</div>
+        </RadzenAlert>
+    }
+    else if (!PodeResponder && !_questionario.Selado)
+    {
+        @* Nem selado nem aberto: a comparação ainda não chegou ao fim. Mandar o comprador
+           preencher aqui produziria avaliação de um resultado que ele não viu. *@
+        <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">
+            <strong>Esta comparação ainda não está pronta para ser avaliada.</strong>
+            <div style="margin-top: 0.5rem">
+                O questionário abre quando o resultado fica pronto. Situação atual:
+                @SessaoView.EstadoLabel(_questionario.SessaoStatus).
+            </div>
+        </RadzenAlert>
+    }
+    else
+    {
+        @if (_questionario.Selado)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Success" AllowClose="false" data-test="questionario-selado">
+                <strong>Você já avaliou esta comparação@(_questionario.EnviadoEm is { } q ? $" em {q.ToLocalTime():dd/MM/yyyy HH:mm}" : "").</strong>
+                <div style="margin-top: 0.5rem">@QuestionarioCatalogo.Agradecimento</div>
+                <div style="margin-top: 0.25rem">
+                    As respostas abaixo são o registro da avaliação e não podem ser alteradas.
+                </div>
+            </RadzenAlert>
+        }
+
+        @if (_erro is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="true">@_erro</RadzenAlert>
+        }
+
+        @* Apresentação e consentimento, fora do wizard: é o que o participante concorda antes de
+           responder, então não pode ficar atrás de um passo. Texto literal do Apêndice A — ver a
+           nota do catálogo sobre a variante de português e sobre o que a terceira frase afirma. *@
+        @if (!_questionario.Selado)
+        {
+            <RadzenCard Variant="Variant.Outlined">
+                <RadzenStack Gap="0.75rem">
+                    @foreach (var paragrafo in QuestionarioCatalogo.Apresentacao)
+                    {
+                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">@paragrafo</RadzenText>
+                    }
+                </RadzenStack>
+            </RadzenCard>
+        }
+
+        <RadzenCard Variant="Variant.Outlined">
+            <RadzenSteps @bind-SelectedIndex="_passo" ShowStepsButtons="false" CanChange="@PodeTrocarDePasso">
+                <Steps>
+                    @foreach (var secao in _catalogo.Secoes)
+                    {
+                        <RadzenStepsItem Text="@secao.Titulo">
+                            <RadzenStack Gap="1.75rem">
+                                @if (!string.IsNullOrWhiteSpace(secao.Descricao))
+                                {
+                                    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                        @secao.Descricao
+                                    </RadzenText>
+                                }
+
+                                @foreach (var pergunta in secao.Perguntas)
+                                {
+                                    @* data-test por pergunta porque as sete afirmações da Parte B
+                                       compartilham os mesmos textos de alternativa ("4 – Concordo"
+                                       etc.): sem um escopo por pergunta, um seletor por texto casa
+                                       com a primeira ocorrência e o E2E responderia a mesma
+                                       pergunta sete vezes. *@
+                                    <div data-test="pergunta-@pergunta.Codigo">
+                                    <RadzenStack Gap="0.5rem">
+                                        <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">
+                                            @pergunta.Texto
+                                            @if (!pergunta.Obrigatoria)
+                                            {
+                                                <span style="color: var(--rz-text-secondary-color); font-weight: 400"> (opcional)</span>
+                                            }
+                                        </RadzenText>
+
+                                        <RadzenRadioButtonList TValue="string" Orientation="Orientation.Vertical"
+                                                               Value="@Escolha(pergunta.Codigo)"
+                                                               Disabled="@_questionario.Selado"
+                                                               Change="@(codigo => Marcar(pergunta, (string?)codigo))">
+                                            <Items>
+                                                @foreach (var opcao in pergunta.Opcoes)
+                                                {
+                                                    <RadzenRadioButtonListItem TValue="string" Text="@opcao.Texto" Value="@opcao.Codigo" />
+                                                }
+                                            </Items>
+                                        </RadzenRadioButtonList>
+
+                                        @if (PedeTextoLivre(pergunta))
+                                        {
+                                            <RadzenTextArea Rows="2" Placeholder="Descreva"
+                                                            MaxLength="1000"
+                                                            Disabled="@_questionario.Selado"
+                                                            Value="@(_respostas[pergunta.Codigo].TextoLivre ?? "")"
+                                                            Change="@(texto => MarcarTexto(pergunta.Codigo, texto))"
+                                                            Style="width: 100%; max-width: 40rem" />
+                                        }
+                                    </RadzenStack>
+                                    </div>
+                                }
+                            </RadzenStack>
+                        </RadzenStepsItem>
+                    }
+                </Steps>
+            </RadzenSteps>
+
+            @* Botões próprios em vez de ShowStepsButtons: avançar precisa gravar o rascunho, e o
+               último passo troca "Próximo" por "Enviar". A guarda de completude vive nos dois
+               caminhos — aqui e no CanChange, que cobre o clique direto no cabeçalho do passo. *@
+            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween"
+                         AlignItems="AlignItems.Center" Gap="1rem" Style="margin-top: 1.5rem">
+                <RadzenButton Text="Voltar" Icon="chevron_left" ButtonStyle="ButtonStyle.Light"
+                              Disabled="@(_passo == 0 || _ocupado)" Click="@Anterior" />
+
+                <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                    Passo @(_passo + 1) de @_catalogo.Secoes.Count
+                </RadzenText>
+
+                @if (_questionario.Selado)
+                {
+                    <RadzenButton Text="Ver o resultado" Icon="insights" ButtonStyle="ButtonStyle.Secondary"
+                                  Click="@Voltar" />
+                }
+                else if (UltimoPasso)
+                {
+                    <RadzenButton Text="@(_ocupado ? "Enviando…" : "Enviar avaliação")" Icon="check"
+                                  ButtonStyle="ButtonStyle.Primary" Disabled="@_ocupado"
+                                  Click="@Enviar" data-test="enviar-questionario" />
+                }
+                else
+                {
+                    <RadzenButton Text="Próximo" Icon="chevron_right" IconPosition="IconPosition.Right"
+                                  ButtonStyle="ButtonStyle.Primary" Disabled="@_ocupado"
+                                  Click="@Proximo" />
+                }
+            </RadzenStack>
+        </RadzenCard>
+    }
+</RadzenStack>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private CatalogoView? _catalogo;
+    private QuestionarioView? _questionario;
+
+    /// <summary>
+    /// As escolhas em edição, por código de pergunta. Dicionário e não lista porque cada render
+    /// de radio button consulta a escolha corrente — varrer uma lista aqui seria O(n) por opção
+    /// desenhada.
+    /// </summary>
+    private readonly Dictionary<string, RespostaEnviada> _respostas = [];
+
+    private int _passo;
+    private bool _carregou;
+    private bool _ocupado;
+    private string? _erro;
+
+    private readonly CancellationTokenSource _cts = new();
+
+    private bool PodeResponder => _questionario?.SessaoStatus == "AguardandoQuestionario";
+    private bool UltimoPasso => _catalogo is not null && _passo == _catalogo.Secoes.Count - 1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Mesmo guard de Sessao.razor: o prerender roda isto antes do circuito interativo, e sem
+        // ele a carga acontece duas vezes.
+        if (!RendererInfo.IsInteractive) return;
+
+        try
+        {
+            _catalogo = await QuestionariosApi.GetCatalogoAsync(_cts.Token);
+            _questionario = await QuestionariosApi.GetAsync(Id, _cts.Token);
+
+            if (_questionario is not null)
+            {
+                foreach (var r in _questionario.Respostas)
+                {
+                    _respostas[r.PerguntaCodigo] = new RespostaEnviada(r.PerguntaCodigo, r.OpcaoCodigo, r.TextoLivre);
+                }
+
+                // Retoma onde o comprador parou, mas nunca fora da faixa: o catálogo pode ter
+                // encolhido desde o rascunho, e um índice além do fim deixaria o wizard em branco.
+                var passos = _catalogo?.Secoes.Count ?? 0;
+                _passo = passos == 0 ? 0 : Math.Clamp(_questionario.PassoAtual, 0, passos - 1);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _erro = ex.Message;
+        }
+        finally
+        {
+            _carregou = true;
+        }
+    }
+
+    private string? Escolha(string perguntaCodigo) =>
+        _respostas.TryGetValue(perguntaCodigo, out var r) ? r.OpcaoCodigo : null;
+
+    private bool PedeTextoLivre(PerguntaView pergunta)
+    {
+        if (Escolha(pergunta.Codigo) is not { } escolhido) return false;
+        return pergunta.Opcoes.Any(o => o.Codigo == escolhido && o.PermiteTextoLivre);
+    }
+
+    private void Marcar(PerguntaView pergunta, string? opcaoCodigo)
+    {
+        if (opcaoCodigo is null) return;
+
+        // O texto livre não sobrevive à troca de opção: ele pertencia à alternativa anterior, e
+        // arrastá-lo para a nova gravaria um complemento que responde outra pergunta — ou, se a
+        // nova não aceita texto, um corpo que o servidor recusa com 400.
+        var anterior = Escolha(pergunta.Codigo);
+        var texto = anterior == opcaoCodigo && _respostas.TryGetValue(pergunta.Codigo, out var r)
+            ? r.TextoLivre
+            : null;
+
+        _respostas[pergunta.Codigo] = new RespostaEnviada(pergunta.Codigo, opcaoCodigo, texto);
+    }
+
+    private void MarcarTexto(string perguntaCodigo, string texto)
+    {
+        if (!_respostas.TryGetValue(perguntaCodigo, out var r)) return;
+        _respostas[perguntaCodigo] = r with { TextoLivre = string.IsNullOrWhiteSpace(texto) ? null : texto };
+    }
+
+    /// <summary>
+    /// Códigos das perguntas obrigatórias sem resposta na seção informada. Espelha, para o passo
+    /// corrente, o que <c>QuestionarioValidator.ObrigatoriasFaltando</c> faz para o todo — as
+    /// duas leem o mesmo catálogo, então não podem discordar sobre o que é obrigatório. A
+    /// autoridade continua sendo o servidor, que revalida no envio.
+    /// </summary>
+    private List<PerguntaView> FaltandoNaSecao(SecaoView secao) =>
+        [.. secao.Perguntas.Where(p => p.Obrigatoria && Escolha(p.Codigo) is null)];
+
+    /// <summary>
+    /// Guarda o clique direto no cabeçalho de um passo. Sem isto o comprador pularia a seção 1
+    /// pelo cabeçalho e chegaria ao envio com obrigatórias em branco — e só descobriria no 400.
+    /// Voltar é sempre livre: quem revisa não precisa ter terminado.
+    /// </summary>
+    private void PodeTrocarDePasso(StepsCanChangeEventArgs args)
+    {
+        if (_catalogo is null || _questionario?.Selado == true) return;
+        if (args.NewIndex <= args.SelectedIndex) return;
+
+        var faltando = FaltandoNaSecao(_catalogo.Secoes[args.SelectedIndex]);
+        if (faltando.Count == 0) return;
+
+        args.PreventDefault();
+        AvisarFaltando(faltando);
+    }
+
+    private void AvisarFaltando(List<PerguntaView> faltando) =>
+        Notifications.Notify(new NotificationMessage
+        {
+            Severity = NotificationSeverity.Warning,
+            Summary = faltando.Count == 1 ? "Falta uma resposta" : $"Faltam {faltando.Count} respostas",
+            Detail = string.Join(" · ", faltando.Select(p => p.Texto)),
+            Duration = 6000,
+        });
+
+    private async Task Proximo()
+    {
+        if (_catalogo is null) return;
+
+        var faltando = FaltandoNaSecao(_catalogo.Secoes[_passo]);
+        if (faltando.Count > 0)
+        {
+            AvisarFaltando(faltando);
+            return;
+        }
+
+        // Grava antes de avançar, e não ao sair da página: o rascunho é o que permite fechar o
+        // navegador no meio sem perder o preenchido. Falha aqui não bloqueia o avanço — travar o
+        // wizard por causa de um POST perdido faria o comprador perder o que já digitou.
+        await SalvarRascunhoAsync(_passo + 1);
+        _passo++;
+    }
+
+    private async Task Anterior()
+    {
+        if (_passo == 0) return;
+        _passo--;
+        if (!_questionario!.Selado) await SalvarRascunhoAsync(_passo);
+    }
+
+    private async Task SalvarRascunhoAsync(int passo)
+    {
+        if (_questionario?.Selado != false) return;
+
+        _ocupado = true;
+        try
+        {
+            var resultado = await QuestionariosApi.SalvarAsync(Id, passo, [.. _respostas.Values], _cts.Token);
+            if (!resultado.Success)
+            {
+                _erro = string.Join(" · ", resultado.Errors ?? ["Não foi possível salvar o rascunho."]);
+            }
+            else
+            {
+                _erro = null;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _erro = ex.Message;
+        }
+        finally
+        {
+            _ocupado = false;
+        }
+    }
+
+    private async Task Enviar()
+    {
+        if (_catalogo is null || _questionario is null) return;
+
+        // Confere o conjunto inteiro, não só o passo corrente: uma seção anterior pode ter ficado
+        // incompleta se o comprador retomou um rascunho antigo salvo antes de a pergunta existir.
+        var faltando = _catalogo.Secoes.SelectMany(FaltandoNaSecao).ToList();
+        if (faltando.Count > 0)
+        {
+            // Leva o comprador ao primeiro passo incompleto, senão o aviso diz o que falta sem
+            // dizer onde está.
+            for (var i = 0; i < _catalogo.Secoes.Count; i++)
+            {
+                if (FaltandoNaSecao(_catalogo.Secoes[i]).Count > 0)
+                {
+                    _passo = i;
+                    break;
+                }
+            }
+
+            AvisarFaltando(faltando);
+            return;
+        }
+
+        _ocupado = true;
+        try
+        {
+            var resultado = await QuestionariosApi.EnviarAsync(Id, _passo, [.. _respostas.Values], _cts.Token);
+
+            if (resultado.Success)
+            {
+                _questionario = resultado.Questionario ?? _questionario;
+                _erro = null;
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Avaliação enviada",
+                    Detail = "Obrigado. Suas respostas foram registradas e a comparação está concluída.",
+                    Duration = 6000,
+                });
+            }
+            else
+            {
+                _erro = string.Join(" · ", resultado.Errors ?? ["Não foi possível enviar a avaliação."]);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _erro = ex.Message;
+        }
+        finally
+        {
+            _ocupado = false;
+        }
+    }
+
+    private void Voltar() => Nav.NavigateTo($"/comparacoes/{Id}");
+}

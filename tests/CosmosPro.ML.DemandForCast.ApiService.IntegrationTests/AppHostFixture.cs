@@ -29,6 +29,7 @@ public sealed class AppHostFixture : IAsyncLifetime
     public IRedesApi RedesApi { get; private set; } = null!;
     public IStageApi StageApi { get; private set; } = null!;
     public IComparacoesApi ComparacoesApi { get; private set; } = null!;
+    public IQuestionariosApi QuestionariosApi { get; private set; } = null!;
     public IComparisonApi ComparisonApi { get; private set; } = null!;
     public ITrainingApi TrainingApi { get; private set; } = null!;
     public IPurchasingApi PurchasingApi { get; private set; } = null!;
@@ -93,6 +94,7 @@ public sealed class AppHostFixture : IAsyncLifetime
         RedesApi = RestService.For<IRedesApi>(httpClient);
         StageApi = RestService.For<IStageApi>(httpClient);
         ComparacoesApi = RestService.For<IComparacoesApi>(httpClient);
+        QuestionariosApi = RestService.For<IQuestionariosApi>(httpClient);
         ComparisonApi = RestService.For<IComparisonApi>(httpClient);
         TrainingApi = RestService.For<ITrainingApi>(httpClient);
         PurchasingApi = RestService.For<IPurchasingApi>(httpClient);
