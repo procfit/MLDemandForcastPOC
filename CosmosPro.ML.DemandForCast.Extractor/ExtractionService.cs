@@ -35,7 +35,7 @@ internal sealed class ExtractionService
         try
         {
             Directory.CreateDirectory(request.OutputDirectory);
-            zipPath = ZipNaming.BuildPath(request.OutputDirectory, DateTime.Now);
+            zipPath = ZipNaming.BuildPath(request.OutputDirectory, ResolverInstante(request.Instante));
 
             using (var output = File.Create(zipPath))
             using (var zip = new CsvZipWriter(output))
@@ -598,6 +598,15 @@ internal sealed class ExtractionService
             }
         }
     }
+
+    /// <summary>
+    /// Decisão explícita, e não um <c>?? DateTime.Now</c> disperso dentro de <see cref="Run"/>:
+    /// o CLI não pergunta nada ao operador (ver <see cref="ExtractionRequest.Instante"/>) e
+    /// ainda assim precisa de um nome de arquivo, então o serviço grava com o instante da
+    /// própria escrita. Método próprio para o default poder ser verificado sozinho, sem
+    /// precisar de banco.
+    /// </summary>
+    internal static DateTime ResolverInstante(DateTime? informado) => informado ?? DateTime.Now;
 
     private static void TryDelete(string path)
     {

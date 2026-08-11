@@ -20,6 +20,21 @@ internal sealed record ExtractionRequest
     /// F14 removeu. <c>null</c> significa todas as lojas que a sugestão cita.
     /// </summary>
     public IReadOnlyList<int>? LojaIds { get; init; }
+
+    /// <summary>
+    /// Instante usado por <see cref="ZipNaming.BuildPath"/> para nomear o ZIP.
+    /// <para>
+    /// <c>null</c> quando quem chama não perguntou nada antes -- hoje só o modo linha de
+    /// comando (<see cref="ExtractorCli"/>), que não tem confirmação e portanto não tem um
+    /// instante prévio para threading. Nesse caso <see cref="ExtractionService.Run"/> usa o
+    /// instante da própria gravação (ver <see cref="ExtractionService.ResolverInstante"/>).
+    /// O form sempre preenche este campo com o instante em que perguntou ao operador --
+    /// duas chamadas independentes a <c>DateTime.Now</c> (uma na pergunta, outra na
+    /// gravação) deixavam o nome perguntado e o nome gravado discordarem quando o minuto
+    /// virava entre os dois.
+    /// </para>
+    /// </summary>
+    public DateTime? Instante { get; init; }
 }
 
 internal sealed record ExtractionProgress(string FileName, int FileIndex, int FileCount, long RowsWritten);

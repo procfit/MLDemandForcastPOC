@@ -803,14 +803,18 @@ internal sealed class MainForm : Form
 
         var pastaSaida = _pastaSaida.Text.Trim();
 
-        // Mesmo instante que ExtractionService.Run vai usar para nomear o arquivo (ver
-        // ZipNaming) -- é o que permite avisar aqui se o ZIP vai substituir um existente.
-        // O minuto pode virar entre esta pergunta e o início de fato da extração: o
-        // arquivo gravado seria então outro, e o aviso desta pergunta, sem efeito.
-        // Inofensivo -- na pior hipótese o operador respondeu a uma pergunta sobre um
-        // nome de arquivo que não é mais o que vai ser gravado -- mas quem ler isto
-        // depois pode se confundir se não achar a explicação aqui.
-        var zipEsperado = ZipNaming.BuildPath(pastaSaida, DateTime.Now);
+        // Capturado UMA vez, aqui -- e enviado a ExtractionService.Run via
+        // ExtractionRequest.Instante -- porque é o mesmo instante que decide o nome do
+        // arquivo tanto nesta pergunta quanto na gravação de fato (ver ZipNaming). Duas
+        // chamadas independentes a DateTime.Now (uma aqui, outra dentro de Run) deixavam
+        // as duas decisões discordarem quando o minuto virava entre a pergunta e o início
+        // da extração: no caso inofensivo o arquivo gravado passava a ser outro e o aviso
+        // desta pergunta ficava sem efeito; no caso grave, se já existisse um ZIP mais
+        // antigo sob o nome do minuto novo, a pergunta checava o nome errado, não avisava
+        // de nada, e File.Create truncava silenciosamente esse ZIP antigo sem o operador
+        // saber.
+        var instante = DateTime.Now;
+        var zipEsperado = ZipNaming.BuildPath(pastaSaida, instante);
         if (!ConfirmarExtracao(selecionada, janela, lojasEscolhidas.Count, pastaSaida, zipEsperado))
         {
             return Task.CompletedTask;
@@ -824,6 +828,7 @@ internal sealed class MainForm : Form
             DataFinal = janela.Fim,
             OutputDirectory = pastaSaida,
             LojaIds = lojasEscolhidas,
+            Instante = instante,
         };
         _config.Save();
 
