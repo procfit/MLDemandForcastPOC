@@ -205,4 +205,55 @@ public sealed class CatalogoServiceTests
         erro.Metadata[ExtratorErro.ChaveQuery].Should().Be(QualquerEtapa.QueryFile);
         erro.Metadata[ExtratorErro.ChaveDuracao].Should().Be(42d);
     }
+
+    [Fact]
+    public void Loja_da_sugestao_recebe_o_nome_do_cadastro()
+    {
+        var casadas = CatalogoService.Casar(
+            [(10, 40), (20, 2)],
+            [new LojaOption(10, "MATRIZ"), new LojaOption(20, "FILIAL CENTRO"), new LojaOption(99, "OUTRA")]);
+
+        casadas.Should().HaveCount(2);
+        casadas[0].Should().Be(new LojaDaSugestao(10, "MATRIZ", 40));
+        casadas[1].Should().Be(new LojaDaSugestao(20, "FILIAL CENTRO", 2));
+    }
+
+    [Fact]
+    public void Loja_sem_cadastro_ativo_continua_na_lista()
+    {
+        // lojas_disponiveis.sql filtra ATIVO = 'S'. Sumir da lista seria pior: a loja
+        // esta na sugestao e o comprador precisa saber para decidir sobre ela.
+        var casadas = CatalogoService.Casar([(86, 7)], [new LojaOption(10, "MATRIZ")]);
+
+        casadas.Should().ContainSingle();
+        casadas[0].LojaId.Should().Be(86);
+        casadas[0].Itens.Should().Be(7);
+        casadas[0].Nome.Should().Contain("inativa",
+            "lojas_disponiveis.sql filtra ATIVO = 'S' -- o caso comum é loja desativada, não inexistente");
+    }
+
+    [Fact]
+    public void Lojas_saem_ordenadas_por_id()
+    {
+        var casadas = CatalogoService.Casar(
+            [(30, 1), (10, 1), (20, 1)],
+            [new LojaOption(10, "A"), new LojaOption(20, "B"), new LojaOption(30, "C")]);
+
+        casadas.Select(l => l.LojaId).Should().Equal(10, 20, 30);
+    }
+
+    [Fact]
+    public void Leitura_de_lojas_da_sugestao_le_id_e_contagem_na_ordem_da_query()
+    {
+        var tabela = new DataTable();
+        tabela.Columns.Add("LojaId", typeof(int));
+        tabela.Columns.Add("Itens", typeof(int));
+        tabela.Rows.Add(86, 7);
+        using var reader = tabela.CreateDataReader();
+
+        var lidas = CatalogoService.LerLojasDaSugestao(reader).ToArray();
+
+        lidas.Should().ContainSingle();
+        lidas[0].Should().Be((86, 7));
+    }
 }

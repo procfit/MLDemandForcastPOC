@@ -49,6 +49,24 @@ public sealed class CliExitCodeMapTests
         CliExitCodeMap.De(new JanelaInviavelErro("m")).Should().Be(CliExitCode.JanelaInviavel);
     }
 
+    [Fact]
+    public void Recorte_de_lojas_invalido_e_erro_de_argumento()
+    {
+        // Entrada errada do operador, não falha de infraestrutura: o remédio é digitar
+        // outro número, e um script que veja 6 tentaria de novo à toa.
+        CliExitCodeMap.De(new LojasNaoSelecionadasErro()).Should().Be(CliExitCode.ArgumentosInvalidos);
+        CliExitCodeMap.De(new LojaForaDaSugestaoErro([99])).Should().Be(CliExitCode.ArgumentosInvalidos);
+    }
+
+    [Fact]
+    public void Empresa_diverge_de_filial_e_erro_de_argumento()
+    {
+        // Mesma categoria dos outros erros de recorte: a instalação do PBS não sustenta
+        // a garantia que o --stores pediu, e o remédio é escolher de novo (sem o recorte),
+        // não repetir o mesmo comando esperando um resultado diferente.
+        CliExitCodeMap.De(new EmpresaDivergeDeFilialErro(3)).Should().Be(CliExitCode.ArgumentosInvalidos);
+    }
+
     [Theory]
     [InlineData(typeof(ContratoErro))]
     [InlineData(typeof(EscritaErro))]

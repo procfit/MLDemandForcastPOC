@@ -37,6 +37,9 @@ internal sealed record CliOptions
     public long SugestaoId { get; init; }
     public string OutputDirectory { get; init; } = string.Empty;
 
+    /// <summary>Recorte de lojas dentro da sugestão. <c>null</c> = todas as que ela cita.</summary>
+    public IReadOnlyList<int>? LojaIds { get; init; }
+
     /// <summary>Diagnóstico: acrescenta tipo e pilha de chamadas à saída de erro.</summary>
     public bool StackTrace { get; init; }
 }
@@ -65,6 +68,7 @@ internal static class CliParser
         var stackTrace = false;
         long? sugestaoId = null;
         string? output = null;
+        IReadOnlyList<int>? lojaIds = null;
 
         for (var i = 0; i < args.Count; i++)
         {
@@ -110,6 +114,25 @@ internal static class CliParser
                     if (LerValor(args, ref i) is not { } valor) return Falha(ValorFaltando(arg));
                     if (string.IsNullOrWhiteSpace(valor)) return Falha($"'{arg}' espera uma pasta.");
                     output = valor;
+                    break;
+                }
+
+                case "--stores":
+                {
+                    if (LerValor(args, ref i) is not { } valor) return Falha(ValorFaltando(arg));
+
+                    var ids = new List<int>();
+                    foreach (var pedaco in valor.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    {
+                        if (!int.TryParse(pedaco, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) || id <= 0)
+                        {
+                            return Falha($"'{arg}' espera ids de loja separados por vírgula; '{pedaco}' não é um id válido.");
+                        }
+                        if (!ids.Contains(id)) ids.Add(id);
+                    }
+
+                    if (ids.Count == 0) return Falha($"'{arg}' não recebeu nenhum id de loja.");
+                    lojaIds = ids;
                     break;
                 }
 
@@ -163,6 +186,7 @@ internal static class CliParser
         {
             if (sugestaoId is not null) return Falha("'--suggestion-id' só vale com --extract.");
             if (output is not null) return Falha("'--output' só vale com --extract.");
+            if (lojaIds is not null) return Falha("'--stores' só vale com --extract.");
         }
         else
         {
@@ -184,6 +208,7 @@ internal static class CliParser
                 StackTrace = stackTrace,
                 SugestaoId = sugestaoId ?? 0,
                 OutputDirectory = output ?? string.Empty,
+                LojaIds = lojaIds,
             },
             null);
     }
@@ -239,6 +264,10 @@ internal static class CliParser
             OPÇÕES
               --suggestion-id <id>    Id da sugestão a extrair. Obrigatório com --extract.
               --output <pasta>        Pasta onde gravar o ZIP. Obrigatório com --extract.
+              --stores <ids>          Lojas a exportar, separadas por vírgula (ex.: 12,45,78).
+                                      Só vale para --extract. Ausente: todas as lojas que a
+                                      sugestão cita. A interface gráfica exige escolher; aqui
+                                      o padrão é exportar tudo, para não quebrar automação.
               --months-back <n>       Quantos meses para trás procurar sugestões no PBS.
                                       Padrão: {MesesRetroativosPadrao}. Vale só para --list;
                                       --extract busca a sugestão pelo id.

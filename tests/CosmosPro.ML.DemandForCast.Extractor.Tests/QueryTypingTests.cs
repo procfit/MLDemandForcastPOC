@@ -55,6 +55,9 @@ public sealed class QueryTypingTests
     [InlineData("estoques_movimentos.sql", "Sku")]
     [InlineData("estoques_movimentos.sql", "Data")]
     [InlineData("estoques_movimentos.sql", "QuantidadeEmEstoque")]
+    // lojas_da_sugestao.sql -> CatalogoService.LojasDaSugestao (GetInt32, GetInt32)
+    [InlineData("lojas_da_sugestao.sql", "LojaId")]
+    [InlineData("lojas_da_sugestao.sql", "Itens")]
     public void Coluna_lida_com_tipo_declara_o_tipo_na_query(string arquivo, string coluna)
     {
         var sql = SqlResources.Load(arquivo);
@@ -75,5 +78,16 @@ public sealed class QueryTypingTests
         var sql = SqlResources.Load("escopo_sugestao.sql");
 
         sql.Should().Contain("CONVERT(int, R.FILIAL)").And.Contain("CONVERT(varchar(30), R.PRODUTO)");
+    }
+
+    [Fact]
+    public void Itens_da_sugestao_declaram_escopo_de_sugestao_e_de_loja()
+    {
+        // Sem {{LOJAS}} o arquivo mais sensivel do ZIP sairia com todas as lojas da
+        // sugestao, e a FK (RedeId, LojaId) quebraria o import.
+        var sql = SqlResources.Load("sugestoes_compra_itens.sql");
+
+        sql.Should().Contain("{{SUGESTAO}}");
+        sql.Should().Contain("{{LOJAS}}");
     }
 }

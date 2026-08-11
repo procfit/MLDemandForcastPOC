@@ -27,6 +27,7 @@ internal sealed class ExtractionService
         var cronometro = System.Diagnostics.Stopwatch.StartNew();
         var zipPath = string.Empty;
         var zipBytes = 0L;
+        Result<EscopoRecortado> recorte = null!;
 
         var rows = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<string>();
@@ -34,8 +35,7 @@ internal sealed class ExtractionService
         try
         {
             Directory.CreateDirectory(request.OutputDirectory);
-            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture);
-            zipPath = Path.Combine(request.OutputDirectory, $"extracao-pbs_{stamp}.zip");
+            zipPath = ZipNaming.BuildPath(request.OutputDirectory, ResolverInstante(request.Instante));
 
             using (var output = File.Create(zipPath))
             using (var zip = new CsvZipWriter(output))
@@ -43,8 +43,14 @@ internal sealed class ExtractionService
             {
                 connection.Open();
 
-                var (lojaIds, skusDaSugestao) = LoadEscopoSugestao(connection, request.SugestaoId, ct);
-                AvisarDivergenciaEmpresaFilial(connection, request.SugestaoId, warnings, ct);
+                var pares = LoadEscopoSugestao(connection, request.SugestaoId, ct);
+                recorte = RecorteDeLojas.Aplicar(pares, request.LojaIds);
+                if (recorte.IsFailed) throw new FalhaDeDominioException(recorte.ErroOuFallback());
+
+                var lojaIds = recorte.Value.LojaIds;
+                var skusDaSugestao = recorte.Value.Skus;
+                AvisarOuRecusarDivergenciaEmpresaFilial(
+                    connection, request.SugestaoId, cortada: request.LojaIds is not null, warnings, ct);
 
                 var total = StageContract.WriteOrder.Length;
 
@@ -79,7 +85,7 @@ internal sealed class ExtractionService
                 var cabecalho = CopySugestaoHeader(connection, zip, request.SugestaoId, 8, total, progress, ct)
                     ?? throw new FalhaDeDominioException(new SugestaoNaoEncontradaErro(request.SugestaoId));
                 rows[StageContract.SugestoesCompra] = 1;
-                rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, 9, total, progress, ct);
+                rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, lojaIds, 9, total, progress, ct);
 
                 zip.WriteText(ZipManifest.EntryName, ZipManifest.Escrever(new ZipManifest(
                     request.SugestaoId,
@@ -89,7 +95,9 @@ internal sealed class ExtractionService
                     request.DataInicial,
                     request.DataFinal,
                     ZipManifest.VersaoAtual(),
-                    skusFabricados)));
+                    skusFabricados,
+                    recorte.Value.LojaIds,
+                    recorte.Value.LojasNaSugestao)));
             }
 
             // Dentro do try de propósito: uma falha aqui (antivírus travou o arquivo
@@ -138,64 +146,80 @@ internal sealed class ExtractionService
             warnings.Add("Nenhum estoque no período — o histórico de ESTOQUE_LANCAMENTOS costuma cobrir apenas os últimos meses.");
         }
 
-        return Result.Ok(new ExtractionResult(zipPath, zipBytes, rows, warnings));
+        return Result.Ok(new ExtractionResult(
+            zipPath, zipBytes, rows, warnings, recorte.Value.LojaIds, recorte.Value.LojasNaSugestao));
     }
 
     /// <summary>
-    /// Lojas e SKUs citados pela sugestão, para escopar as demais tabelas e
-    /// garantir a união dos produtos (ver <see cref="CopyProdutosGarantindoUniao"/>).
-    /// Uma query só, mais barata que bufferizar as 17 colunas dos itens.
+    /// Pares (loja, SKU) citados pela sugestão, para <see cref="RecorteDeLojas.Aplicar"/>
+    /// recortar e para garantir a união dos produtos (ver
+    /// <see cref="CopyProdutosGarantindoUniao"/>). Uma query só, mais barata que
+    /// bufferizar as 17 colunas dos itens.
     /// </summary>
-    private static (IReadOnlyList<int> LojaIds, IReadOnlySet<string> Skus) LoadEscopoSugestao(
+    private static IReadOnlyList<ParLojaSku> LoadEscopoSugestao(
         SqlConnection connection, long sugestaoId, CancellationToken ct)
     {
-        var (lojaIds, skus) = Step(new Etapa("escopo da sugestão", "escopo_sugestao.sql"), () =>
+        var pares = Step(new Etapa("escopo da sugestão", "escopo_sugestao.sql"), () =>
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("escopo_sugestao.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
             ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
 
-            var ids = new HashSet<int>();
-            var achados = new HashSet<string>(StringComparer.Ordinal);
+            var lidos = new List<ParLojaSku>();
             while (reader.Read())
             {
                 ct.ThrowIfCancellationRequested();
-                ids.Add(reader.GetInt32(0));
-                achados.Add(reader.GetString(1));
+                lidos.Add(new ParLojaSku(reader.GetInt32(0), reader.GetString(1)));
             }
-            return (ids, achados);
+            return (IReadOnlyList<ParLojaSku>)lidos;
         });
 
-        if (lojaIds.Count == 0)
+        if (pares.Count == 0)
         {
             throw new FalhaDeDominioException(new SugestaoSemItensErro(sugestaoId));
         }
 
-        return ([.. lojaIds.Order()], skus);
+        return pares;
     }
 
     /// <summary>
     /// Conta linhas com EMPRESA != FILIAL (ver Queries/sugestoes_compra_diagnostico.sql):
     /// sinal de que LojaId = FILIAL pode não valer nesta instalação do PBS.
+    /// <para>
+    /// Sem recorte, a divergência é só atribuição de dado errada — aviso, e o ZIP segue.
+    /// Com <paramref name="cortada"/> ela é outra coisa: o comprador escolheu FILIAL
+    /// específicos para saírem e os demais para ficarem de fora, e o filtro (que compara
+    /// contra FILIAL — ver <c>lojas_da_sugestao.sql</c> e <c>escopo_sugestao.sql</c>) é
+    /// aplicado sobre colunas que filtram por EMPRESA/EMPRESA_USUARIA (<c>vendas.sql</c>,
+    /// <c>compras.sql</c>, <c>promocoes.sql</c>, <c>estoques_movimentos.sql</c>,
+    /// <c>lojas.sql</c>). Se as duas divergem, o recorte pode deixar passar histórico de
+    /// uma EMPRESA que o comprador nunca marcou — a garantia de confidencialidade que a
+    /// escolha existe para dar não pode ser cumprida, então aviso não é resposta possível
+    /// e a extração recusa.
+    /// </para>
     /// </summary>
-    private static void AvisarDivergenciaEmpresaFilial(SqlConnection connection, long sugestaoId, List<string> warnings, CancellationToken ct) =>
+    private static void AvisarOuRecusarDivergenciaEmpresaFilial(
+        SqlConnection connection, long sugestaoId, bool cortada, List<string> warnings, CancellationToken ct) =>
         Step(new Etapa("diagnóstico EMPRESA vs FILIAL", "sugestoes_compra_diagnostico.sql"), () =>
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra_diagnostico.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
             ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
-            if (reader.Read() && !reader.IsDBNull(0))
+            if (!reader.Read() || reader.IsDBNull(0)) return;
+
+            var divergencias = reader.GetInt32(0);
+            if (divergencias == 0) return;
+
+            if (cortada)
             {
-                var divergencias = reader.GetInt32(0);
-                if (divergencias > 0)
-                {
-                    warnings.Add(
-                        $"{divergencias} linha(s) desta sugestão têm EMPRESA diferente de FILIAL — " +
-                        "a suposição LojaId = FILIAL pode estar incorreta nesta instalação do PBS.");
-                }
+                throw new FalhaDeDominioException(new EmpresaDivergeDeFilialErro(divergencias));
             }
+
+            warnings.Add(
+                $"{divergencias} linha(s) desta sugestão têm EMPRESA diferente de FILIAL — " +
+                "a suposição LojaId = FILIAL pode estar incorreta nesta instalação do PBS.");
         });
 
     /// <summary>Escreve sugestoes_compra.csv (uma linha) e devolve os campos que o manifesto precisa.</summary>
@@ -343,12 +367,13 @@ internal sealed class ExtractionService
         string entryName,
         CsvZipWriter zip,
         long sugestaoId,
+        IReadOnlyList<int> lojaIds,
         int fileIndex,
         int fileCount,
         IProgress<ExtractionProgress> progress,
         CancellationToken ct)
     {
-        using var command = CreateSugestaoCommand(connection, SqlResources.Load(queryFile), sugestaoId);
+        using var command = CreateSugestaoCommand(connection, SqlResources.Load(queryFile), sugestaoId, lojaIds);
         return CopyQueryCore(entryName, queryFile, zip, command, fileIndex, fileCount, progress, ct, inspect: null);
     }
 
@@ -495,14 +520,29 @@ internal sealed class ExtractionService
     /// {{SUGESTAO}} vira um parâmetro real (@sugestao), não concatenação de texto —
     /// o valor nasce de uma lista que o próprio PBS devolveu (catalogo_sugestoes.sql),
     /// mas usar parâmetro custa nada e elimina qualquer risco de injeção.
+    /// <paramref name="lojaIds"/> é opcional: só as queries que declaram {{LOJAS}}
+    /// passam algo, e o default null preserva o comportamento das que não escopam
+    /// por loja.
     /// </summary>
-    private static SqlCommand CreateSugestaoCommand(SqlConnection connection, string sql, long sugestaoId)
+    private static SqlCommand CreateSugestaoCommand(
+        SqlConnection connection, string sql, long sugestaoId, IReadOnlyList<int>? lojaIds = null)
     {
-        var command = new SqlCommand(sql.Replace("{{SUGESTAO}}", "@sugestao"), connection)
-        {
-            CommandTimeout = CommandTimeoutSeconds,
-        };
+        var texto = sql.Replace("{{SUGESTAO}}", "@sugestao");
+
+        var placeholders = lojaIds is null
+            ? []
+            : lojaIds.Select((_, i) => "@loja" + i.ToString(CultureInfo.InvariantCulture)).ToArray();
+
+        if (lojaIds is not null) texto = texto.Replace("{{LOJAS}}", string.Join(',', placeholders));
+
+        var command = new SqlCommand(texto, connection) { CommandTimeout = CommandTimeoutSeconds };
         command.Parameters.Add("@sugestao", SqlDbType.BigInt).Value = sugestaoId;
+
+        for (var i = 0; lojaIds is not null && i < lojaIds.Count; i++)
+        {
+            command.Parameters.Add(placeholders[i], SqlDbType.Int).Value = lojaIds[i];
+        }
+
         return command;
     }
 
@@ -558,6 +598,15 @@ internal sealed class ExtractionService
             }
         }
     }
+
+    /// <summary>
+    /// Decisão explícita, e não um <c>?? DateTime.Now</c> disperso dentro de <see cref="Run"/>:
+    /// o CLI não pergunta nada ao operador (ver <see cref="ExtractionRequest.Instante"/>) e
+    /// ainda assim precisa de um nome de arquivo, então o serviço grava com o instante da
+    /// própria escrita. Método próprio para o default poder ser verificado sozinho, sem
+    /// precisar de banco.
+    /// </summary>
+    internal static DateTime ResolverInstante(DateTime? informado) => informado ?? DateTime.Now;
 
     private static void TryDelete(string path)
     {

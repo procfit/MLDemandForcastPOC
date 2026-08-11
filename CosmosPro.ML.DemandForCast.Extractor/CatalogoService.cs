@@ -93,6 +93,51 @@ internal sealed class CatalogoService(AppConfig config, ExtratorLog log)
             }), ct);
     }
 
+    public Result<IReadOnlyList<LojaDaSugestao>> LojasDaSugestao(
+        string connectionString, long sugestaoId, CancellationToken ct)
+    {
+        var etapa = new Etapa("lojas da sugestão", "lojas_da_sugestao.sql");
+
+        var daSugestao = ComRetentativa(() => Consultar(connectionString, etapa, TimeoutContagem, ct,
+            comando => comando.Parameters.Add("@sugestao", SqlDbType.BigInt).Value = sugestaoId,
+            reader => (IReadOnlyList<(int, int)>)[.. LerLojasDaSugestao(reader)],
+            "{{SUGESTAO}}", "@sugestao"), ct);
+
+        if (daSugestao.IsFailed) return Result.Fail<IReadOnlyList<LojaDaSugestao>>(daSugestao.Errors);
+
+        var cadastro = Lojas(connectionString, ct);
+        if (cadastro.IsFailed) return Result.Fail<IReadOnlyList<LojaDaSugestao>>(cadastro.Errors);
+
+        return Result.Ok(Casar(daSugestao.Value, cadastro.Value));
+    }
+
+    internal static IEnumerable<(int LojaId, int Itens)> LerLojasDaSugestao(IDataReader reader)
+    {
+        while (reader.Read()) yield return (reader.GetInt32(0), reader.GetInt32(1));
+    }
+
+    /// <summary>
+    /// Junta as lojas da sugestão com os nomes do cadastro ativo. Loja que a sugestão
+    /// cita e o cadastro não tem (desativada, por exemplo) **fica** na lista: sumir
+    /// esconderia do comprador uma loja que vai ser exportada se ele não disser nada.
+    /// </summary>
+    internal static IReadOnlyList<LojaDaSugestao> Casar(
+        IReadOnlyList<(int LojaId, int Itens)> daSugestao, IReadOnlyList<LojaOption> cadastro)
+    {
+        var nomes = cadastro.ToDictionary(l => l.LojaId, l => l.Nome);
+
+        // "Inativa" e não "sem cadastro": lojas_disponiveis.sql filtra ATIVO = 'S', então o
+        // caso comum de uma loja não aparecer aqui é ela ter sido desativada no PBS -- não
+        // deixar de existir. "Sem cadastro" diria ao comprador algo que normalmente não
+        // aconteceu.
+        return [.. daSugestao
+            .OrderBy(l => l.LojaId)
+            .Select(l => new LojaDaSugestao(
+                l.LojaId,
+                nomes.TryGetValue(l.LojaId, out var nome) ? nome : "(inativa ou sem cadastro)",
+                l.Itens))];
+    }
+
     /// <summary>
     /// Ordinais compartilhados por catalogo_sugestoes.sql e sugestao_por_id.sql — as
     /// duas devolvem o mesmo cabeçalho, e ler em dois lugares deixaria uma mudança de

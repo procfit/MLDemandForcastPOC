@@ -20,7 +20,12 @@ internal sealed record ZipManifest(
     // e não só no log do extrator: quem consome o ZIP (a sessão de comparação
     // F14) precisa avisar "N itens sem cadastro" ao comprador, não deixar ele
     // descobrir olhando uma célula vazia na tabela de itens.
-    int SkusSemCadastro)
+    int SkusSemCadastro,
+    // Quais lojas da sugestão entraram no ZIP, e quantas ela tinha. A comparação
+    // pontua a sugestão do ERP RESTRITA a estas lojas; sem os dois números, um
+    // resultado de 3 lojas é indistinguível de um da rede inteira.
+    IReadOnlyList<int> LojasExportadas,
+    int LojasNaSugestao)
 {
     public const string EntryName = "manifesto.json";
 

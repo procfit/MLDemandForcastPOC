@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace CosmosPro.ML.DemandForCast.Extractor;
 
 internal sealed record ExtractionRequest
@@ -12,6 +14,27 @@ internal sealed record ExtractionRequest
     public required DateOnly DataInicial { get; init; }
     public required DateOnly DataFinal { get; init; }
     public required string OutputDirectory { get; init; }
+
+    /// <summary>
+    /// Recorte de lojas DENTRO da sugestão -- não escolha livre de lojas, que é o que a
+    /// F14 removeu. <c>null</c> significa todas as lojas que a sugestão cita.
+    /// </summary>
+    public IReadOnlyList<int>? LojaIds { get; init; }
+
+    /// <summary>
+    /// Instante usado por <see cref="ZipNaming.BuildPath"/> para nomear o ZIP.
+    /// <para>
+    /// <c>null</c> quando quem chama não perguntou nada antes -- hoje só o modo linha de
+    /// comando (<see cref="ExtractorCli"/>), que não tem confirmação e portanto não tem um
+    /// instante prévio para threading. Nesse caso <see cref="ExtractionService.Run"/> usa o
+    /// instante da própria gravação (ver <see cref="ExtractionService.ResolverInstante"/>).
+    /// O form sempre preenche este campo com o instante em que perguntou ao operador --
+    /// duas chamadas independentes a <c>DateTime.Now</c> (uma na pergunta, outra na
+    /// gravação) deixavam o nome perguntado e o nome gravado discordarem quando o minuto
+    /// virava entre os dois.
+    /// </para>
+    /// </summary>
+    public DateTime? Instante { get; init; }
 }
 
 internal sealed record ExtractionProgress(string FileName, int FileIndex, int FileCount, long RowsWritten);
@@ -20,7 +43,9 @@ internal sealed record ExtractionResult(
     string ZipPath,
     long ZipBytes,
     IReadOnlyDictionary<string, long> RowsByFile,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<int> LojasExportadas,
+    int LojasNaSugestao);
 
 internal sealed record LojaOption(int LojaId, string Nome)
 {
@@ -52,3 +77,29 @@ internal sealed record SugestaoCatalogoCabecalho(
 /// </summary>
 internal sealed record SugestaoContagem(
     long SugestaoId, int QtdLinhas, int QtdLojas, int DiasCoberturaMax);
+
+/// <summary>Uma loja citada pela sugestão, com o peso que ela tem nela.</summary>
+internal sealed record LojaDaSugestao(int LojaId, string Nome, int Itens)
+{
+    public override string ToString() => $"{LojaId} · {Nome} · {Itens:N0} itens";
+}
+
+/// <summary>
+/// Nome do ZIP de extração — fonte única para quem grava o arquivo
+/// (<see cref="ExtractionService.Run"/>) e quem precisa checar se ele já existe antes de
+/// perguntar (<c>MainForm.ExtrairAsync</c>, CHANGE 3). Duplicar a regra nos dois lugares
+/// deixaria a tela perguntar sobre um arquivo e o serviço sobrescrever outro.
+/// <para>
+/// Granularidade de minuto, não de segundo: duas extrações no mesmo minuto colidem no
+/// mesmo nome de propósito — essa colisão é o que a confirmação de sobrescrita existe
+/// para avisar, não um bug a esconder aumentando a resolução do timestamp.
+/// </para>
+/// </summary>
+internal static class ZipNaming
+{
+    public static string BuildPath(string outputDirectory, DateTime timestamp) =>
+        Path.Combine(outputDirectory, FileName(timestamp));
+
+    private static string FileName(DateTime timestamp) =>
+        $"extracao-pbs_{timestamp.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture)}.zip";
+}

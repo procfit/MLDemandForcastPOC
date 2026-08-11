@@ -9,7 +9,7 @@ public sealed class ZipManifestTests
     public void Manifesto_roundtrip_preserva_a_sugestao_e_a_janela()
     {
         var m = new ZipManifest(21217, "MATTEL", new DateTime(2026, 3, 10, 10, 27, 0), 2,
-                                new DateOnly(2025, 3, 10), new DateOnly(2026, 4, 9), "1.0.0", 3);
+                                new DateOnly(2025, 3, 10), new DateOnly(2026, 4, 9), "1.0.0", 3, [11, 34], 40);
 
         var volta = ZipManifest.Ler(ZipManifest.Escrever(m));
 
@@ -20,7 +20,7 @@ public sealed class ZipManifestTests
     public void Descricao_nula_e_preservada_no_roundtrip()
     {
         var m = new ZipManifest(1, null, new DateTime(2026, 1, 1), 1,
-                                new DateOnly(2025, 1, 1), new DateOnly(2026, 2, 1), "1.0.0", 0);
+                                new DateOnly(2025, 1, 1), new DateOnly(2026, 2, 1), "1.0.0", 0, [5], 5);
 
         var volta = ZipManifest.Ler(ZipManifest.Escrever(m));
 
@@ -35,7 +35,7 @@ public sealed class ZipManifestTests
         // sozinho passaria mesmo se a serialização mudasse de casing ou formato
         // de data sem ninguém perceber.
         var m = new ZipManifest(21217, "MATTEL", new DateTime(2026, 3, 10, 10, 27, 0), 2,
-                                new DateOnly(2025, 3, 10), new DateOnly(2026, 4, 9), "1.0.0", 3);
+                                new DateOnly(2025, 3, 10), new DateOnly(2026, 4, 9), "1.0.0", 3, [11, 34], 40);
 
         var json = ZipManifest.Escrever(m);
 
@@ -54,6 +54,32 @@ public sealed class ZipManifestTests
         var acao = () => ZipManifest.Ler(semSugestaoId);
 
         acao.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Manifesto_declara_as_lojas_exportadas_e_o_total_da_sugestao()
+    {
+        var m = new ZipManifest(21217, "MATTEL", new DateTime(2026, 3, 10, 10, 27, 0), 2,
+            new DateOnly(2025, 3, 10), new DateOnly(2026, 4, 9), "0.15.0", 0, [10, 20], 98);
+
+        var volta = ZipManifest.Ler(ZipManifest.Escrever(m));
+
+        volta.LojasExportadas.Should().Equal(10, 20);
+        volta.LojasNaSugestao.Should().Be(98);
+    }
+
+    [Fact]
+    public void Manifesto_sem_recorte_declara_todas_as_lojas_da_sugestao()
+    {
+        // Extracao sem --stores: as duas listas coincidem, e o consumidor consegue
+        // distinguir "exportou tudo" de "exportou parte" sem heuristica.
+        var m = new ZipManifest(1, null, new DateTime(2026, 1, 1), 1,
+            new DateOnly(2025, 1, 1), new DateOnly(2026, 1, 8), "0.15.0", 0, [7], 1);
+
+        var volta = ZipManifest.Ler(ZipManifest.Escrever(m));
+
+        volta.LojasExportadas.Should().Equal(7);
+        volta.LojasNaSugestao.Should().Be(1);
     }
 }
 
@@ -103,7 +129,7 @@ public sealed class ManifestoContratoTests : IDisposable
     public void Leitor_do_Worker_le_o_que_o_extrator_de_fato_escreve()
     {
         var escrito = new ZipManifest(21217, "MATTEL", new DateTime(2026, 3, 10, 10, 27, 0), 2,
-                                      new DateOnly(2025, 3, 10), new DateOnly(2026, 4, 9), "1.2.3", 3);
+                                      new DateOnly(2025, 3, 10), new DateOnly(2026, 4, 9), "1.2.3", 3, [11, 34], 40);
         File.WriteAllText(Path.Combine(_dir, ZipManifest.EntryName), ZipManifest.Escrever(escrito));
 
         var leitura = ManifestoLeitor.Ler(_dir);

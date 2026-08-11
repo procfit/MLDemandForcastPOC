@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FluentResults;
 
 namespace CosmosPro.ML.DemandForCast.Extractor;
@@ -31,8 +32,9 @@ internal sealed class MainForm : Form
     // Largura menor que os 612 originais para abrir espaço ao semáforo à esquerda e ao
     // indicador de análise à direita, na mesma linha — o box da sugestão não tem altura
     // sobrando, e mover o resto do formulário significaria recalcular todas as posições
-    // absolutas abaixo dele.
-    private readonly Label _janelaInfo = new() { Width = 460, Height = 30, AutoSize = false };
+    // absolutas abaixo dele. Reduzida de 460 para 320 quando "Escolher lojas…" entrou na
+    // mesma linha, entre este rótulo e o indicador de análise.
+    private readonly Label _janelaInfo = new() { Width = 320, Height = 30, AutoSize = false };
 
     /// <summary>
     /// Verde ou vermelho ao lado do texto: o desfecho da análise legível de relance.
@@ -67,6 +69,8 @@ internal sealed class MainForm : Form
         Visible = false,
     };
 
+    private readonly Button _escolherLojas = new() { Text = "Escolher lojas…", Width = 130, Enabled = false };
+
     private readonly TextBox _pastaSaida = new() { Width = 360 };
     private readonly Button _escolherPasta = new() { Text = "...", Width = 40 };
 
@@ -96,6 +100,42 @@ internal sealed class MainForm : Form
 
     private IReadOnlyList<SugestaoCatalogoCabecalho> _catalogo = [];
     private ExtractionWindow? _janela;
+
+    // Amarra a última janela CALCULADA (viável ou não) ao id da sugestão a que ela
+    // pertence. Existe porque ExecutarAsync chama AtualizarJanela depois de TODA
+    // operação -- inclusive uma extração bem-sucedida da própria sugestão selecionada --
+    // e ContarSelecao não reconta a mesma sugestão (guarda _sugestaoContada, ver lá).
+    // Sem este cache, AtualizarJanela zerava a janela e o Extrair ficava morto até o
+    // operador trocar de linha e voltar só para reacionar a contagem. Um slot só, não um
+    // dicionário: trocar de sugestão sobrescreve a entrada, e é isso que impede a janela
+    // de uma sugestão vazar para outra ao restaurar. Zerado explicitamente quando o
+    // recount da MESMA sugestão falha (ver ContarSelecaoAsync) -- senão uma janela de um
+    // sucesso anterior poderia reviver depois de uma falha mais recente. Zerado também
+    // quando um novo catálogo é aceito (ver CarregarSugestoesAsync) -- senão a mesma
+    // sugestão, selecionada de novo depois do recarregamento, restauraria uma
+    // viabilidade calculada contra dados que o recarregamento pode ter substituído.
+    private (long SugestaoId, ExtractionWindow Janela)? _janelaCache;
+
+    private IReadOnlyList<LojaDaSugestao> _lojasDaSugestao = [];
+
+    // null quer dizer "o operador ainda não abriu o diálogo e confirmou uma escolha" --
+    // e essa distinção não pode se perder numa lista vazia (ver ExtrairAsync): antes desta
+    // revisão as duas colapsavam no mesmo tipo, e null virava "todas as lojas" lá no fundo
+    // de RecorteDeLojas.Aplicar. É exatamente o caminho que a garantia de confidencialidade
+    // desta tela existe para fechar.
+    private IReadOnlyList<int>? _lojasEscolhidas;
+
+    // Geração própria do fetch de lojas -- separada de _contagemGeracao (ver
+    // ContarSelecaoAsync, área protegida): são dois fetches independentes, cada um
+    // com seu próprio "quem volta fora de época se cala".
+    private long _lojasFetchGeracao;
+
+    // Base do resumo amarrada ao id da sugestão em vez de zerada num ponto fixo:
+    // ContarSelecao já zera _lojasDaSugestao/_lojasEscolhidas na troca de seleção,
+    // mas é área protegida (não pode ganhar mais uma responsabilidade). Comparar o
+    // id na hora de usar (AtualizarResumoDaSelecao) faz a troca de sugestão
+    // recapturar a base sozinha, sem depender de mais um ponto de reset espalhado.
+    private (long SugestaoId, string Texto)? _baseResumoLojas;
 
     // Contagem por seleção: fetch próprio, fora de ExecutarAsync (ver ContarSelecaoAsync).
     // Um novo CTS por chamada -- trocar de linha rápido cancela a contagem anterior em
@@ -141,6 +181,7 @@ internal sealed class MainForm : Form
             AtualizarJanela();
             ContarSelecao();
         };
+        _escolherLojas.Click += async (_, _) => await EscolherLojasAsync();
         _escolherPasta.Click += (_, _) => EscolherPasta();
         _extrair.Click += async (_, _) => await ExtrairAsync();
         _cancelar.Click += (_, _) => _operacao?.Cancelar();
@@ -182,6 +223,8 @@ internal sealed class MainForm : Form
         _sugestaoBox.Controls.Add(_semaforo);
         _janelaInfo.Location = new Point(32, 196);
         _sugestaoBox.Controls.Add(_janelaInfo);
+        _escolherLojas.Location = new Point(362, 196);
+        _sugestaoBox.Controls.Add(_escolherLojas);
         _analisando.Location = new Point(500, 200);
         _sugestaoBox.Controls.Add(_analisando);
 
@@ -352,6 +395,17 @@ internal sealed class MainForm : Form
                 _config.MesesRetroativos = meses;
                 _config.Save();
                 _log.Escrever($"{catalogo.Count:N0} sugestões carregadas.");
+
+                // O catálogo que acabou de chegar é a fronteira: a análise anterior (janela
+                // cacheada, marca de "já contei esta sugestão") descreve dados que este
+                // recarregamento pode ter apagado -- e a mesma sugestão pode acabar
+                // selecionada de novo (ordenação estável, ela pode continuar sendo a mais
+                // recente). Zerar aqui, ANTES do rebind que AplicarFiltro dispara, é o que
+                // faz ContarSelecao tratar a próxima seleção como nova em vez de restaurar
+                // uma viabilidade calculada contra o catálogo antigo.
+                _janelaCache = null;
+                _sugestaoContada = null;
+
                 AplicarFiltro();
             });
     }
@@ -398,6 +452,11 @@ internal sealed class MainForm : Form
                 contagem.DiasCoberturaMax,
                 DateOnly.FromDateTime(DateTime.Today));
 
+            // Cacheada por sugestaoId (ver o campo _janelaCache): é o que deixa
+            // AtualizarJanela religar o Extrair depois de uma extração bem-sucedida sem
+            // reconsultar o ERP.
+            _janelaCache = (sugestaoId, _janela);
+
             var itens = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s)";
 
             if (_janela.Viavel)
@@ -432,6 +491,10 @@ internal sealed class MainForm : Form
             // A contagem que falhou não fica marcada como feita: selecionar a mesma
             // linha de novo tem de poder tentar outra vez.
             _sugestaoContada = null;
+
+            // Invalida só a entrada desta sugestão: um recount que falha não pode deixar
+            // uma janela de um sucesso anterior disponível para AtualizarJanela reviver.
+            if (_janelaCache?.SugestaoId == sugestaoId) _janelaCache = null;
         }
     }
 
@@ -489,6 +552,9 @@ internal sealed class MainForm : Form
             // aqui deixaria a tela com grade vazia e nenhum motivo.
             if (_sugestoes.Rows.Count > 0) LimparAnalise();
             _extrair.Enabled = false;
+            _escolherLojas.Enabled = false;
+            _lojasDaSugestao = [];
+            _lojasEscolhidas = null;
             return;
         }
 
@@ -500,16 +566,33 @@ internal sealed class MainForm : Form
             _janela = null;
             if (_sugestoes.Rows.Count > 0) LimparAnalise();
             _extrair.Enabled = false;
+            _escolherLojas.Enabled = false;
+            _lojasDaSugestao = [];
+            _lojasEscolhidas = null;
             return;
         }
 
-        // A janela **não** é decidida aqui, e essa é a mudança: a cobertura vem do
-        // DIAS_ESTOQUE dos itens, que só a contagem conhece. Antes ela saía do cabeçalho e
-        // este método podia decidir na hora — o campo do cabeçalho estava errado (era do
-        // método 2 e vinha zerado em 83% das sugestões de eMax/eSeg), e a consequência foi
-        // uma extração de 879 MB sem um dia de gabarito.
+        // A janela **não** é decidida aqui, e essa é a mudança original: a cobertura vem
+        // do DIAS_ESTOQUE dos itens, que só a contagem conhece. Antes ela saía do
+        // cabeçalho e este método podia decidir na hora — o campo do cabeçalho estava
+        // errado (era do método 2 e vinha zerado em 83% das sugestões de eMax/eSeg), e a
+        // consequência foi uma extração de 879 MB sem um dia de gabarito.
         //
-        // Enquanto a contagem não volta, não há janela e o Extrair fica desabilitado:
+        // O que mudou aqui: este método também roda depois de TODA operação (ver o
+        // finally de ExecutarAsync), inclusive uma extração bem-sucedida da própria
+        // sugestão que continua selecionada -- e ContarSelecao não reconta a mesma
+        // sugestão (guarda _sugestaoContada). Sem restaurar, o Extrair ficaria morto até
+        // o operador trocar de linha e voltar só para reacionar a contagem. Restaurar do
+        // cache não é "decidir na hora": a contagem já rodou e ainda vale para esta
+        // sugestão -- é dado velho, não um cálculo novo.
+        if (_janelaCache is { } cache && cache.SugestaoId == selecionada.SugestaoId)
+        {
+            _janela = cache.Janela;
+            _extrair.Enabled = cache.Janela.Viavel;
+            return;
+        }
+
+        // Sem cache para ESTA sugestão (contagem ainda não voltou, ou o id não bate):
         // habilitar antes seria oferecer uma extração cuja viabilidade ninguém conferiu.
         _janela = null;
         _extrair.Enabled = false;
@@ -577,12 +660,127 @@ internal sealed class MainForm : Form
         // não sabe a qual linha a frase se refere.
         MostrarAnalise($"Analisando a sugestão {selecionada.SugestaoId}: itens, cobertura e janela…");
         _ = ContarSelecaoAsync(selecionada.SugestaoId, selecionada.DataHora);
+
+        _lojasDaSugestao = [];
+        _lojasEscolhidas = null;
+        _escolherLojas.Enabled = true;
+    }
+
+    /// <summary>
+    /// As lojas só são buscadas quando o comprador pede para escolher: é uma ida ao
+    /// banco por sugestão, e a maioria das seleções não termina em extração.
+    /// </summary>
+    private async Task EscolherLojasAsync()
+    {
+        if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada) return;
+
+        var sugestaoId = selecionada.SugestaoId;
+
+        if (_lojasDaSugestao.Count == 0)
+        {
+            var geracao = ++_lojasFetchGeracao;
+            _escolherLojas.Enabled = false;
+
+            var connectionString = BuildConnectionString();
+            var lidas = await Task.Run(() => _catalogoService.LojasDaSugestao(connectionString, sugestaoId, CancellationToken.None));
+
+            // Mesmo padrão de _contagemGeracao em ContarSelecaoAsync: quem volta fora de
+            // época se cala. "Fora de época" é geração superada (um clique novo já está
+            // em voo, e esse clique é quem deve religar o botão) OU seleção trocada (a
+            // troca já religou o botão via ContarSelecao/AtualizarJanela; tocar nele de
+            // novo aqui reabriria a corrida que esta checagem existe para fechar --
+            // aplicar as lojas de A, ou abrir o diálogo com elas, sobre a sugestão B).
+            var aindaAtual = geracao == _lojasFetchGeracao
+                && _sugestoes.CurrentRow?.DataBoundItem is SugestaoLinha atual
+                && atual.SugestaoId == sugestaoId;
+
+            if (!aindaAtual) return;
+
+            if (lidas.IsFailed)
+            {
+                var erro = lidas.ErroOuFallback();
+                _log.Escrever($"ERRO ao listar as lojas da sugestão {sugestaoId}: {erro.Message}");
+                _escolherLojas.Enabled = true;
+                MessageBox.Show(this, erro.Message, "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            _lojasDaSugestao = lidas.Value;
+            _escolherLojas.Enabled = true;
+        }
+
+        // _lojasEscolhidas ainda pode ser null aqui (nenhuma escolha confirmada até agora) --
+        // o diálogo só entende "nada marcado", então null e [] chegam a ele da mesma forma.
+        if (SelecaoDeLojasDialog.Escolher(this, _lojasDaSugestao, _lojasEscolhidas ?? []) is not { } escolhidas) return;
+
+        _lojasEscolhidas = escolhidas;
+        _log.Escrever($"Lojas escolhidas ({escolhidas.Count} de {_lojasDaSugestao.Count}): "
+            + string.Join(", ", _lojasDaSugestao.Where(l => escolhidas.Contains(l.LojaId)).Select(l => $"{l.LojaId} {l.Nome}")));
+        AtualizarResumoDaSelecao(sugestaoId);
+    }
+
+    private void AtualizarResumoDaSelecao(long sugestaoId)
+    {
+        if (_lojasEscolhidas is not { Count: > 0 } escolhidas || _lojasDaSugestao.Count == 0) return;
+
+        // Recompor sempre a partir da base, nunca do texto atual: prepender no texto
+        // atual (versão anterior) empilha "5 de 10 loja(s) · 3 de 10 loja(s) · ..." a
+        // cada reconfirmação. A base é amarrada ao id em vez de zerada por fora (ver
+        // campo _baseResumoLojas): se o id não bate, a sugestão trocou e a base velha
+        // não serve -- recaptura aqui mesmo, sem depender de outro método limpá-la.
+        if (_baseResumoLojas is not { } baseAtual || baseAtual.SugestaoId != sugestaoId)
+        {
+            baseAtual = (sugestaoId, _janelaInfo.Text);
+            _baseResumoLojas = baseAtual;
+        }
+
+        // A base já traz sua própria contagem de lojas (o total da sugestão, escrito por
+        // ContarSelecaoAsync) -- sem remover daqui, "2 de 10 loja(s)" e "10 loja(s)" apareceriam
+        // juntos na mesma linha, dizendo o mesmo número duas vezes com significados diferentes.
+        // Regex e não índice fixo porque a forma da base muda entre viável, inviável e erro.
+        var baseSemContagemDeLojas = Regex.Replace(baseAtual.Texto, @"\s*·\s*[\d.,]+\s+loja\(s\)", "");
+
+        _janelaInfo.Text = $"{escolhidas.Count} de {_lojasDaSugestao.Count} loja(s) · {baseSemContagemDeLojas}";
     }
 
     private void EscolherPasta()
     {
         using var dialog = new FolderBrowserDialog { SelectedPath = _pastaSaida.Text };
         if (dialog.ShowDialog(this) == DialogResult.OK) _pastaSaida.Text = dialog.SelectedPath;
+    }
+
+    /// <summary>
+    /// Pergunta antes de gravar qualquer coisa. Duas motivações na mesma caixa, por
+    /// decisão do desenvolvedor (não duas caixas separadas): confirmar o clique em
+    /// Extrair, e avisar quando o ZIP vai substituir um já existente -- hoje
+    /// <c>File.Create</c> trunca o anterior sem aviso, e <c>extracao-pbs_{yyyyMMdd-HHmm}</c>
+    /// colide entre duas extrações no mesmo minuto.
+    /// <para>
+    /// A contagem de lojas é a linha que importa: a rede só autoriza a exportação de
+    /// algumas lojas, e é para isso que a tela existe. "Não" não deve deixar rastro --
+    /// nenhum ZIP, nenhuma linha de log dizendo que algo aconteceu.
+    /// </para>
+    /// </summary>
+    private bool ConfirmarExtracao(
+        SugestaoLinha selecionada, ExtractionWindow janela, int lojasEscolhidasCount, string pastaSaida, string zipEsperado)
+    {
+        var mensagem =
+            $"Sugestão {selecionada.SugestaoId} — {selecionada.Descricao} ({selecionada.DataHora:dd/MM/yyyy HH:mm}){Environment.NewLine}" +
+            $"{lojasEscolhidasCount} de {_lojasDaSugestao.Count} loja(s) serão exportadas.{Environment.NewLine}" +
+            $"{TextoDaJanela(janela)}.{Environment.NewLine}" +
+            $"Pasta de saída: {pastaSaida}";
+
+        var arquivoJaExiste = File.Exists(zipEsperado);
+        if (arquivoJaExiste)
+        {
+            mensagem += Environment.NewLine + Environment.NewLine +
+                $"Já existe um arquivo \"{Path.GetFileName(zipEsperado)}\" nesta pasta -- continuar vai substituí-lo.";
+        }
+
+        mensagem += Environment.NewLine + Environment.NewLine + "Confirma a extração?";
+
+        return MessageBox.Show(this, mensagem, "Extrator", MessageBoxButtons.YesNo,
+            arquivoJaExiste ? MessageBoxIcon.Warning : MessageBoxIcon.Question) == DialogResult.Yes;
     }
 
     private Task ExtrairAsync()
@@ -593,13 +791,44 @@ internal sealed class MainForm : Form
             return Task.CompletedTask;
         }
 
+        // _lojasEscolhidas é null até o operador confirmar uma escolha no diálogo, e null
+        // NÃO pode significar "todas" aqui -- essa conversão silenciosa é a falha de
+        // confidencialidade que este guard existe para fechar: sem escolha, a extração
+        // recusa em vez de decidir por conta própria o que sai da máquina do cliente.
+        if (_lojasEscolhidas is not { Count: > 0 } lojasEscolhidas)
+        {
+            MessageBox.Show(this, "Escolha ao menos uma loja em \"Escolher lojas…\" antes de extrair.", "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return Task.CompletedTask;
+        }
+
+        var pastaSaida = _pastaSaida.Text.Trim();
+
+        // Capturado UMA vez, aqui -- e enviado a ExtractionService.Run via
+        // ExtractionRequest.Instante -- porque é o mesmo instante que decide o nome do
+        // arquivo tanto nesta pergunta quanto na gravação de fato (ver ZipNaming). Duas
+        // chamadas independentes a DateTime.Now (uma aqui, outra dentro de Run) deixavam
+        // as duas decisões discordarem quando o minuto virava entre a pergunta e o início
+        // da extração: no caso inofensivo o arquivo gravado passava a ser outro e o aviso
+        // desta pergunta ficava sem efeito; no caso grave, se já existisse um ZIP mais
+        // antigo sob o nome do minuto novo, a pergunta checava o nome errado, não avisava
+        // de nada, e File.Create truncava silenciosamente esse ZIP antigo sem o operador
+        // saber.
+        var instante = DateTime.Now;
+        var zipEsperado = ZipNaming.BuildPath(pastaSaida, instante);
+        if (!ConfirmarExtracao(selecionada, janela, lojasEscolhidas.Count, pastaSaida, zipEsperado))
+        {
+            return Task.CompletedTask;
+        }
+
         var request = new ExtractionRequest
         {
             ConnectionString = BuildConnectionString(),
             SugestaoId = selecionada.SugestaoId,
             DataInicial = janela.Inicio,
             DataFinal = janela.Fim,
-            OutputDirectory = _pastaSaida.Text.Trim(),
+            OutputDirectory = pastaSaida,
+            LojaIds = lojasEscolhidas,
+            Instante = instante,
         };
         _config.Save();
 
@@ -627,6 +856,7 @@ internal sealed class MainForm : Form
             resultado =>
             {
                 _log.Escrever($"ZIP gerado: {resultado.ZipPath} ({resultado.ZipBytes / 1024d / 1024d:N1} MB)");
+                _log.Escrever($"Lojas exportadas: {resultado.LojasExportadas.Count} de {resultado.LojasNaSugestao}.");
                 foreach (var (file, count) in resultado.RowsByFile) _log.Escrever($"  {file}: {count:N0} linhas");
                 foreach (var warning in resultado.Warnings) _log.Escrever($"  AVISO: {warning}");
             });

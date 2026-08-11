@@ -259,6 +259,16 @@ há arquivo: a saída vai para o console (dados em `stdout`, falhas e progresso 
 é retentada. Ao reportar um problema, é esse conteúdo que interessa: ele leva a etapa, a
 query, o número do erro SQL e a duração.
 
+**Escolha de lojas.** A sugestão do PBS pode cobrir uma centena de lojas, e a rede pode
+ter autorizado exportar só parte delas. O botão **Escolher lojas…** abre a lista das lojas
+que a sugestão cita, com nome e quantos itens caem em cada uma; nada vem marcado, e
+**Extrair** recusa a extração — sem gravar nada — até que ao menos uma loja seja escolhida.
+O recorte vale para todos os
+arquivos do ZIP — inclusive `sugestoes_compra_itens.csv`, que leva demanda, estoque de
+segurança e preço de compra por loja — e o `manifesto.json` declara quais lojas saíram e
+quantas a sugestão tinha, para o resultado da comparação não ser confundido com um da rede
+inteira. No modo linha de comando é `--stores 12,45,78`; ausente, exporta todas.
+
 ### Publicar o extrator no MinIO
 
 O comprador baixa o extrator pela página da sessão (`/comparacoes/{id}`, estado

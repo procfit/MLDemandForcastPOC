@@ -119,6 +119,19 @@ internal sealed class EscritaErro(string caminho, string causa) : ExtratorErro(
 internal sealed class InesperadoErro(Type tipo, string mensagem) : ExtratorErro(
     $"Falha inesperada ({tipo.Name}): {mensagem}");
 
+internal sealed class LojasNaoSelecionadasErro() : ExtratorErro(
+    "Nenhuma loja selecionada — não há o que extrair. Escolha ao menos uma loja da sugestão.");
+
+internal sealed class LojaForaDaSugestaoErro(IReadOnlyList<int> ids) : ExtratorErro(
+    $"Esta sugestão não tem a(s) loja(s) {string.Join(", ", ids)}. "
+    + "Só é possível extrair lojas que a própria sugestão cita.");
+
+internal sealed class EmpresaDivergeDeFilialErro(int divergencias) : ExtratorErro(
+    $"Esta instalação do PBS tem {divergencias} linha(s) desta sugestão em que EMPRESA é "
+    + "diferente de FILIAL. O filtro de lojas usa FILIAL como identificador, então ele não "
+    + "pode garantir que só as lojas escolhidas por você saíram no ZIP. Extraia sem escolher "
+    + "lojas (todas as lojas da sugestão) se precisar do arquivo agora.");
+
 internal static class ClassificadorDeFalha
 {
     private const int LogonTriggerRecusou = 17892;

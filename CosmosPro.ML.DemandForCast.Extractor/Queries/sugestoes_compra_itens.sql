@@ -25,5 +25,10 @@ SELECT
     FatorEmbalagem       = CONVERT(decimal(7,2), R.FATOR_EMBALAGEM),
     Falteiro             = CAST(CASE WHEN R.FALTEIRO = 'S' THEN 1 ELSE 0 END AS bit)
 FROM dbo.SUGESTOES_COMPRAS_RESULTADO R
+-- ESCOPO POR LOJA: o comprador pode exportar so parte das lojas da sugestao (a rede
+-- autoriza algumas). Sem esta clausula o arquivo citaria loja que nao esta em
+-- lojas.csv, e o SqlBulkCopy do Worker quebraria na FK composta (RedeId, LojaId) --
+-- alem de vazar demanda, estoque de seguranca e PRECO_COMPRA de loja nao autorizada.
 WHERE R.SUGESTAO_COMPRA = {{SUGESTAO}}
+  AND R.FILIAL IN ({{LOJAS}})
 ORDER BY R.FILIAL, R.PRODUTO;

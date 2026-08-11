@@ -15,6 +15,7 @@ internal static class CliExitCodeMap
         ConexaoErro or ConexaoPerdidaErro or LogonTriggerErro => CliExitCode.FalhaDeConexao,
         SugestaoNaoEncontradaErro or SugestaoSemItensErro => CliExitCode.SugestaoNaoEncontrada,
         JanelaInviavelErro => CliExitCode.JanelaInviavel,
+        LojasNaoSelecionadasErro or LojaForaDaSugestaoErro or EmpresaDivergeDeFilialErro => CliExitCode.ArgumentosInvalidos,
         _ => CliExitCode.FalhaNaExtracao,
     };
 }
@@ -138,6 +139,7 @@ internal static class ExtractorCli
             DataInicial = janela.Inicio,
             DataFinal = janela.Fim,
             OutputDirectory = options.OutputDirectory,
+            LojaIds = options.LojaIds,
         };
 
         var extracao = new ExtractionService().Run(request, new ConsoleProgress(), ct);
@@ -146,6 +148,7 @@ internal static class ExtractorCli
         var resultado = extracao.Value;
         Console.WriteLine();
         Console.WriteLine($"ZIP gerado: {resultado.ZipPath} ({resultado.ZipBytes / 1024d / 1024d:N1} MB)");
+        Console.WriteLine($"Lojas exportadas: {resultado.LojasExportadas.Count} de {resultado.LojasNaSugestao}.");
         foreach (var (arquivo, linhas) in resultado.RowsByFile) Console.WriteLine($"  {arquivo,-28} {linhas,12:N0} linhas");
         foreach (var aviso in resultado.Warnings) Console.WriteLine($"  AVISO: {aviso}");
 
