@@ -50,4 +50,26 @@ public sealed class SelecaoDeLojasDialogTests
     {
         SelecaoDeLojasDialog.Filtrar(Lojas, "a").Select(l => l.LojaId).Should().BeInAscendingOrder();
     }
+
+    [Fact]
+    public void Construir_com_lojas_ja_escolhidas_nao_lanca()
+    {
+        var construir = () =>
+        {
+            using var dialogo = new SelecaoDeLojasDialog(Lojas, [86]);
+        };
+
+        construir.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Construir_sem_lojas_escolhidas_nao_lanca()
+    {
+        var construir = () =>
+        {
+            using var dialogo = new SelecaoDeLojasDialog(Lojas, []);
+        };
+
+        construir.Should().NotThrow();
+    }
 }

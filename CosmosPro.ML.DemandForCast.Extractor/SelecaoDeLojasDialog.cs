@@ -23,7 +23,7 @@ internal sealed class SelecaoDeLojasDialog : Form
     private readonly IReadOnlyList<LojaDaSugestao> _lojas;
     private readonly HashSet<int> _marcadas;
 
-    private SelecaoDeLojasDialog(IReadOnlyList<LojaDaSugestao> lojas, IReadOnlyList<int> jaEscolhidas)
+    internal SelecaoDeLojasDialog(IReadOnlyList<LojaDaSugestao> lojas, IReadOnlyList<int> jaEscolhidas)
     {
         _lojas = lojas;
         _marcadas = [.. jaEscolhidas];
@@ -96,9 +96,7 @@ internal sealed class SelecaoDeLojasDialog : Form
         if (e.NewValue == CheckState.Checked) _marcadas.Add(loja.LojaId);
         else _marcadas.Remove(loja.LojaId);
 
-        // O ItemCheck roda ANTES de o item mudar de estado, então o resumo precisa ser
-        // recalculado depois que a fila de mensagens aplicar a mudança.
-        BeginInvoke(AtualizarResumo);
+        AtualizarResumo();
     }
 
     /// <summary>
