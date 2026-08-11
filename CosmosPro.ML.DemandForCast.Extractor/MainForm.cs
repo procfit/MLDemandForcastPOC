@@ -110,7 +110,10 @@ internal sealed class MainForm : Form
     // dicionário: trocar de sugestão sobrescreve a entrada, e é isso que impede a janela
     // de uma sugestão vazar para outra ao restaurar. Zerado explicitamente quando o
     // recount da MESMA sugestão falha (ver ContarSelecaoAsync) -- senão uma janela de um
-    // sucesso anterior poderia reviver depois de uma falha mais recente.
+    // sucesso anterior poderia reviver depois de uma falha mais recente. Zerado também
+    // quando um novo catálogo é aceito (ver CarregarSugestoesAsync) -- senão a mesma
+    // sugestão, selecionada de novo depois do recarregamento, restauraria uma
+    // viabilidade calculada contra dados que o recarregamento pode ter substituído.
     private (long SugestaoId, ExtractionWindow Janela)? _janelaCache;
 
     private IReadOnlyList<LojaDaSugestao> _lojasDaSugestao = [];
@@ -392,6 +395,17 @@ internal sealed class MainForm : Form
                 _config.MesesRetroativos = meses;
                 _config.Save();
                 _log.Escrever($"{catalogo.Count:N0} sugestões carregadas.");
+
+                // O catálogo que acabou de chegar é a fronteira: a análise anterior (janela
+                // cacheada, marca de "já contei esta sugestão") descreve dados que este
+                // recarregamento pode ter apagado -- e a mesma sugestão pode acabar
+                // selecionada de novo (ordenação estável, ela pode continuar sendo a mais
+                // recente). Zerar aqui, ANTES do rebind que AplicarFiltro dispara, é o que
+                // faz ContarSelecao tratar a próxima seleção como nova em vez de restaurar
+                // uma viabilidade calculada contra o catálogo antigo.
+                _janelaCache = null;
+                _sugestaoContada = null;
+
                 AplicarFiltro();
             });
     }
