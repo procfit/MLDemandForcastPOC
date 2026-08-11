@@ -735,6 +735,40 @@ internal sealed class MainForm : Form
         if (dialog.ShowDialog(this) == DialogResult.OK) _pastaSaida.Text = dialog.SelectedPath;
     }
 
+    /// <summary>
+    /// Pergunta antes de gravar qualquer coisa. Duas motivações na mesma caixa, por
+    /// decisão do desenvolvedor (não duas caixas separadas): confirmar o clique em
+    /// Extrair, e avisar quando o ZIP vai substituir um já existente -- hoje
+    /// <c>File.Create</c> trunca o anterior sem aviso, e <c>extracao-pbs_{yyyyMMdd-HHmm}</c>
+    /// colide entre duas extrações no mesmo minuto.
+    /// <para>
+    /// A contagem de lojas é a linha que importa: a rede só autoriza a exportação de
+    /// algumas lojas, e é para isso que a tela existe. "Não" não deve deixar rastro --
+    /// nenhum ZIP, nenhuma linha de log dizendo que algo aconteceu.
+    /// </para>
+    /// </summary>
+    private bool ConfirmarExtracao(
+        SugestaoLinha selecionada, ExtractionWindow janela, int lojasEscolhidasCount, string pastaSaida, string zipEsperado)
+    {
+        var mensagem =
+            $"Sugestão {selecionada.SugestaoId} — {selecionada.Descricao} ({selecionada.DataHora:dd/MM/yyyy HH:mm}){Environment.NewLine}" +
+            $"{lojasEscolhidasCount} de {_lojasDaSugestao.Count} loja(s) serão exportadas.{Environment.NewLine}" +
+            $"{TextoDaJanela(janela)}.{Environment.NewLine}" +
+            $"Pasta de saída: {pastaSaida}";
+
+        var arquivoJaExiste = File.Exists(zipEsperado);
+        if (arquivoJaExiste)
+        {
+            mensagem += Environment.NewLine + Environment.NewLine +
+                $"Já existe um arquivo \"{Path.GetFileName(zipEsperado)}\" nesta pasta -- continuar vai substituí-lo.";
+        }
+
+        mensagem += Environment.NewLine + Environment.NewLine + "Confirma a extração?";
+
+        return MessageBox.Show(this, mensagem, "Extrator", MessageBoxButtons.YesNo,
+            arquivoJaExiste ? MessageBoxIcon.Warning : MessageBoxIcon.Question) == DialogResult.Yes;
+    }
+
     private Task ExtrairAsync()
     {
         if (_sugestoes.CurrentRow?.DataBoundItem is not SugestaoLinha selecionada || _janela is not { Viavel: true } janela)
@@ -753,13 +787,28 @@ internal sealed class MainForm : Form
             return Task.CompletedTask;
         }
 
+        var pastaSaida = _pastaSaida.Text.Trim();
+
+        // Mesmo instante que ExtractionService.Run vai usar para nomear o arquivo (ver
+        // ZipNaming) -- é o que permite avisar aqui se o ZIP vai substituir um existente.
+        // O minuto pode virar entre esta pergunta e o início de fato da extração: o
+        // arquivo gravado seria então outro, e o aviso desta pergunta, sem efeito.
+        // Inofensivo -- na pior hipótese o operador respondeu a uma pergunta sobre um
+        // nome de arquivo que não é mais o que vai ser gravado -- mas quem ler isto
+        // depois pode se confundir se não achar a explicação aqui.
+        var zipEsperado = ZipNaming.BuildPath(pastaSaida, DateTime.Now);
+        if (!ConfirmarExtracao(selecionada, janela, lojasEscolhidas.Count, pastaSaida, zipEsperado))
+        {
+            return Task.CompletedTask;
+        }
+
         var request = new ExtractionRequest
         {
             ConnectionString = BuildConnectionString(),
             SugestaoId = selecionada.SugestaoId,
             DataInicial = janela.Inicio,
             DataFinal = janela.Fim,
-            OutputDirectory = _pastaSaida.Text.Trim(),
+            OutputDirectory = pastaSaida,
             LojaIds = lojasEscolhidas,
         };
         _config.Save();
