@@ -262,7 +262,8 @@ query, o número do erro SQL e a duração.
 **Escolha de lojas.** A sugestão do PBS pode cobrir uma centena de lojas, e a rede pode
 ter autorizado exportar só parte delas. O botão **Escolher lojas…** abre a lista das lojas
 que a sugestão cita, com nome e quantos itens caem em cada uma; nada vem marcado, e
-**Extrair** só habilita depois de haver ao menos uma. O recorte vale para todos os
+**Extrair** recusa a extração — sem gravar nada — até que ao menos uma loja seja escolhida.
+O recorte vale para todos os
 arquivos do ZIP — inclusive `sugestoes_compra_itens.csv`, que leva demanda, estoque de
 segurança e preço de compra por loja — e o `manifesto.json` declara quais lojas saíram e
 quantas a sugestão tinha, para o resultado da comparação não ser confundido com um da rede

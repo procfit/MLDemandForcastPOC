@@ -101,7 +101,13 @@ internal sealed class MainForm : Form
     private ExtractionWindow? _janela;
 
     private IReadOnlyList<LojaDaSugestao> _lojasDaSugestao = [];
-    private IReadOnlyList<int> _lojasEscolhidas = [];
+
+    // null quer dizer "o operador ainda não abriu o diálogo e confirmou uma escolha" --
+    // e essa distinção não pode se perder numa lista vazia (ver ExtrairAsync): antes desta
+    // revisão as duas colapsavam no mesmo tipo, e null virava "todas as lojas" lá no fundo
+    // de RecorteDeLojas.Aplicar. É exatamente o caminho que a garantia de confidencialidade
+    // desta tela existe para fechar.
+    private IReadOnlyList<int>? _lojasEscolhidas;
 
     // Geração própria do fetch de lojas -- separada de _contagemGeracao (ver
     // ContarSelecaoAsync, área protegida): são dois fetches independentes, cada um
@@ -512,7 +518,7 @@ internal sealed class MainForm : Form
             _extrair.Enabled = false;
             _escolherLojas.Enabled = false;
             _lojasDaSugestao = [];
-            _lojasEscolhidas = [];
+            _lojasEscolhidas = null;
             return;
         }
 
@@ -526,7 +532,7 @@ internal sealed class MainForm : Form
             _extrair.Enabled = false;
             _escolherLojas.Enabled = false;
             _lojasDaSugestao = [];
-            _lojasEscolhidas = [];
+            _lojasEscolhidas = null;
             return;
         }
 
@@ -606,7 +612,7 @@ internal sealed class MainForm : Form
         _ = ContarSelecaoAsync(selecionada.SugestaoId, selecionada.DataHora);
 
         _lojasDaSugestao = [];
-        _lojasEscolhidas = [];
+        _lojasEscolhidas = null;
         _escolherLojas.Enabled = true;
     }
 
@@ -653,7 +659,9 @@ internal sealed class MainForm : Form
             _escolherLojas.Enabled = true;
         }
 
-        if (SelecaoDeLojasDialog.Escolher(this, _lojasDaSugestao, _lojasEscolhidas) is not { } escolhidas) return;
+        // _lojasEscolhidas ainda pode ser null aqui (nenhuma escolha confirmada até agora) --
+        // o diálogo só entende "nada marcado", então null e [] chegam a ele da mesma forma.
+        if (SelecaoDeLojasDialog.Escolher(this, _lojasDaSugestao, _lojasEscolhidas ?? []) is not { } escolhidas) return;
 
         _lojasEscolhidas = escolhidas;
         _log.Escrever($"Lojas escolhidas ({escolhidas.Count} de {_lojasDaSugestao.Count}): "
@@ -663,7 +671,7 @@ internal sealed class MainForm : Form
 
     private void AtualizarResumoDaSelecao(long sugestaoId)
     {
-        if (_lojasEscolhidas.Count == 0 || _lojasDaSugestao.Count == 0) return;
+        if (_lojasEscolhidas is not { Count: > 0 } escolhidas || _lojasDaSugestao.Count == 0) return;
 
         // Recompor sempre a partir da base, nunca do texto atual: prepender no texto
         // atual (versão anterior) empilha "5 de 10 loja(s) · 3 de 10 loja(s) · ..." a
@@ -676,7 +684,7 @@ internal sealed class MainForm : Form
             _baseResumoLojas = baseAtual;
         }
 
-        _janelaInfo.Text = $"{_lojasEscolhidas.Count} de {_lojasDaSugestao.Count} loja(s) · {baseAtual.Texto}";
+        _janelaInfo.Text = $"{escolhidas.Count} de {_lojasDaSugestao.Count} loja(s) · {baseAtual.Texto}";
     }
 
     private void EscolherPasta()
@@ -693,6 +701,16 @@ internal sealed class MainForm : Form
             return Task.CompletedTask;
         }
 
+        // _lojasEscolhidas é null até o operador confirmar uma escolha no diálogo, e null
+        // NÃO pode significar "todas" aqui -- essa conversão silenciosa é a falha de
+        // confidencialidade que este guard existe para fechar: sem escolha, a extração
+        // recusa em vez de decidir por conta própria o que sai da máquina do cliente.
+        if (_lojasEscolhidas is not { Count: > 0 } lojasEscolhidas)
+        {
+            MessageBox.Show(this, "Escolha ao menos uma loja em \"Escolher lojas…\" antes de extrair.", "Extrator", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return Task.CompletedTask;
+        }
+
         var request = new ExtractionRequest
         {
             ConnectionString = BuildConnectionString(),
@@ -700,7 +718,7 @@ internal sealed class MainForm : Form
             DataInicial = janela.Inicio,
             DataFinal = janela.Fim,
             OutputDirectory = _pastaSaida.Text.Trim(),
-            LojaIds = _lojasEscolhidas.Count > 0 ? _lojasEscolhidas : null,
+            LojaIds = lojasEscolhidas,
         };
         _config.Save();
 
