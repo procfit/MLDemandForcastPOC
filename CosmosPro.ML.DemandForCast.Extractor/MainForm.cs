@@ -101,6 +101,18 @@ internal sealed class MainForm : Form
     private IReadOnlyList<SugestaoCatalogoCabecalho> _catalogo = [];
     private ExtractionWindow? _janela;
 
+    // Amarra a última janela CALCULADA (viável ou não) ao id da sugestão a que ela
+    // pertence. Existe porque ExecutarAsync chama AtualizarJanela depois de TODA
+    // operação -- inclusive uma extração bem-sucedida da própria sugestão selecionada --
+    // e ContarSelecao não reconta a mesma sugestão (guarda _sugestaoContada, ver lá).
+    // Sem este cache, AtualizarJanela zerava a janela e o Extrair ficava morto até o
+    // operador trocar de linha e voltar só para reacionar a contagem. Um slot só, não um
+    // dicionário: trocar de sugestão sobrescreve a entrada, e é isso que impede a janela
+    // de uma sugestão vazar para outra ao restaurar. Zerado explicitamente quando o
+    // recount da MESMA sugestão falha (ver ContarSelecaoAsync) -- senão uma janela de um
+    // sucesso anterior poderia reviver depois de uma falha mais recente.
+    private (long SugestaoId, ExtractionWindow Janela)? _janelaCache;
+
     private IReadOnlyList<LojaDaSugestao> _lojasDaSugestao = [];
 
     // null quer dizer "o operador ainda não abriu o diálogo e confirmou uma escolha" --
@@ -426,6 +438,11 @@ internal sealed class MainForm : Form
                 contagem.DiasCoberturaMax,
                 DateOnly.FromDateTime(DateTime.Today));
 
+            // Cacheada por sugestaoId (ver o campo _janelaCache): é o que deixa
+            // AtualizarJanela religar o Extrair depois de uma extração bem-sucedida sem
+            // reconsultar o ERP.
+            _janelaCache = (sugestaoId, _janela);
+
             var itens = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s)";
 
             if (_janela.Viavel)
@@ -460,6 +477,10 @@ internal sealed class MainForm : Form
             // A contagem que falhou não fica marcada como feita: selecionar a mesma
             // linha de novo tem de poder tentar outra vez.
             _sugestaoContada = null;
+
+            // Invalida só a entrada desta sugestão: um recount que falha não pode deixar
+            // uma janela de um sucesso anterior disponível para AtualizarJanela reviver.
+            if (_janelaCache?.SugestaoId == sugestaoId) _janelaCache = null;
         }
     }
 
@@ -537,13 +558,27 @@ internal sealed class MainForm : Form
             return;
         }
 
-        // A janela **não** é decidida aqui, e essa é a mudança: a cobertura vem do
-        // DIAS_ESTOQUE dos itens, que só a contagem conhece. Antes ela saía do cabeçalho e
-        // este método podia decidir na hora — o campo do cabeçalho estava errado (era do
-        // método 2 e vinha zerado em 83% das sugestões de eMax/eSeg), e a consequência foi
-        // uma extração de 879 MB sem um dia de gabarito.
+        // A janela **não** é decidida aqui, e essa é a mudança original: a cobertura vem
+        // do DIAS_ESTOQUE dos itens, que só a contagem conhece. Antes ela saía do
+        // cabeçalho e este método podia decidir na hora — o campo do cabeçalho estava
+        // errado (era do método 2 e vinha zerado em 83% das sugestões de eMax/eSeg), e a
+        // consequência foi uma extração de 879 MB sem um dia de gabarito.
         //
-        // Enquanto a contagem não volta, não há janela e o Extrair fica desabilitado:
+        // O que mudou aqui: este método também roda depois de TODA operação (ver o
+        // finally de ExecutarAsync), inclusive uma extração bem-sucedida da própria
+        // sugestão que continua selecionada -- e ContarSelecao não reconta a mesma
+        // sugestão (guarda _sugestaoContada). Sem restaurar, o Extrair ficaria morto até
+        // o operador trocar de linha e voltar só para reacionar a contagem. Restaurar do
+        // cache não é "decidir na hora": a contagem já rodou e ainda vale para esta
+        // sugestão -- é dado velho, não um cálculo novo.
+        if (_janelaCache is { } cache && cache.SugestaoId == selecionada.SugestaoId)
+        {
+            _janela = cache.Janela;
+            _extrair.Enabled = cache.Janela.Viavel;
+            return;
+        }
+
+        // Sem cache para ESTA sugestão (contagem ainda não voltou, ou o id não bate):
         // habilitar antes seria oferecer uma extração cuja viabilidade ninguém conferiu.
         _janela = null;
         _extrair.Enabled = false;
