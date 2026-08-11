@@ -35,8 +35,7 @@ internal sealed class ExtractionService
         try
         {
             Directory.CreateDirectory(request.OutputDirectory);
-            var stamp = DateTime.Now.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture);
-            zipPath = Path.Combine(request.OutputDirectory, $"extracao-pbs_{stamp}.zip");
+            zipPath = ZipNaming.BuildPath(request.OutputDirectory, DateTime.Now);
 
             using (var output = File.Create(zipPath))
             using (var zip = new CsvZipWriter(output))

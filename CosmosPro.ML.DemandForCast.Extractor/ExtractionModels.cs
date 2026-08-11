@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace CosmosPro.ML.DemandForCast.Extractor;
 
 internal sealed record ExtractionRequest
@@ -65,4 +67,24 @@ internal sealed record SugestaoContagem(
 internal sealed record LojaDaSugestao(int LojaId, string Nome, int Itens)
 {
     public override string ToString() => $"{LojaId} · {Nome} · {Itens:N0} itens";
+}
+
+/// <summary>
+/// Nome do ZIP de extração — fonte única para quem grava o arquivo
+/// (<see cref="ExtractionService.Run"/>) e quem precisa checar se ele já existe antes de
+/// perguntar (<c>MainForm.ExtrairAsync</c>, CHANGE 3). Duplicar a regra nos dois lugares
+/// deixaria a tela perguntar sobre um arquivo e o serviço sobrescrever outro.
+/// <para>
+/// Granularidade de minuto, não de segundo: duas extrações no mesmo minuto colidem no
+/// mesmo nome de propósito — essa colisão é o que a confirmação de sobrescrita existe
+/// para avisar, não um bug a esconder aumentando a resolução do timestamp.
+/// </para>
+/// </summary>
+internal static class ZipNaming
+{
+    public static string BuildPath(string outputDirectory, DateTime timestamp) =>
+        Path.Combine(outputDirectory, FileName(timestamp));
+
+    private static string FileName(DateTime timestamp) =>
+        $"extracao-pbs_{timestamp.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture)}.zip";
 }
