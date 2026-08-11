@@ -45,12 +45,13 @@ public sealed class ZipNamingTests
     }
 
     /// <summary>
-    /// Prova que <c>ExtractionService.Run</c> não recomputa a regra por conta própria: se
-    /// existisse uma segunda implementação lá dentro, um erro de formato ali não apareceria
-    /// aqui. Como não há banco disponível no teste, o que se pina é o único ponto de verdade
-    /// que o `Run` teria de chamar — a leitura do código-fonte (ver ExtractionService.cs) é o
-    /// resto da prova, junto com os testes de falha existentes em ExtractionServiceTests que
-    /// continuam batendo depois da extração.
+    /// Não prova que <c>ExtractionService.Run</c> deixou de recomputar a regra por conta
+    /// própria -- isso este teste não alcança sem banco disponível. O que ele pina é só a
+    /// regra em si: <c>BuildPath</c> é função pura de pasta e instante, sem estado
+    /// escondido. Quem garante que <c>Run</c> chama exatamente esta função, com o instante
+    /// que veio de <c>ExtractionRequest.Instante</c> em vez de recalcular o seu, é a leitura
+    /// de ExtractionService.cs (ver <see cref="ExtractionService.ResolverInstante"/>) --
+    /// não este teste.
     /// </summary>
     [Fact]
     public void Regra_e_pura_funcao_de_pasta_e_instante()

@@ -131,6 +131,27 @@ public sealed class ExtractionServiceTests : IDisposable
     }
 
     [Fact]
+    public void Instante_informado_e_usado_sem_alteracao()
+    {
+        var informado = new DateTime(2026, 3, 1, 10, 59, 59);
+
+        ExtractionService.ResolverInstante(informado).Should().Be(informado);
+    }
+
+    [Fact]
+    public void Sem_instante_informado_usa_o_agora_da_gravacao()
+    {
+        // O CLI não pergunta nada ao operador (não tem confirmação) e por isso nunca
+        // preenche ExtractionRequest.Instante -- é o único chamador que passa por este
+        // caminho. Tolerância generosa porque o teste mede DateTime.Now duas vezes.
+        var antes = DateTime.Now;
+
+        var resolvido = ExtractionService.ResolverInstante(null);
+
+        resolvido.Should().BeOnOrAfter(antes).And.BeCloseTo(antes, TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public void Run_com_pasta_de_saida_invalida_devolve_falha_e_nao_lanca()
     {
         // Caminho impossível: a falha tem de chegar como Result, não como exceção
