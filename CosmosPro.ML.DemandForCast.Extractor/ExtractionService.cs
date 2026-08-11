@@ -50,7 +50,8 @@ internal sealed class ExtractionService
 
                 var lojaIds = recorte.Value.LojaIds;
                 var skusDaSugestao = recorte.Value.Skus;
-                AvisarDivergenciaEmpresaFilial(connection, request.SugestaoId, warnings, ct);
+                AvisarOuRecusarDivergenciaEmpresaFilial(
+                    connection, request.SugestaoId, cortada: request.LojaIds is not null, warnings, ct);
 
                 var total = StageContract.WriteOrder.Length;
 
@@ -186,24 +187,40 @@ internal sealed class ExtractionService
     /// <summary>
     /// Conta linhas com EMPRESA != FILIAL (ver Queries/sugestoes_compra_diagnostico.sql):
     /// sinal de que LojaId = FILIAL pode não valer nesta instalação do PBS.
+    /// <para>
+    /// Sem recorte, a divergência é só atribuição de dado errada — aviso, e o ZIP segue.
+    /// Com <paramref name="cortada"/> ela é outra coisa: o comprador escolheu FILIAL
+    /// específicos para saírem e os demais para ficarem de fora, e o filtro (que compara
+    /// contra FILIAL — ver <c>lojas_da_sugestao.sql</c> e <c>escopo_sugestao.sql</c>) é
+    /// aplicado sobre colunas que filtram por EMPRESA/EMPRESA_USUARIA (<c>vendas.sql</c>,
+    /// <c>compras.sql</c>, <c>promocoes.sql</c>, <c>estoques_movimentos.sql</c>,
+    /// <c>lojas.sql</c>). Se as duas divergem, o recorte pode deixar passar histórico de
+    /// uma EMPRESA que o comprador nunca marcou — a garantia de confidencialidade que a
+    /// escolha existe para dar não pode ser cumprida, então aviso não é resposta possível
+    /// e a extração recusa.
+    /// </para>
     /// </summary>
-    private static void AvisarDivergenciaEmpresaFilial(SqlConnection connection, long sugestaoId, List<string> warnings, CancellationToken ct) =>
+    private static void AvisarOuRecusarDivergenciaEmpresaFilial(
+        SqlConnection connection, long sugestaoId, bool cortada, List<string> warnings, CancellationToken ct) =>
         Step(new Etapa("diagnóstico EMPRESA vs FILIAL", "sugestoes_compra_diagnostico.sql"), () =>
         {
             using var command = CreateSugestaoCommand(connection, SqlResources.Load("sugestoes_compra_diagnostico.sql"), sugestaoId);
             using var cancelRegistration = ct.Register(command.Cancel);
             ct.ThrowIfCancellationRequested();
             using var reader = command.ExecuteReader();
-            if (reader.Read() && !reader.IsDBNull(0))
+            if (!reader.Read() || reader.IsDBNull(0)) return;
+
+            var divergencias = reader.GetInt32(0);
+            if (divergencias == 0) return;
+
+            if (cortada)
             {
-                var divergencias = reader.GetInt32(0);
-                if (divergencias > 0)
-                {
-                    warnings.Add(
-                        $"{divergencias} linha(s) desta sugestão têm EMPRESA diferente de FILIAL — " +
-                        "a suposição LojaId = FILIAL pode estar incorreta nesta instalação do PBS.");
-                }
+                throw new FalhaDeDominioException(new EmpresaDivergeDeFilialErro(divergencias));
             }
+
+            warnings.Add(
+                $"{divergencias} linha(s) desta sugestão têm EMPRESA diferente de FILIAL — " +
+                "a suposição LojaId = FILIAL pode estar incorreta nesta instalação do PBS.");
         });
 
     /// <summary>Escreve sugestoes_compra.csv (uma linha) e devolve os campos que o manifesto precisa.</summary>

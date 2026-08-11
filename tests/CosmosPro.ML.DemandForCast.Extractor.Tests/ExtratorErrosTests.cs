@@ -213,6 +213,25 @@ public sealed class ExtratorErrosTests
         new ContratoErro("vendas.csv", "coluna 3 é 'X', esperado 'Y'").Transitorio.Should().BeFalse();
         new JanelaInviavelErro("motivo").Transitorio.Should().BeFalse();
         new SugestaoSemItensErro(4242).Transitorio.Should().BeFalse();
+        new EmpresaDivergeDeFilialErro(3).Transitorio.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// O recorte de lojas filtra por FILIAL (ver lojas_da_sugestao.sql e escopo_sugestao.sql),
+    /// mas vendas/compras/promoções/estoque filtram por EMPRESA (ver
+    /// AvisarOuRecusarDivergenciaEmpresaFilial em ExtractionService). Sem esta mensagem
+    /// explicando a causa, o operador não tem como entender por que um recorte que parecia
+    /// óbvio foi recusado.
+    /// </summary>
+    [Fact]
+    public void Empresa_diverge_de_filial_explica_a_causa_e_a_saida()
+    {
+        var erro = new EmpresaDivergeDeFilialErro(7);
+
+        erro.Message.Should().Contain("7");
+        erro.Message.Should().Contain("FILIAL");
+        erro.Message.Should().Contain("EMPRESA");
+        erro.Message.Should().Contain("sem escolher");
     }
 
     [Fact]
