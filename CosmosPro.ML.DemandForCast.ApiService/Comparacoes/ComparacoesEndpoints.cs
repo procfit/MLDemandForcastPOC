@@ -255,7 +255,13 @@ internal static class ComparacoesEndpoints
             .Where(s => s.Id == id && s.RedeId == redeId)
             .Where(s => s.Status != SessaoStatus.ProcessandoDados
                      && s.Status != SessaoStatus.Treinando
-                     && s.Status != SessaoStatus.Comparando)
+                     && s.Status != SessaoStatus.Comparando
+                     // A segunda recusa de PodeExcluir, por motivo diferente: aqui não há job
+                     // a proteger, há dado. Concluida significa que o comprador respondeu o
+                     // questionário, e a resposta é dado de pesquisa. Um rascunho de
+                     // questionário (sessão em AguardandoQuestionario) continua indo embora
+                     // por cascade — rascunho abandonado não pode trancar a sessão.
+                     && s.Status != SessaoStatus.Concluida)
             .ExecuteDeleteAsync(ct);
 
         if (afetadas > 0)
@@ -275,12 +281,17 @@ internal static class ComparacoesEndpoints
 
         if (status is null) return Results.NotFound();
 
-        // 409 e não 400: a requisição está perfeitamente bem formada, e a mesma requisição
-        // vai funcionar quando a fase terminar. É o que distingue, para quem chama, "espere"
-        // de "corrija o que você mandou".
+        // 409 e não 400 nos dois casos: a requisição está perfeitamente bem formada. Mas as
+        // duas recusas dizem coisas opostas a quem chama — uma é "espere", a outra é "nunca" —
+        // e mandar esperar por algo que não vai mudar faria o comprador voltar a tentar para
+        // sempre.
         return Results.Conflict(new ValidationErrorResponse(
-            [$"A comparação está em '{status}' e não pode ser excluída enquanto o processamento corre. " +
-             "Espere a fase terminar — se ela falhar ou concluir, a exclusão passa a ser permitida."]));
+            status == SessaoStatus.Concluida
+                ? ["Esta comparação já foi avaliada e não pode mais ser excluída: as respostas do " +
+                   "questionário são o registro da avaliação. Se precisar removê-la mesmo assim, " +
+                   "procure o suporte."]
+                : [$"A comparação está em '{status}' e não pode ser excluída enquanto o processamento corre. " +
+                   "Espere a fase terminar — se ela falhar ou concluir, a exclusão passa a ser permitida."]));
     }
 
     /// <summary>

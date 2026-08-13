@@ -186,17 +186,33 @@ public sealed record SessaoView(
     int? SkusSemCadastro = null,
     string? ResultadoJson = null)
 {
-    /// <summary>Estados terminais: a sessão não muda mais sozinha, então nada de poll.</summary>
-    public bool EstadoTerminal => Status is "Concluida" or "Inviavel" or "Falha";
+    /// <summary>
+    /// Se não há mais nada a esperar do servidor por conta própria, e o poll de 3s pode parar.
+    ///
+    /// <para>
+    /// <b>Não é o mesmo que "fluxo concluído"</b>, e desde o questionário os dois conceitos
+    /// deixaram de coincidir: <c>AguardandoQuestionario</c> está no meio do fluxo e entra aqui,
+    /// porque quem a move é um clique do próprio usuário nesta tela — não um worker. Sem isso a
+    /// tela ficaria fazendo poll para sempre esperando um humano que já está olhando para ela.
+    /// Quem quer saber se o fluxo terminou olha o status, não este predicado.
+    /// </para>
+    /// </summary>
+    public bool SemPollNecessario =>
+        Status is "Concluida" or "Inviavel" or "Falha" or "AguardandoQuestionario";
+
+    /// <summary>Se a comparação já tem resultado para mostrar (materializado).</summary>
+    public bool TemResultado => Status is "AguardandoQuestionario" or "Concluida";
 
     /// <summary>
-    /// Espelha <c>ComparacaoSessao.PodeExcluir</c> — as fases em andamento têm job de outra
-    /// fila trabalhando pela sessão, e excluir ali deixaria o job terminando no vazio.
-    /// Mesmo par de espelhos de <see cref="EstadoTerminal"/>: aqui o status é string porque
-    /// atravessa JSON. A autoridade é o endpoint, que repete a condição no <c>WHERE</c> do
-    /// <c>DELETE</c> — botão desabilitado é cosmético.
+    /// Espelha <c>ComparacaoSessao.PodeExcluir</c>, com as duas recusas: as fases em andamento
+    /// têm job de outra fila trabalhando pela sessão, e excluir ali deixaria o job terminando
+    /// no vazio; <c>Concluida</c> significa que o questionário foi respondido, e resposta de
+    /// pesquisa não evapora por clique. Aqui o status é string porque atravessa JSON. A
+    /// autoridade é o endpoint, que repete a condição no <c>WHERE</c> do <c>DELETE</c> — botão
+    /// desabilitado é cosmético.
     /// </summary>
-    public bool PodeExcluir => Status is not ("ProcessandoDados" or "Treinando" or "Comparando");
+    public bool PodeExcluir =>
+        Status is not ("ProcessandoDados" or "Treinando" or "Comparando" or "Concluida");
 
     public static string EstadoLabel(string status) => status switch
     {
@@ -204,6 +220,7 @@ public sealed record SessaoView(
         "ProcessandoDados" => "Processando dados",
         "Treinando" => "Treinando",
         "Comparando" => "Comparando",
+        "AguardandoQuestionario" => "Aguardando avaliação",
         "Concluida" => "Concluída",
         "Inviavel" => "Inviável",
         "Falha" => "Falha",
@@ -214,6 +231,9 @@ public sealed record SessaoView(
     {
         "AguardandoDados" => BadgeStyle.Secondary,
         "ProcessandoDados" or "Treinando" or "Comparando" => BadgeStyle.Info,
+        // Primary, não Success: a comparação deu certo, mas o fluxo pede uma ação do
+        // comprador — verde de "pronto" o faria ignorar a pendência.
+        "AguardandoQuestionario" => BadgeStyle.Primary,
         "Concluida" => BadgeStyle.Success,
         "Inviavel" => BadgeStyle.Warning,
         "Falha" => BadgeStyle.Danger,

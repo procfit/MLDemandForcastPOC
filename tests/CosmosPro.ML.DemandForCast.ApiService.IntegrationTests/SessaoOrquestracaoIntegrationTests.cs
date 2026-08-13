@@ -60,11 +60,14 @@ public sealed class SessaoOrquestracaoIntegrationTests(AppHostFixture fixture)
         TreinoJobView Treino, ComparacaoPbsView Comparacao);
 
     [Fact]
-    public async Task Sessao_caminha_do_envio_ate_concluida_sem_nenhum_clique_extra()
+    public async Task Sessao_caminha_do_envio_ate_a_avaliacao_sem_nenhum_clique_extra()
     {
         var ciclo = await CicloAsync();
 
-        ciclo.Sessao.Status.Should().Be("Concluida",
+        // Não "Concluida": a última fase é o questionário, e ela sai daqui por ação do
+        // comprador. O que este teste afirma é que as TRÊS fases de worker encadeiam sozinhas
+        // — chegar a Concluida sem clique nenhum seria o defeito, não o sucesso.
+        ciclo.Sessao.Status.Should().Be("AguardandoQuestionario",
             because: ciclo.Sessao.MensagemErro ?? ciclo.Sessao.MotivoInviabilidade ?? "sem motivo registrado");
         ciclo.Sessao.SugestaoId.Should().Be(SugestaoId);
     }
@@ -242,7 +245,10 @@ public sealed class SessaoOrquestracaoIntegrationTests(AppHostFixture fixture)
             var resp = await fixture.ComparacoesApi.GetAsync(
                 sessaoId, redeId, TestContext.Current.CancellationToken);
 
-            if (resp.Content is { Status: "Concluida" or "Inviavel" or "Falha" } sessao)
+            // AguardandoQuestionario é onde o worker larga a sessão no caminho felizes: o que
+            // falta dali em diante é um clique do comprador, não um job. Sem este estado no
+            // predicado a espera nunca terminaria.
+            if (resp.Content is { Status: "AguardandoQuestionario" or "Concluida" or "Inviavel" or "Falha" } sessao)
             {
                 return sessao;
             }

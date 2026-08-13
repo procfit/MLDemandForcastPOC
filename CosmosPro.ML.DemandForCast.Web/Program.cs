@@ -145,6 +145,11 @@ builder.Services.AddHttpClient<ComparacoesApiClient>(client =>
     client.Timeout = TimeSpan.FromMinutes(10);
 }).RemoveAllResilienceHandlers();
 
+builder.Services.AddHttpClient<QuestionariosApiClient>(client =>
+{
+    client.BaseAddress = new("https+http://apiservice");
+});
+
 builder.Services.AddHttpClient<ExtratorApiClient>(client =>
 {
     client.BaseAddress = new("https+http://apiservice");

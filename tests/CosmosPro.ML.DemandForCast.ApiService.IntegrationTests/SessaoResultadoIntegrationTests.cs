@@ -115,7 +115,9 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
     {
         var cenario = await CenarioAsync();
 
-        cenario.Sessao.Status.Should().Be("Concluida",
+        // A materialização acontece na virada para AguardandoQuestionario, não para Concluida:
+        // é a última volta do worker nesta sessão. Ver SessaoResultadoMaterializador.
+        cenario.Sessao.Status.Should().Be("AguardandoQuestionario",
             because: cenario.Sessao.MensagemErro ?? cenario.Sessao.MotivoInviabilidade ?? "sem motivo registrado");
 
         var itens = await ItensAsync(cenario.SessaoId);
@@ -325,7 +327,8 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
                 Id: cenario.SessaoId,
                 RedeId: cenario.RedeId,
                 // Comparando: é o que um segundo processo teria lido antes de o primeiro
-                // concluir. A sessão já está em Concluida, então o WHERE otimista recusa.
+                // materializar. A sessão já saiu para AguardandoQuestionario, então o WHERE
+                // otimista recusa.
                 Status: SessaoStatus.Comparando,
                 CargaStageId: null,
                 TreinoJobId: null,
@@ -703,7 +706,9 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
             var resp = await fixture.ComparacoesApi.GetAsync(
                 sessaoId, redeId, TestContext.Current.CancellationToken);
 
-            if (resp.Content is { Status: "Concluida" or "Inviavel" or "Falha" } sessao)
+            // Ver a nota do mesmo predicado em SessaoOrquestracaoIntegrationTests: o caminho
+            // felizes para em AguardandoQuestionario, esperando o comprador.
+            if (resp.Content is { Status: "AguardandoQuestionario" or "Concluida" or "Inviavel" or "Falha" } sessao)
             {
                 return sessao;
             }

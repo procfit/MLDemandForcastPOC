@@ -134,7 +134,7 @@
                 </RadzenStack>
             </RadzenCard>
         }
-        else if (_sessao.Status == "Concluida")
+        else if (_sessao.TemResultado)
         {
             @if (Resultado is not { } resultado)
             {
@@ -152,6 +152,36 @@
 
                 @* Bloco fixo, acima das abas: a notícia ruim não pode depender de um clique. *@
                 <OndeOMlFoiPior Analise="@_analise" Resultado="@resultado" />
+
+                @* Acima das abas, e depois das manchetes: o comprador avalia o que acabou de ler,
+                   e a pendência não pode ficar escondida atrás de um clique numa aba. *@
+                @if (_sessao.Status == "AguardandoQuestionario")
+                {
+                    <RadzenCard Variant="Variant.Filled" data-test="chamada-questionario">
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
+                                     JustifyContent="JustifyContent.SpaceBetween" Gap="1rem" Wrap="FlexWrap.Wrap">
+                            <RadzenStack Gap="0.25rem">
+                                <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Falta sua avaliação</RadzenText>
+                                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                    Responda algumas perguntas sobre esta comparação para concluí-la.
+                                </RadzenText>
+                            </RadzenStack>
+                            <RadzenButton Text="Responder agora" Icon="assignment" ButtonStyle="ButtonStyle.Primary"
+                                          Click="@(() => Nav.NavigateTo($"/comparacoes/{Id}/questionario"))" />
+                        </RadzenStack>
+                    </RadzenCard>
+                }
+                else
+                {
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenIcon Icon="task_alt" Style="color: var(--rz-success)" />
+                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                            Comparação avaliada.
+                        </RadzenText>
+                        <RadzenButton Text="Ver minhas respostas" Variant="Variant.Text" Size="ButtonSize.Small"
+                                      Click="@(() => Nav.NavigateTo($"/comparacoes/{Id}/questionario"))" />
+                    </RadzenStack>
+                }
 
                 <RadzenCard Variant="Variant.Outlined">
                     <RadzenTabs RenderMode="TabRenderMode.Client">
@@ -274,7 +304,7 @@
 
             // A análise só existe depois da materialização, e só é buscada uma vez: ela
             // varre a população inteira no servidor e não muda mais num estado terminal.
-            if (_sessao is { Status: "Concluida" } && _analise is null)
+            if (_sessao is { TemResultado: true } && _analise is null)
             {
                 _analise = await ComparacoesApi.GetAnaliseAsync(Id, _cts.Token);
             }
@@ -294,15 +324,16 @@
     }
 
     /// <summary>
-    /// Para de fazer poll quando a sessão chega num estado terminal — senão o timer
-    /// roda pra sempre mesmo com nada mais a atualizar. Reativa automaticamente se um
-    /// novo upload (a partir de Inviavel/Falha) tirar a sessão do terminal de novo.
+    /// Para de fazer poll quando não há mais nada que o servidor mude por conta própria —
+    /// senão o timer roda pra sempre mesmo com nada mais a atualizar. Reativa automaticamente
+    /// se um novo upload (a partir de Inviavel/Falha) puser a sessão de volta em movimento.
+    /// Inclui <c>AguardandoQuestionario</c>, que está no meio do fluxo mas só sai dali por
+    /// ação do usuário nesta tela — ver <c>SessaoView.SemPollNecessario</c>.
     /// </summary>
     private void AtualizarPolling()
     {
         if (_timer is null) return;
-        var terminal = _sessao?.EstadoTerminal ?? false;
-        var due = terminal ? Timeout.InfiniteTimeSpan : PollInterval;
+        var due = (_sessao?.SemPollNecessario ?? false) ? Timeout.InfiniteTimeSpan : PollInterval;
         _timer.Change(due, PollInterval);
     }
 

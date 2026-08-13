@@ -59,7 +59,13 @@ public sealed class ComparacaoSessao
         [SessaoStatus.AguardandoDados] = [SessaoStatus.ProcessandoDados, SessaoStatus.Inviavel, SessaoStatus.Falha],
         [SessaoStatus.ProcessandoDados] = [SessaoStatus.Treinando, SessaoStatus.Inviavel, SessaoStatus.Falha],
         [SessaoStatus.Treinando] = [SessaoStatus.Comparando, SessaoStatus.Inviavel, SessaoStatus.Falha],
-        [SessaoStatus.Comparando] = [SessaoStatus.Concluida, SessaoStatus.Inviavel, SessaoStatus.Falha],
+        [SessaoStatus.Comparando] = [SessaoStatus.AguardandoQuestionario, SessaoStatus.Inviavel, SessaoStatus.Falha],
+        // A única transição da máquina que NÃO é feita pelo Worker: quem a executa é o
+        // POST /api/comparacoes/{id}/questionario/enviar, porque o que falta é um humano
+        // responder. O ClaimNextAsync do SessaoWorker tem allowlist das três fases de fila,
+        // então esta sessão não é reclamada por ninguém enquanto espera — e é por isso que o
+        // relógio de LimiteDeFaseSemProgresso não a alcança, ver a nota daquele campo.
+        [SessaoStatus.AguardandoQuestionario] = [SessaoStatus.Concluida],
         [SessaoStatus.Concluida] = [],
         [SessaoStatus.Inviavel] = [SessaoStatus.AguardandoDados],  // reenviar outro ZIP
         [SessaoStatus.Falha] = [SessaoStatus.AguardandoDados],
@@ -77,9 +83,26 @@ public sealed class ComparacaoSessao
         [SessaoStatus.ProcessandoDados, SessaoStatus.Treinando, SessaoStatus.Comparando];
 
     /// <summary>
-    /// Se a sessão pode ser excluída. Vale fora das fases em andamento — inclusive em
-    /// <see cref="SessaoStatus.AguardandoDados"/>, que é o caso de quem criou por engano e
-    /// nunca enviou nada.
+    /// Se a sessão pode ser excluída. <b>Duas recusas, por motivos diferentes.</b>
+    ///
+    /// <para>
+    /// As fases em andamento (<see cref="EmAndamento"/>) recusam para proteger o <i>job</i>:
+    /// há uma carga, um treino ou uma comparação trabalhando pela sessão, e apagá-la deixaria
+    /// o worker terminando no vazio. <see cref="SessaoStatus.Concluida"/> recusa para proteger
+    /// o <i>dado</i>: sob esta máquina de estados, estar concluída significa que o comprador
+    /// respondeu o questionário, e resposta de pesquisa não evapora por clique. Note que a
+    /// segunda recusa depende de as duas afirmações serem equivalentes — é o que a migration
+    /// garante ao reclassificar as sessões que já estavam em <c>Concluida</c> sem questionário
+    /// para <see cref="SessaoStatus.AguardandoQuestionario"/>. Sem aquele <c>UPDATE</c>,
+    /// sessões antigas ficariam impossíveis de excluir sem nunca ter sido respondidas.
+    /// </para>
+    ///
+    /// <para>
+    /// Continua excluível em <see cref="SessaoStatus.AguardandoDados"/> — quem criou por
+    /// engano e nunca enviou nada — e em <see cref="SessaoStatus.AguardandoQuestionario"/>,
+    /// que é o comprador decidindo não avaliar. Um rascunho de questionário vai junto no
+    /// cascade: rascunho abandonado não pode trancar a sessão.
+    /// </para>
     ///
     /// <para>
     /// <b>Não há escape por "sessão abandonada"</b>, e isso é deliberado. Seria tentador
@@ -99,7 +122,8 @@ public sealed class ComparacaoSessao
     /// cosmético, como no menu.
     /// </para>
     /// </summary>
-    public static bool PodeExcluir(SessaoStatus status) => !EmAndamento.Contains(status);
+    public static bool PodeExcluir(SessaoStatus status) =>
+        !EmAndamento.Contains(status) && status != SessaoStatus.Concluida;
 
     /// <summary>
     /// Tempo que uma fase pode passar sem sinal de progresso antes de ser tratada como
@@ -145,4 +169,20 @@ public enum SessaoStatus
     Concluida = 4,
     Inviavel = 5,
     Falha = 6,
+
+    /// <summary>
+    /// A comparação terminou e o resultado já está materializado; falta o comprador
+    /// responder o questionário. <b>Fase de humano, não de worker</b> — nenhuma das filas a
+    /// reclama.
+    ///
+    /// <para>
+    /// Numerado no fim, e não entre <see cref="Comparando"/> e <see cref="Concluida"/>, onde
+    /// estaria em ordem de fluxo: renumerar os membros existentes é invisível no banco (o
+    /// <c>Status</c> é gravado como texto por <c>HasConversion&lt;string&gt;</c>) mas mudaria
+    /// silenciosamente o valor de qualquer lugar que já tenha persistido ou serializado o
+    /// inteiro. A ordem do fluxo mora na tabela de transições, que é o que se lê para
+    /// entendê-lo.
+    /// </para>
+    /// </summary>
+    AguardandoQuestionario = 7,
 }

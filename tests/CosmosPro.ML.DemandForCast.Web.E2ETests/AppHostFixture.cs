@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 
 using Aspire.Hosting;
 using Aspire.Hosting.Testing;
@@ -287,15 +287,18 @@ public sealed class AppHostFixture : IAsyncLifetime
         string.Join("; ", r.Errors.Select(e => $"{e.Code}: {e.Description}"));
 
     /// <summary>
-    /// Semeia uma sessão de comparação <c>Concluida</c> numa rede <b>escolhida</b>, sem
-    /// resultado nem detalhe por item.
+    /// Semeia uma sessão de comparação já comparada — <c>AguardandoQuestionario</c> — numa rede
+    /// <b>escolhida</b>, sem resultado nem detalhe por item.
     ///
     /// <para>
     /// Serve à listagem de <c>/</c>, que projeta apenas o cabeçalho de cada sessão (a
     /// projeção com <c>ResultadoJson</c> é a do detalhe). Para o cenário de troca de rede o que
     /// precisa existir é uma linha com nome reconhecível em cada inquilino — encher o
-    /// resultado só somaria ruído. <c>Concluida</c> é terminal, então a linha não é reclamada
-    /// por worker nenhum nem conta como sessão viva no bloqueio por rede.
+    /// resultado só somaria ruído. <c>AguardandoQuestionario</c> é o estado em que o worker de
+    /// fato larga a sessão, e está fora do allowlist do <c>ClaimNextAsync</c>: a linha não é
+    /// reclamada por worker nenhum nem conta como sessão viva no bloqueio por rede. Semear
+    /// <c>Concluida</c> seria pior que impreciso — afirmaria uma avaliação que não houve, e
+    /// deixaria a linha impossível de excluir pela API.
     /// </para>
     /// </summary>
     public async Task<Guid> SemearSessaoNaRedeAsync(
@@ -319,7 +322,7 @@ public sealed class AppHostFixture : IAsyncLifetime
         {
             insert.CommandText = """
                 INSERT INTO dbo.ComparacaoSessoes (Id, RedeId, Nome, Status, CriadoEm, AtualizadoEm)
-                VALUES (@id, @redeId, @nome, 'Concluida', @agora, @agora);
+                VALUES (@id, @redeId, @nome, 'AguardandoQuestionario', @agora, @agora);
                 """;
             var agora = DateTimeOffset.UtcNow;
             insert.Parameters.AddWithValue("@id", id);
@@ -420,9 +423,11 @@ public sealed class AppHostFixture : IAsyncLifetime
     /// </para>
     ///
     /// <para>
-    /// A sessão nasce em <c>Concluida</c>, que é terminal: ela não é reclamada pelo
+    /// A sessão nasce em <c>AguardandoQuestionario</c>, que é onde o worker larga uma sessão
+    /// comparada e está fora do allowlist do <c>ClaimNextAsync</c>: ela não é reclamada pelo
     /// <c>SessaoWorker</c> nem conta como sessão viva no bloqueio por rede, então semeá-la não
-    /// trava os outros cenários E2E da mesma rede. As linhas de execuções anteriores com o
+    /// trava os outros cenários E2E da mesma rede. A tela de resultado renderiza neste estado
+    /// e em <c>Concluida</c> — ver <c>SessaoView.TemResultado</c>. As linhas de execuções anteriores com o
     /// mesmo <paramref name="nome"/> são removidas antes — o banco é persistente e reexecutar
     /// o teste acumularia sessões idênticas na lista.
     /// </para>
@@ -478,7 +483,7 @@ public sealed class AppHostFixture : IAsyncLifetime
                     (Id, RedeId, Nome, Status, CriadoEm, AtualizadoEm, SugestaoId, SugestaoDescricao,
                      SugestaoDataHora, SugestaoTipoCalculo, SkusSemCadastro, ResultadoJson)
                 VALUES
-                    (@id, @redeId, @nome, 'Concluida', @agora, @agora, @sugestaoId, @descricao,
+                    (@id, @redeId, @nome, 'AguardandoQuestionario', @agora, @agora, @sugestaoId, @descricao,
                      @dataHora, @tipoCalculo, @skusSemCadastro, @resultado);
                 """;
             var agora = DateTimeOffset.UtcNow;

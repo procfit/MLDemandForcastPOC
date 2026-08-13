@@ -15,6 +15,8 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
     public DbSet<ComparacaoSessao> ComparacaoSessoes => Set<ComparacaoSessao>();
     public DbSet<ComparacaoSessaoItem> ComparacaoSessaoItens => Set<ComparacaoSessaoItem>();
     public DbSet<ComparacaoPbs> ComparacoesPbs => Set<ComparacaoPbs>();
+    public DbSet<Questionario> Questionarios => Set<Questionario>();
+    public DbSet<QuestionarioResposta> QuestionarioRespostas => Set<QuestionarioResposta>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -149,9 +151,13 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.ToTable("ComparacaoSessoes");
             b.HasKey(x => x.Id);
 
+            // 30, e não os 20 das outras filas: "AguardandoQuestionario" tem 22 caracteres e
+            // não caberia. O valor viaja como texto (HasConversion<string>), então um nome de
+            // estado mais longo que a coluna estoura na escrita — a alternativa era contorcer
+            // o nome do estado para caber num limite arbitrário.
             b.Property(x => x.Status)
              .HasConversion<string>()
-             .HasMaxLength(20)
+             .HasMaxLength(30)
              .IsRequired();
 
             b.Property(x => x.RedeId).IsRequired();
@@ -203,6 +209,57 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             // SimulacoesCompra e ComparacoesPbs: o histórico da sessão sobrevive à remoção
             // do job que a produziu.
             b.HasOne<ComparacaoSessao>().WithMany().HasForeignKey(x => x.SessaoId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Questionario>(b =>
+        {
+            b.ToTable("Questionarios");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.RedeId).IsRequired();
+            b.Property(x => x.SessaoId).IsRequired();
+            b.Property(x => x.UsuarioId).IsRequired();
+            b.Property(x => x.VersaoCatalogo).IsRequired();
+            b.Property(x => x.CriadoEm).IsRequired();
+            b.Property(x => x.AtualizadoEm).IsRequired();
+
+            b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            // Cascade: excluir a sessão leva o questionário. Só alcança rascunho — sessão
+            // Concluida (questionário selado) recusa exclusão em ComparacaoSessao.PodeExcluir,
+            // e o endpoint repete a condição no WHERE do DELETE.
+            b.HasOne<ComparacaoSessao>().WithMany().HasForeignKey(x => x.SessaoId)
+             .OnDelete(DeleteBehavior.Cascade);
+
+            // Único: um questionário por sessão. É esta constraint — não a checagem do
+            // endpoint — que impede dois envios concorrentes de criarem duas avaliações da
+            // mesma comparação.
+            b.HasIndex(x => x.SessaoId).IsUnique().HasDatabaseName("UQ_Questionarios_SessaoId");
+
+            // FK lógica (índice sem constraint): a resposta é dado de pesquisa e sobrevive à
+            // remoção do usuário que a deu — mesmo padrão de SimulacoesCompra.TreinoJobId.
+            b.HasIndex(x => x.UsuarioId).HasDatabaseName("IX_Questionarios_UsuarioId");
+
+            // Listagem e export do TCC: por rede, em ordem de envio. Sem índice de polling
+            // porque nenhuma fila reclama questionário — a fase é de humano.
+            b.HasIndex(x => new { x.RedeId, x.EnviadoEm })
+             .HasDatabaseName("IX_Questionarios_Rede_EnviadoEm");
+        });
+
+        modelBuilder.Entity<QuestionarioResposta>(b =>
+        {
+            b.ToTable("QuestionarioRespostas");
+            b.HasKey(x => new { x.QuestionarioId, x.PerguntaCodigo });
+
+            b.Property(x => x.PerguntaCodigo).IsRequired().HasMaxLength(40);
+            b.Property(x => x.PerguntaTexto).IsRequired().HasMaxLength(500);
+            b.Property(x => x.OpcaoCodigo).IsRequired().HasMaxLength(40);
+            b.Property(x => x.OpcaoTexto).IsRequired().HasMaxLength(300);
+            b.Property(x => x.TextoLivre).HasMaxLength(1000);
+
+            b.HasOne<Questionario>().WithMany().HasForeignKey(x => x.QuestionarioId)
              .OnDelete(DeleteBehavior.Cascade);
         });
 

@@ -313,8 +313,9 @@ internal sealed class SessaoResultadoMaterializador(
     }
 
     /// <summary>
-    /// Apaga o detalhe anterior, grava o novo e conclui a sessão — <b>uma transação, nesta
-    /// ordem</b>.
+    /// Apaga o detalhe anterior, grava o novo e passa a sessão para
+    /// <c>AguardandoQuestionario</c> — <b>uma transação, nesta ordem</b>. Não conclui: quem
+    /// grava <c>Concluida</c> é o endpoint de envio do questionário, a última fase do fluxo.
     ///
     /// <para>
     /// <b>É daqui que sai a garantia de não materializar duas vezes.</b> O claim do
@@ -374,7 +375,7 @@ internal sealed class SessaoResultadoMaterializador(
             int linhas;
             await using (var concluir = new SqlCommand("""
                 UPDATE dbo.ComparacaoSessoes
-                    SET Status = 'Concluida',
+                    SET Status = 'AguardandoQuestionario',
                         ResultadoJson = @resultado,
                         AtualizadoEm = SYSDATETIMEOFFSET()
                 WHERE Id = @sessaoId AND Status = @statusEsperado;

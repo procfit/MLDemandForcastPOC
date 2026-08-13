@@ -387,7 +387,9 @@ public sealed class SessaoGuardasIntegrationTests(AppHostFixture fixture)
             var resp = await fixture.ComparacoesApi.GetAsync(
                 sessaoId, redeId, TestContext.Current.CancellationToken);
 
-            if (resp.Content is { Status: "Concluida" or "Inviavel" or "Falha" } sessao)
+            // Ver a nota do mesmo predicado em SessaoOrquestracaoIntegrationTests: o caminho
+            // felizes para em AguardandoQuestionario, esperando o comprador.
+            if (resp.Content is { Status: "AguardandoQuestionario" or "Concluida" or "Inviavel" or "Falha" } sessao)
             {
                 return sessao;
             }

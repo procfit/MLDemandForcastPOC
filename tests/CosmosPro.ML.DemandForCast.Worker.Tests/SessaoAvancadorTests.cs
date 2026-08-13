@@ -12,7 +12,7 @@ public sealed class SessaoAvancadorTests
     [Theory]
     [InlineData(SessaoStatus.ProcessandoDados, JobResultado.Concluido, SessaoStatus.Treinando)]
     [InlineData(SessaoStatus.Treinando, JobResultado.Concluido, SessaoStatus.Comparando)]
-    [InlineData(SessaoStatus.Comparando, JobResultado.Concluido, SessaoStatus.Concluida)]
+    [InlineData(SessaoStatus.Comparando, JobResultado.Concluido, SessaoStatus.AguardandoQuestionario)]
     [InlineData(SessaoStatus.Treinando, JobResultado.Falhou, SessaoStatus.Falha)]
     [InlineData(SessaoStatus.Treinando, JobResultado.EmAndamento, SessaoStatus.Treinando)]
     public void Proximo_estado(SessaoStatus atual, JobResultado r, SessaoStatus esperado)
@@ -42,6 +42,10 @@ public sealed class SessaoAvancadorTests
     [InlineData(SessaoStatus.Concluida)]
     [InlineData(SessaoStatus.Inviavel)]
     [InlineData(SessaoStatus.Falha)]
+    // Não é fase intermediária mesmo estando no meio do fluxo: o que falta é um humano
+    // responder, e não há job de fase para observar. Se o avançador a movesse, o worker
+    // concluiria a sessão sem questionário nenhum.
+    [InlineData(SessaoStatus.AguardandoQuestionario)]
     public void Estado_fora_das_fases_intermediarias_nao_se_move(SessaoStatus atual)
     {
         foreach (var resultado in Enum.GetValues<JobResultado>())
