@@ -1,3 +1,4 @@
+using System.Globalization;
 using CosmosPro.ML.DemandForCast.Extractor;
 
 namespace CosmosPro.ML.DemandForCast.Extractor.Tests;
@@ -20,17 +21,41 @@ public sealed class DesfechoDaAnaliseTests
             Contagem(diasCobertura),
             ExtractionWindow.Derive(Sugestao, diasCobertura, Hoje));
 
-    [Fact]
-    public void Dentro_do_horizonte_o_rotulo_traz_itens_janela_e_cobertura_sem_aviso()
+    /// <summary>
+    /// A contagem sai com o separador de milhar da <b>cultura corrente</b>, e isso é o
+    /// certo: é rótulo de tela para um comprador brasileiro, não CSV — a cultura invariante
+    /// é obrigação do <c>CsvZipWriter</c>, cujo leitor do outro lado é o Worker.
+    /// <para>
+    /// Roda nas duas culturas de propósito. A asserção nasceu escrita com o ponto do pt-BR
+    /// da máquina de quem a escreveu, passou local e <b>quebrou o pipeline em main</b>, onde
+    /// o runner é en-US e o separador é vírgula. Fixar a cultura torna o teste determinístico;
+    /// rodar nas duas impede que a próxima asserção de texto formatado volte a depender de
+    /// onde ela foi escrita.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("pt-BR", "12.345 itens")]
+    [InlineData("en-US", "12,345 itens")]
+    public void Dentro_do_horizonte_o_rotulo_traz_itens_janela_e_cobertura_sem_aviso(
+        string cultura, string itensEsperados)
     {
-        var d = Analisar(5);
+        var anterior = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = new CultureInfo(cultura);
+        try
+        {
+            var d = Analisar(5);
 
-        d.PodeExtrair.Should().BeTrue();
-        d.Sinal.Should().Be(SinalDaAnalise.Viavel);
-        d.Rotulo.Should().Contain("12.345 itens").And.Contain("30 loja(s)")
-            .And.Contain("10/03/2025").And.Contain("15/03/2026")
-            .And.Contain("cobertura 5 dia(s)");
-        d.Aviso.Should().BeNull();
+            d.PodeExtrair.Should().BeTrue();
+            d.Sinal.Should().Be(SinalDaAnalise.Viavel);
+            d.Rotulo.Should().Contain(itensEsperados).And.Contain("30 loja(s)")
+                .And.Contain("10/03/2025").And.Contain("15/03/2026")
+                .And.Contain("cobertura 5 dia(s)");
+            d.Aviso.Should().BeNull();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = anterior;
+        }
     }
 
     /// <summary>
