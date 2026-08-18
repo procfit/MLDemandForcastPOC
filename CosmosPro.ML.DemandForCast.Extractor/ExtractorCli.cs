@@ -129,6 +129,7 @@ internal static class ExtractorCli
         Console.WriteLine($"Sugestão {sugestao.SugestaoId} — {Descricao(sugestao)} — {sugestao.DataHora:dd/MM/yyyy HH:mm} — {Metodo(sugestao.TipoCalculo)}");
         Console.WriteLine($"{contagem.Value.QtdLinhas:N0} itens em {contagem.Value.QtdLojas:N0} loja(s).");
         Console.WriteLine($"Janela de dados: {janela.Inicio:dd/MM/yyyy} a {janela.Fim:dd/MM/yyyy} ({diasCobertura} dias de cobertura).");
+        if (janela.Ressalva is { } ressalva) Console.WriteLine($"AVISO: {ressalva}");
         Console.WriteLine($"Pasta de saída: {options.OutputDirectory}");
         Console.WriteLine();
 
@@ -201,7 +202,8 @@ internal static class ExtractorCli
             "Cobertura e janela não aparecem aqui: elas vêm do DIAS_ESTOQUE dos itens, e agregar " +
             "SUGESTOES_COMPRAS_RESULTADO para o catálogo inteiro custava ~20 min na instância real. " +
             "O `--extract <id>` faz essa leitura para a sugestão escolhida e recusa, com o motivo, " +
-            "se a cobertura for zero, ainda não tiver terminado, ou passar do horizonte do modelo.");
+            "se a cobertura for zero ou ainda não tiver terminado. Cobertura acima do horizonte do " +
+            "modelo extrai normalmente, com aviso.");
         Console.Out.Write(saida.ToString());
     }
 

@@ -7,11 +7,10 @@ public sealed class ExtractionWindowTests
     private static readonly DateOnly Hoje = new(2026, 7, 28);
 
     /// <summary>
-    /// A cobertura destes testes cabe no horizonte do ML de propósito. Eles usavam 30 dias,
-    /// que era a cobertura típica quando ela era lida do <c>DIAS_CURVA</c> do cabeçalho — e
-    /// 30 excede os 7 dias que o pipeline prevê, então a janela agora recusa. Usar um valor
-    /// dentro do horizonte é o que mantém estes casos falando sobre o que eles testam
-    /// (histórico, cobertura terminada, limite exato) em vez de baterem no teto.
+    /// A cobertura destes testes cabe no horizonte do ML de propósito — não porque um valor
+    /// maior seria recusado (não é mais: ele extrai com ressalva), mas para que estes casos
+    /// falem do que testam (histórico, cobertura terminada, limite exato) sem arrastar junto
+    /// a asserção da ressalva, que tem casos próprios abaixo.
     /// </summary>
     private const int CoberturaViavel = 5;
 
@@ -66,18 +65,27 @@ public sealed class ExtractionWindowTests
     }
 
     /// <summary>
-    /// Cobertura maior que o horizonte do modelo não é erro do ERP: é sugestão que o nosso
-    /// lado não sabe pontuar. Recusar na seleção troca a extração inteira — minutos, centenas
-    /// de MB e um import — por uma frase.
+    /// Cobertura maior que o horizonte do modelo <b>não</b> impede a extração. A recusa que
+    /// morava aqui partia de "todo item ficaria fora do horizonte e a comparação sairia
+    /// vazia", e isso não é verdade: a camada A pontua <c>min(cobertura, lead time)</c> dias
+    /// (<c>ComparacaoProcessor</c>) e sobrevive inteira. Quem cai é só a camada B, que já tem
+    /// motivo próprio e texto de comprador do outro lado
+    /// (<c>SessaoResultadoMontador.MotivoMlIndisponivel</c>).
+    /// <para>
+    /// A frase que a recusa economizava custava, na prática, toda sugestão de uma rede cujo
+    /// ciclo de reposição é de 15 a 30 dias — que é o ciclo corrente do PBS.
+    /// </para>
     /// </summary>
     [Fact]
-    public void Cobertura_alem_do_horizonte_do_ml_e_inviavel_com_motivo()
+    public void Cobertura_alem_do_horizonte_do_ml_extrai_com_ressalva()
     {
         var j = ExtractionWindow.Derive(
             new DateOnly(2026, 3, 10), ExtractionWindow.HorizonteMaximoMlDias + 1, Hoje);
 
-        j.Viavel.Should().BeFalse();
-        j.MotivoInviabilidade.Should().Contain("modelo prevê no máximo");
+        j.Viavel.Should().BeTrue("a camada A pontua os primeiros dias e continua valendo");
+        j.MotivoInviabilidade.Should().BeNull();
+        j.Ressalva.Should().Contain("em branco",
+            "o comprador precisa saber qual coluna vem vazia antes de esperar por ela");
     }
 
     [Fact]
@@ -87,5 +95,30 @@ public sealed class ExtractionWindowTests
             new DateOnly(2026, 3, 10), ExtractionWindow.HorizonteMaximoMlDias, Hoje);
 
         j.Viavel.Should().BeTrue("o teto é inclusivo — prever 7 dias é o que o pipeline entrega");
+    }
+
+    /// <summary>
+    /// Ressalva em toda extração é ressalva que ninguém lê. Dentro do horizonte as duas
+    /// camadas produzem número, e não há nada a avisar.
+    /// </summary>
+    [Fact]
+    public void Cobertura_dentro_do_horizonte_nao_traz_ressalva()
+    {
+        var j = ExtractionWindow.Derive(new DateOnly(2026, 3, 10), CoberturaViavel, Hoje);
+
+        j.Ressalva.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Janela recusada não acumula ressalva: o comprador tem uma decisão a tomar (escolher
+    /// outra sugestão), e um segundo texto ao lado do motivo competiria com ela.
+    /// </summary>
+    [Fact]
+    public void Janela_recusada_nao_traz_ressalva()
+    {
+        var recenteDemais = ExtractionWindow.Derive(new DateOnly(2026, 7, 25), 30, Hoje);
+
+        recenteDemais.Viavel.Should().BeFalse();
+        recenteDemais.Ressalva.Should().BeNull();
     }
 }

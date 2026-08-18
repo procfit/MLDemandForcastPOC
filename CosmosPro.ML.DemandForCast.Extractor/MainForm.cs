@@ -457,22 +457,15 @@ internal sealed class MainForm : Form
             // reconsultar o ERP.
             _janelaCache = (sugestaoId, _janela);
 
-            var itens = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s)";
+            var desfecho = DesfechoDaAnalise.De(contagem, _janela);
+            MostrarDesfecho(desfecho.Rotulo, desfecho.Sinal);
+            _extrair.Enabled = desfecho.PodeExtrair;
 
-            if (_janela.Viavel)
-            {
-                MostrarDesfecho(
-                    $"{itens} · {TextoDaJanela(_janela)} · cobertura {contagem.DiasCoberturaMax} dia(s)",
-                    viavel: true);
-                _extrair.Enabled = true;
-            }
-            else
-            {
-                // O motivo por extenso, e não um "inviável" seco: ele diz o que escolher em
-                // vez desta, que é a única coisa acionável para quem está na tela.
-                MostrarDesfecho($"{itens} · {_janela.MotivoInviabilidade}", viavel: false);
-                _extrair.Enabled = false;
-            }
+            // O aviso não cabe no rótulo (320×30, e o texto acima já ocupa as duas linhas),
+            // então sai pelo log — que tem espaço, fica visível na própria janela e grava no
+            // arquivo do dia. Ele reaparece na confirmação da extração, que é o momento em
+            // que ele muda uma decisão.
+            if (desfecho.Aviso is { } aviso) _log.Escrever($"AVISO: {aviso}");
         }
         else
         {
@@ -481,7 +474,7 @@ internal sealed class MainForm : Form
             _extrair.Enabled = false;
             MostrarDesfecho(
                 $"Não foi possível contar os itens da sugestão {sugestaoId}: {erro.Message}",
-                viavel: false);
+                SinalDaAnalise.Recusa);
             _log.Escrever($"ERRO ao contar itens da sugestão {sugestaoId}: {erro.Message}");
             foreach (var (chave, valor) in erro.Metadata)
             {
@@ -511,12 +504,12 @@ internal sealed class MainForm : Form
         if (_catalogo.Count == 0)
         {
             _janela = null;
-            MostrarDesfecho("Nenhuma sugestão encontrada no período.", viavel: false);
+            MostrarDesfecho("Nenhuma sugestão encontrada no período.", SinalDaAnalise.Recusa);
             _extrair.Enabled = false;
         }
         else if (visiveis.Count == 0)
         {
-            MostrarDesfecho($"Nenhuma das {_catalogo.Count:N0} sugestões carregadas casa com o filtro.", viavel: false);
+            MostrarDesfecho($"Nenhuma das {_catalogo.Count:N0} sugestões carregadas casa com o filtro.", SinalDaAnalise.Recusa);
             _extrair.Enabled = false;
         }
     }
@@ -598,8 +591,6 @@ internal sealed class MainForm : Form
         _extrair.Enabled = false;
     }
 
-    private static string TextoDaJanela(ExtractionWindow janela) =>
-        $"janela de dados {janela.Inicio:dd/MM/yyyy} a {janela.Fim:dd/MM/yyyy}";
 
     /// <summary>
     /// Contar é reação a trocar de seleção, e só a isso — por isso mora aqui e não
@@ -624,15 +615,21 @@ internal sealed class MainForm : Form
 
     /// <summary>
     /// Estado terminal: barra escondida (o sinal de que acabou) e cor dizendo qual desfecho.
-    /// Vermelho para recusa e falha, cor normal para viável — cor sozinha não carrega a
-    /// informação, o texto continua explicando o motivo por extenso.
+    /// Vermelho para recusa e falha, âmbar para extração com ressalva, cor normal para viável
+    /// — cor sozinha não carrega a informação, o texto continua explicando o motivo por
+    /// extenso, e no caso do âmbar o log traz o aviso que não coube no rótulo.
     /// </summary>
-    private void MostrarDesfecho(string texto, bool viavel)
+    private void MostrarDesfecho(string texto, SinalDaAnalise sinal)
     {
         _analisando.Visible = false;
-        _semaforo.BackColor = viavel ? Color.SeaGreen : Color.Firebrick;
+        _semaforo.BackColor = sinal switch
+        {
+            SinalDaAnalise.Viavel => Color.SeaGreen,
+            SinalDaAnalise.Ressalva => Color.DarkGoldenrod,
+            _ => Color.Firebrick,
+        };
         _semaforo.Visible = true;
-        _janelaInfo.ForeColor = viavel ? SystemColors.ControlText : Color.Firebrick;
+        _janelaInfo.ForeColor = sinal is SinalDaAnalise.Recusa ? Color.Firebrick : SystemColors.ControlText;
         _janelaInfo.Text = texto;
     }
 
@@ -767,8 +764,15 @@ internal sealed class MainForm : Form
         var mensagem =
             $"Sugestão {selecionada.SugestaoId} — {selecionada.Descricao} ({selecionada.DataHora:dd/MM/yyyy HH:mm}){Environment.NewLine}" +
             $"{lojasEscolhidasCount} de {_lojasDaSugestao.Count} loja(s) serão exportadas.{Environment.NewLine}" +
-            $"{TextoDaJanela(janela)}.{Environment.NewLine}" +
+            $"{janela.Descricao}.{Environment.NewLine}" +
             $"Pasta de saída: {pastaSaida}";
+
+        // A ressalva aparece aqui, e não só no log: este é o único momento em que ela pode
+        // mudar uma decisão — depois do OK são minutos de extração e centenas de MB.
+        if (janela.Ressalva is { } ressalva)
+        {
+            mensagem += Environment.NewLine + Environment.NewLine + ressalva;
+        }
 
         var arquivoJaExiste = File.Exists(zipEsperado);
         if (arquivoJaExiste)

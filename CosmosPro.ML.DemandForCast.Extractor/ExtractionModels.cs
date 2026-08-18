@@ -78,6 +78,47 @@ internal sealed record SugestaoCatalogoCabecalho(
 internal sealed record SugestaoContagem(
     long SugestaoId, int QtdLinhas, int QtdLojas, int DiasCoberturaMax);
 
+/// <summary>
+/// Qual dos três desfechos a análise da sugestão selecionada produziu, para a tela pintar
+/// o semáforo. <see cref="Ressalva"/> não é meio-termo entre os outros dois: ela extrai
+/// igual a <see cref="Viavel"/> — o que muda é que há algo a dizer antes.
+/// </summary>
+internal enum SinalDaAnalise { Viavel, Ressalva, Recusa }
+
+/// <summary>
+/// O que a tela mostra depois de analisar a sugestão selecionada, e se o Extrair liga.
+/// <para>
+/// Mora fora do <c>MainForm</c> porque é a regra que decide se o comprador consegue
+/// exportar — a mesma que já custou a uma rede inteira não conseguir exportar nada — e um
+/// <c>Form</c> não é instanciável num teste.
+/// </para>
+/// </summary>
+/// <param name="Rotulo">Linha do rótulo ao lado do semáforo, que tem 320×30.</param>
+/// <param name="Aviso">
+/// Texto longo que não cabe no rótulo e vai para o log. Nulo quando não há o que avisar —
+/// aviso em toda extração é aviso que ninguém lê.
+/// </param>
+internal readonly record struct DesfechoDaAnalise(string Rotulo, string? Aviso, SinalDaAnalise Sinal)
+{
+    public bool PodeExtrair => Sinal is not SinalDaAnalise.Recusa;
+
+    public static DesfechoDaAnalise De(SugestaoContagem contagem, ExtractionWindow janela)
+    {
+        var itens = $"{contagem.QtdLinhas:N0} itens · {contagem.QtdLojas:N0} loja(s)";
+
+        // O motivo por extenso, e não um "inviável" seco: ele diz o que escolher em vez
+        // desta, que é a única coisa acionável para quem está na tela.
+        if (!janela.Viavel)
+            return new DesfechoDaAnalise($"{itens} · {janela.MotivoInviabilidade}", null, SinalDaAnalise.Recusa);
+
+        var rotulo = $"{itens} · {janela.Descricao} · cobertura {contagem.DiasCoberturaMax} dia(s)";
+
+        return janela.Ressalva is { } ressalva
+            ? new DesfechoDaAnalise(rotulo, ressalva, SinalDaAnalise.Ressalva)
+            : new DesfechoDaAnalise(rotulo, null, SinalDaAnalise.Viavel);
+    }
+}
+
 /// <summary>Uma loja citada pela sugestão, com o peso que ela tem nela.</summary>
 internal sealed record LojaDaSugestao(int LojaId, string Nome, int Itens)
 {
