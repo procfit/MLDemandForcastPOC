@@ -16,9 +16,16 @@ namespace CosmosPro.ML.DemandForCast.Extractor;
 /// </para>
 /// </summary>
 internal sealed record ExtractionWindow(
-    DateOnly Inicio, DateOnly Fim, bool Viavel, string? MotivoInviabilidade)
+    DateOnly Inicio, DateOnly Fim, bool Viavel, string? MotivoInviabilidade, string? Ressalva = null)
 {
     private const int MesesHistorico = 12;
+
+    /// <summary>
+    /// A janela em uma linha. Fonte única para o rótulo da tela
+    /// (<see cref="DesfechoDaAnalise"/>) e para a confirmação da extração, que precisam
+    /// dizer a mesma coisa — quem confirma está conferindo o que o rótulo prometeu.
+    /// </summary>
+    public string Descricao => $"janela de dados {Inicio:dd/MM/yyyy} a {Fim:dd/MM/yyyy}";
 
     /// <summary>
     /// Até onde o pipeline de previsão consegue prever, em dias. Espelha
@@ -26,12 +33,19 @@ internal sealed record ExtractionWindow(
     /// aqui de propósito: o extrator é WinForms e trazer o Purchasing arrastaria o ML.NET
     /// para dentro dele. Se o horizonte mudar lá, este número muda aqui.
     /// <para>
-    /// O teto não é capricho. Prever o dia <c>T+H-1</c> sem enxergar o futuro exige que as
-    /// features daquele dia paren em <c>T-1</c>, o que só acontece com lead time ≥ H — e as
-    /// features hoje são construídas com 7 dias. Uma sugestão de cobertura maior é extraída
-    /// inteira, importada inteira, treinada inteira, e aí o comparador descarta item por item
-    /// por estar fora do horizonte. Recusar na seleção troca minutos de extração e centenas
-    /// de MB por uma frase.
+    /// O número existe porque prever o dia <c>T+H-1</c> sem enxergar o futuro exige que as
+    /// features daquele dia parem em <c>T-1</c>, o que só acontece com lead time ≥ H — e as
+    /// features hoje são construídas com 7 dias.
+    /// </para>
+    /// <para>
+    /// <b>Não é mais um veto, e sim o gatilho da ressalva.</b> Ele recusava a extração, sob o
+    /// argumento de que "todo item ficaria fora do horizonte e a comparação sairia vazia".
+    /// O argumento estava errado: a camada A pontua <c>min(cobertura, lead time)</c> dias
+    /// (<c>ComparacaoProcessor</c>) e produz número inteiro; só a camada B cai, e ela já tem
+    /// contador e texto de comprador próprios do outro lado
+    /// (<c>SessaoResultadoMontador.MotivoMlIndisponivel</c>). A frase que a recusa economizava
+    /// custava toda sugestão de uma rede cujo ciclo de reposição é de 15 a 30 dias — que é o
+    /// ciclo corrente do PBS, e portanto a rede inteira, não um caso de borda.
     /// </para>
     /// </summary>
     internal const int HorizonteMaximoMlDias = 7;
@@ -64,12 +78,15 @@ internal sealed record ExtractionWindow(
                 $"Escolha uma sugestão de até {limite:dd/MM/yyyy}.");
         }
 
+        // Ressalva, não recusa: a extração vale a pena porque a camada A sobrevive inteira.
+        // Ver o comentário de HorizonteMaximoMlDias.
         if (diasCobertura > HorizonteMaximoMlDias)
         {
-            return new ExtractionWindow(inicio, fim, false,
-                $"Esta sugestão cobre {diasCobertura} dias e o modelo prevê no máximo " +
-                $"{HorizonteMaximoMlDias}. Todo item ficaria fora do horizonte e a comparação " +
-                "sairia vazia. Escolha uma sugestão de cobertura menor.");
+            return new ExtractionWindow(inicio, fim, true, null,
+                $"Esta sugestão cobre {diasCobertura} dias e o método de ML prevê " +
+                $"{HorizonteMaximoMlDias}. A comparação de demanda por dia continua valendo, mas a " +
+                "coluna de quanto o ML mandaria comprar vai sair em branco — é o limite atual do " +
+                "modelo, não um problema do envio.");
         }
 
         return new ExtractionWindow(inicio, fim, true, null);
