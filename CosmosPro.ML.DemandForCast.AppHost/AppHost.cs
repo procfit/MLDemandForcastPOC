@@ -25,6 +25,12 @@ var compose = builder.AddDockerComposeEnvironment("compose")
 // `REGISTRY_REPOSITORY`) em vez de literais: o pipeline do GitHub Actions preenche
 // com ghcr.io + o próprio repositório, e um valor cravado aqui obrigaria um fork a
 // editar código para publicar no registry dele.
+//
+// Os dois têm default em `appsettings.Development.json`, e não por preguiça: o Aspire
+// prompta por **todo** parâmetro sem valor ao rodar, não só pelos que o modo `run` usa —
+// e estes dois são usados apenas por `aspire publish`/`aspire do push`. Sem o default, o
+// F5 abria pedindo dois valores que o F5 não gasta. Variável de ambiente ganha de arquivo
+// de configuração, então o CI (e um fork) continuam mandando no valor.
 var registryEndpoint = builder.AddParameterFromConfiguration("registryEndpoint", "REGISTRY_ENDPOINT");
 var registryRepository = builder.AddParameterFromConfiguration("registryRepository", "REGISTRY_REPOSITORY");
 
@@ -142,11 +148,20 @@ var minio = builder.AddMinioContainer("minio", minioAccessKey, minioSecretKey)
 // `ClickHouseDbGateExtensions` reproduz para o dia em que o ClickHouse voltar.
 var dbGateLogin = builder.AddParameter("dbgate-login", secret: false, value: "admin");
 
-// Sem `value:` de propósito: é segredo e precisa vir de user-secrets no desenvolvimento e
-// do Environment no destino. Sem ele o container não sobe — e essa é a intenção. Um DbGate
-// com rota pública e sem login é acesso de leitura e escrita a `Stage` e `engine` para
-// quem descobrir a URL: dá para ler o dado comercial de todas as redes e para inserir um
-// PowerUser direto no Identity, entrando na aplicação pela porta da frente.
+// Sem `value:` de propósito: um literal aqui valeria em todo ambiente, e um DbGate com rota
+// pública e sem login é acesso de leitura e escrita a `Stage` e `engine` para quem descobrir
+// a URL — dá para ler o dado comercial de todas as redes e para inserir um PowerUser direto
+// no Identity, entrando na aplicação pela porta da frente.
+//
+// O F5 tem default em `appsettings.Development.json`, pelo mesmo mecanismo do PowerUser
+// abaixo: o arquivo só é lido em Development, então o default morre sozinho ao sair da
+// máquina do desenvolvedor, e um prompt por F5 não comprava segurança nenhuma aqui — este
+// DbGate escuta em localhost, no Docker da própria máquina.
+//
+// No destino não há default nenhum: `aspire publish` escreve `DBGATE_PASSWORD=` **vazio** no
+// `.env` (ele não carrega valor de parâmetro para o compose — vale para todos, inclusive os
+// que têm `value:` literal aqui), e é o operador que preenche. Deixar em branco não é falha
+// visível: sobe um DbGate sem senha.
 var dbGatePassword = builder.AddParameter("dbgate-password", secret: true);
 
 var dbGate = builder.AddContainer("dbgate", "dbgate/dbgate", "6.1.4")

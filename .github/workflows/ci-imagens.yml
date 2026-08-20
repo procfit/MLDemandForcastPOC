@@ -260,6 +260,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A imagem do worker é a única que não sai da base default do SDK: o treino carrega o
+      # nativo do LightGBM, que depende de `libgomp.so.1`, e nenhuma imagem oficial do .NET
+      # traz esse pacote. O porquê completo está em
+      # CosmosPro.ML.DemandForCast.Worker/worker-base.Dockerfile.
+      #
+      # Este passo vem antes do `aspire do push` porque é insumo dele: o container publishing
+      # do SDK vai **puxar** esta referência do registry ao montar a imagem do worker, e não
+      # consulta o daemon local. Daí o push da base, e não só o build.
+      #
+      # A referência é lida do `.csproj` em vez de repetida aqui: ela já está definida lá,
+      # em `ContainerBaseImage`, e duas cópias divergiriam no primeiro bump de major do
+      # runtime — com o sintoma aparecendo só no treino, em produção. `-getProperty` faz o
+      # MSBuild responder qual é, com o mesmo ambiente que o build vai usar.
+      #
+      # Contexto vazio (`- < arquivo`): o Dockerfile não tem COPY, então não há o que enviar
+      # ao daemon.
+      - name: Construir e empurrar a imagem base do worker
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -o pipefail
+          base=$(dotnet msbuild CosmosPro.ML.DemandForCast.Worker/CosmosPro.ML.DemandForCast.Worker.csproj \
+                   -getProperty:ContainerBaseImage | tr -d '[:space:]')
+          if [ -z "$base" ]; then
+            echo "::error::Não foi possível ler ContainerBaseImage do .csproj do worker."
+            exit 1
+          fi
+          echo "Imagem base do worker: $base"
+          docker build -t "$base" - < CosmosPro.ML.DemandForCast.Worker/worker-base.Dockerfile
+          docker push "$base"
+
       # Cada imagem recebe duas tags: `sha-<7 primeiros do commit>`, imutável, e o nome da
       # branch, móvel.
       #
@@ -322,6 +353,46 @@ jobs:
             sleep "$espera"
             espera=$((espera * 2))
           done
+
+      # Nenhum teste da suíte pode pegar a classe de defeito que este passo pega, e não é por
+      # falta de cobertura: `Forecasting.Tests` e `Purchasing.Tests` treinam LightGBM de
+      # verdade, em Linux, e passam — porque o runner do GitHub tem `libgomp1` instalado. O
+      # que quebrou em produção foi a **imagem**, que não tem. Entre o teste verde e o destino
+      # existe um artefato que nenhum teste abre; é ele que este passo abre.
+      #
+      # A sonda é o `ldd` do nativo do LightGBM: uma dependência não resolvida aqui é
+      # exatamente o "Unable to load shared library 'lib_lightgbm'" que o comprador viu, com a
+      # diferença de aparecer no CI em segundos em vez de no meio de um treino.
+      #
+      # Não achar o `.so` é falha, não sucesso: um teste de dependência num arquivo
+      # inexistente não acha nada faltando, e sem esta guarda uma mudança de layout do
+      # publish faria o passo passar afirmando exatamente o que deixou de verificar.
+      #
+      # O que ele **não** faz: barrar o push. `aspire do push` constrói e empurra na mesma
+      # operação, então quando esta sonda roda a imagem já está no GHCR. O que a falha aqui
+      # impede é que alguém a **use**: a tag móvel não avança e o artefato de compose não é
+      # publicado, então nada no destino passa a apontar para ela.
+      - name: Smoke da imagem do worker (dependências nativas do LightGBM)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          imagem="$REGISTRY_ENDPOINT/$REGISTRY_REPOSITORY/worker:$IMAGE_TAG"
+          echo "Verificando $imagem"
+          docker run --rm --entrypoint sh "$imagem" -c '
+            set -e
+            so=$(find /app -name "lib_lightgbm.so" 2>/dev/null | head -1)
+            if [ -z "$so" ]; then
+              echo "lib_lightgbm.so nao esta na imagem — o layout do publish mudou?"
+              exit 1
+            fi
+            echo "nativo: $so"
+            ldd "$so"
+            if ldd "$so" | grep -q "not found"; then
+              echo "dependencia nativa nao resolvida na imagem"
+              exit 1
+            fi
+            echo "ok: todas as dependencias nativas resolvidas"
+          '
 
       # O Aspire empurra **uma** tag por imagem, então a móvel é acrescentada aqui, em cima do
       # que o passo anterior já publicou.

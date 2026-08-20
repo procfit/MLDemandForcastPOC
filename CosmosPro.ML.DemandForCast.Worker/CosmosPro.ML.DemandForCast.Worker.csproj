@@ -8,6 +8,25 @@
     <UserSecretsId>worker-cosmospro-ml-demand-forecast-poc</UserSecretsId>
   </PropertyGroup>
 
+  <!-- Este é o único projeto do repositório que não usa a base default do container
+       publishing do SDK. O motivo está em worker-base.Dockerfile, em uma frase: o treino
+       carrega o nativo do LightGBM, que precisa de `libgomp.so.1`, e nenhuma imagem oficial
+       do .NET traz esse pacote (conferido também no `-chiseled-extra`, cujo "extra" é ICU e
+       tzdata). Sem esta base, a imagem compila, sobe, atende health check e só quebra na
+       primeira sessão que chega à fase de treino.
+
+       O repositório do registry vem do ambiente, com os mesmos nomes que o AppHost lê
+       (REGISTRY_ENDPOINT / REGISTRY_REPOSITORY), para o CI e um fork mandarem no destino
+       sem editar código; o default existe para `dotnet publish /t:PublishContainer` à mão
+       não precisar de ambiente preparado. O CI pergunta o valor desta propriedade por
+       `-getProperty:ContainerBaseImage` e constrói exatamente essa referência, então aqui é
+       a única definição dela. -->
+  <PropertyGroup>
+    <WorkerBaseImageRepository Condition="'$(REGISTRY_ENDPOINT)' != '' and '$(REGISTRY_REPOSITORY)' != ''">$(REGISTRY_ENDPOINT)/$(REGISTRY_REPOSITORY)</WorkerBaseImageRepository>
+    <WorkerBaseImageRepository Condition="'$(WorkerBaseImageRepository)' == ''">ghcr.io/procfit/mldemandforcastpoc</WorkerBaseImageRepository>
+    <ContainerBaseImage>$(WorkerBaseImageRepository)/worker-base:net10.0-libgomp1</ContainerBaseImage>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.ServiceDefaults\CosmosPro.ML.DemandForCast.ServiceDefaults.csproj" />
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Engine\CosmosPro.ML.DemandForCast.Engine.csproj" />

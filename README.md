@@ -204,12 +204,19 @@ contrato do container (`LABEL_/SERVER_/PORT_/USER_/PASSWORD_/ENGINE_` + `CONNECT
 [ClickHouseDbGateExtensions.cs](CosmosPro.ML.DemandForCast.AppHost/ClickHouseDbGateExtensions.cs)
 reproduz para o dia em que o ClickHouse voltar (§3) — o helper continua no repositório, sem uso hoje.
 
-**Login é obrigatório, e isso não é opcional em ambiente publicado.** Dois parâmetros novos:
-`dbgate-login` (default `admin`) e `dbgate-password`, secreto e **sem valor** — vem de user-secrets
-no desenvolvimento e do Environment no destino. Sem ele o container não sobe, de propósito: com rota
-pública e sem login, o DbGate dá leitura e escrita em `Stage` e `engine` a quem descobrir a URL —
-o dado comercial de todas as redes, e a possibilidade de inserir um `PowerUser` direto nas tabelas
-do Identity e entrar na aplicação pela porta da frente.
+**Login é obrigatório, e isso não é opcional em ambiente publicado.** Dois parâmetros:
+`dbgate-login` (default `admin`) e `dbgate-password`, secreto e **sem `value:` no código** — com
+rota pública e sem login, o DbGate dá leitura e escrita em `Stage` e `engine` a quem descobrir a
+URL: o dado comercial de todas as redes, e a possibilidade de inserir um `PowerUser` direto nas
+tabelas do Identity e entrar na aplicação pela porta da frente.
+
+No F5 a senha tem default em
+[appsettings.Development.json](CosmosPro.ML.DemandForCast.AppHost/appsettings.Development.json),
+pelo mesmo mecanismo do `PowerUser`: o arquivo só é lido em Development, então o default não
+acompanha o binário para fora da máquina do desenvolvedor. Ele existe porque o Aspire pede valor
+para **todo** parâmetro sem valor ao rodar — não só para os que o modo `run` usa —, e um prompt por
+F5 não comprava segurança nenhuma num DbGate que escuta em localhost. User-secrets continua
+ganhando do arquivo, para usar senha própria localmente:
 
 ```powershell
 dotnet user-secrets --project CosmosPro.ML.DemandForCast.AppHost set "Parameters:dbgate-password" "<senha>"
@@ -393,7 +400,7 @@ onde começar.
 |---|---|---|
 | `windows-tests` | `windows-latest` | Testes do extrator **e** o binário dele: publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json` e sobe o par como artefato `extrator`. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele, e é por isso que a suíte é dividida por sistema operacional, não por capricho de paralelismo. O `.exe` não entra em imagem nenhuma: quem o publica é o operador, em `/admin/extrator` (ver "Publicar o extrator no MinIO"). |
 | `linux-tests` | `ubuntu-latest` | Compila em **Debug** (mesma configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
-| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: `aspire do push` (constrói e empurra as quatro imagens, na tag imutável), um passo de `docker tag`/`docker push` que acrescenta a tag móvel, e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
+| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: constrói e empurra a **imagem base do worker** (abaixo), `aspire do push` (constrói e empurra as quatro imagens, na tag imutável), um **smoke** que abre a imagem do worker e confere as dependências nativas do LightGBM, um passo de `docker tag`/`docker push` que acrescenta a tag móvel, e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
 
 Os testes de integração e E2E ficam em **passos separados e sequenciais** do mesmo job de
 propósito: eles se excluem mutuamente por um lock de arquivo entre processos
@@ -405,8 +412,46 @@ os 30 minutos de tolerância do lock.
 `ghcr.io/<organização>/<repositório>/…`, tudo **em minúsculas** (o GHCR rejeita maiúsculas
 no push, e o nome do repositório tem algumas; o workflow converte). São quatro:
 `apiservice`, `webfrontend`, `worker` e `db-migrator` (`vendas-olap-schema` saiu junto com o
-ClickHouse — §3). A infraestrutura (SQL Server, MinIO, dashboard) **não** é construída
-aqui: vem de imagem pública, já referenciada no compose gerado.
+ClickHouse — §3), mais a `worker-base` descrita logo abaixo, que é insumo de build e não
+serviço. A infraestrutura (SQL Server, MinIO, dashboard) **não** é construída aqui: vem de
+imagem pública, já referenciada no compose gerado.
+
+#### A imagem base do worker, e por que ela existe
+
+O `worker` é o único serviço que treina modelo, e o único que **não** sai da base default do
+container publishing do SDK. O nativo do LightGBM (`lib_lightgbm.so`, do pacote `LightGBM`
+que vem por `Microsoft.ML.LightGbm`) declara `libgomp.so.1` em `DT_NEEDED`, e
+`mcr.microsoft.com/dotnet/runtime:10.0` não traz esse pacote — nem o `-chiseled-extra`, cujo
+"extra" é ICU e tzdata. O resultado é uma imagem que compila, sobe, responde ao health check
+e quebra **só** quando a primeira sessão chega à fase de treino, com
+`Unable to load shared library 'lib_lightgbm'` na tela do comprador e a sessão em `Falha`
+pedindo que ele reenvie o ZIP — que nunca resolve, porque o problema não é o ZIP.
+
+Instalar o pacote na imagem do app não é possível: o container publishing do SDK monta
+camadas sobre uma base, não executa `RUN`. Daí
+[`worker-base.Dockerfile`](CosmosPro.ML.DemandForCast.Worker/worker-base.Dockerfile) — quatro
+linhas sobre a mesma base do SDK, com `libgomp1` e uma asserção de `ldconfig` que falha o
+build se o pacote deixar de entregar a biblioteca com esse nome. O CI a constrói e empurra
+**antes** do `aspire do push`, porque o SDK vai puxá-la do registry ao montar a imagem do
+worker (ele não consulta o daemon local). A referência mora em **um** lugar, o
+`ContainerBaseImage` do
+[`.csproj` do worker](CosmosPro.ML.DemandForCast.Worker/CosmosPro.ML.DemandForCast.Worker.csproj),
+e o workflow pergunta qual é por `-getProperty` em vez de repeti-la.
+
+A tag dela (`worker-base:net10.0-libgomp1`) **não** é imutável, ao contrário das quatro de
+serviço: o CI a reconstrói a cada execução, então correção de segurança do sistema entra
+sozinha. Isso é seguro porque a base é insumo de build — a imagem do worker carrega as
+camadas dela, não uma referência a ela. `aspire do push` **local** precisa de
+`docker login ghcr.io` para puxá-la.
+
+**Por que nenhum teste pegava isso.** `Forecasting.Tests` e `Purchasing.Tests` treinam
+LightGBM de verdade, em Linux, e passam — porque o runner do GitHub tem `libgomp1`
+instalado. O que faltava não era cobertura de código: era alguém abrir o **artefato**. É o
+que o passo de smoke faz, rodando `ldd` no nativo dentro da imagem publicada; uma
+dependência não resolvida ali é o mesmo erro do comprador, aparecendo no CI em segundos em
+vez de no meio de um treino. Ele não barra o push (o `aspire do push` constrói e empurra na
+mesma operação), mas impede que a imagem seja usada: a tag móvel não avança e o artefato de
+compose não é publicado.
 
 **Como as imagens são marcadas.** Duas tags por imagem, cada uma com um trabalho:
 
