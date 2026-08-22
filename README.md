@@ -447,9 +447,16 @@ camadas dela, não uma referência a ela. `aspire do push` **local** precisa de
 **Por que nenhum teste pegava isso.** `Forecasting.Tests` e `Purchasing.Tests` treinam
 LightGBM de verdade, em Linux, e passam — porque o runner do GitHub tem `libgomp1`
 instalado. O que faltava não era cobertura de código: era alguém abrir o **artefato**. É o
-que o passo de smoke faz, rodando `ldd` no nativo dentro da imagem publicada; uma
-dependência não resolvida ali é o mesmo erro do comprador, aparecendo no CI em segundos em
-vez de no meio de um treino. Ele não barra o push (o `aspire do push` constrói e empurra na
+que o passo de smoke faz, dentro da imagem publicada: confere os frameworks com
+`dotnet --list-runtimes` e as dependências nativas com `ldd`.
+
+A checagem de frameworks está ali porque a primeira versão deste smoke, que só rodava `ldd`,
+**passou numa imagem que não iniciava**: fixar `ContainerBaseImage` sobrescreve a escolha do
+SDK, e a base que eu apontei (`dotnet/runtime`) trazia o nativo mas não o framework do ASP.NET
+Core, que este worker referencia via `ServiceDefaults`. O processo saía em dois segundos com
+exit 150 (`No frameworks were found`), a cada start — imagem que sobe, container que morre,
+fila que para, e dois dias de produção sem worker. Abrir o artefato pela metade dá o mesmo
+conforto de abrir inteiro e não é a mesma coisa. Ele não barra o push (o `aspire do push` constrói e empurra na
 mesma operação), mas impede que a imagem seja usada: a tag móvel não avança e o artefato de
 compose não é publicado.
 

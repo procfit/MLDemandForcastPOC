@@ -360,9 +360,13 @@ jobs:
       # que quebrou em produção foi a **imagem**, que não tem. Entre o teste verde e o destino
       # existe um artefato que nenhum teste abre; é ele que este passo abre.
       #
-      # A sonda é o `ldd` do nativo do LightGBM: uma dependência não resolvida aqui é
-      # exatamente o "Unable to load shared library 'lib_lightgbm'" que o comprador viu, com a
-      # diferença de aparecer no CI em segundos em vez de no meio de um treino.
+      # São duas sondas, e a segunda nasceu de um incidente que a primeira não pegou. O `ldd`
+      # do nativo do LightGBM cobre "Unable to load shared library 'lib_lightgbm'", que o
+      # comprador viu no meio de um treino. Só que a primeira versão deste passo **passou** numa
+      # imagem que nem iniciava: a base fixada por `ContainerBaseImage` trazia o nativo e não
+      # trazia o framework do ASP.NET Core, e o processo saía em dois segundos com exit 150.
+      # Abrir o artefato pela metade dá exatamente o conforto que um smoke não deveria dar, daí
+      # a checagem de frameworks vir antes.
       #
       # Não achar o `.so` é falha, não sucesso: um teste de dependência num arquivo
       # inexistente não acha nada faltando, e sem esta guarda uma mudança de layout do
@@ -372,7 +376,7 @@ jobs:
       # operação, então quando esta sonda roda a imagem já está no GHCR. O que a falha aqui
       # impede é que alguém a **use**: a tag móvel não avança e o artefato de compose não é
       # publicado, então nada no destino passa a apontar para ela.
-      - name: Smoke da imagem do worker (dependências nativas do LightGBM)
+      - name: Smoke da imagem do worker (frameworks e dependências nativas)
         timeout-minutes: 10
         shell: bash
         run: |
@@ -380,6 +384,21 @@ jobs:
           echo "Verificando $imagem"
           docker run --rm --entrypoint sh "$imagem" -c '
             set -e
+
+            # Frameworks primeiro, porque é a falha que mata mais rápido e mais cedo: o worker
+            # referencia ServiceDefaults, que declara FrameworkReference de
+            # Microsoft.AspNetCore.App. Numa base que só traz Microsoft.NETCore.App o processo
+            # sai em dois segundos com exit 150 ("No frameworks were found"), a cada start, para
+            # sempre. Foi assim que a fila ficou dois dias parada.
+            dotnet --list-runtimes
+            for framework in Microsoft.NETCore.App Microsoft.AspNetCore.App; do
+              if ! dotnet --list-runtimes | grep -q "^$framework 10\."; then
+                echo "framework ausente na imagem: $framework 10.x"
+                exit 1
+              fi
+            done
+            echo "ok: frameworks presentes"
+
             so=$(find /app -name "lib_lightgbm.so" 2>/dev/null | head -1)
             if [ -z "$so" ]; then
               echo "lib_lightgbm.so nao esta na imagem — o layout do publish mudou?"
