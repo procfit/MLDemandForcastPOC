@@ -189,10 +189,30 @@ internal static class SessaoJobs
         if (inicioDoProcessamento is not { } inicio) return null;
         if (agora - inicio <= ComparacaoSessao.LimiteDeFaseSemProgresso) return null;
 
-        return $"A etapa de {fase} começou e ficou mais de " +
-               $"{ComparacaoSessao.LimiteDeFaseSemProgresso.TotalHours:0} horas sem dar sinal de progresso, o que " +
-               "normalmente significa que o processamento foi interrompido antes de terminar. Envie os dados " +
-               "novamente para recomeçar; se acontecer de novo, procure o suporte.";
+        return MotivoDeAbandono(fase);
+    }
+
+    /// <summary>
+    /// O texto, separado do relógio, porque <see cref="OrfaosWorker"/> aplica o mesmo veredito à
+    /// <b>linha do job</b> — e duas redações para o mesmo desfecho acabariam divergindo, com a
+    /// tela dizendo uma coisa e a fila outra.
+    /// </summary>
+    public static string MotivoDeAbandono(string fase) =>
+        $"A etapa de {fase} começou e ficou mais de " +
+        $"{ComparacaoSessao.LimiteDeFaseSemProgresso.TotalHours:0} horas sem dar sinal de progresso, o que " +
+        "normalmente significa que o processamento foi interrompido antes de terminar. Envie os dados " +
+        "novamente para recomeçar; se acontecer de novo, procure o suporte.";
+
+    /// <summary>
+    /// Nomes das fases como o comprador as lê. Ficam aqui, e não como literal em cada ponto de
+    /// uso, porque <see cref="SessaoWorker"/> (que observa a fase) e <see cref="OrfaosWorker"/>
+    /// (que encerra a linha do job) precisam produzir exatamente o mesmo texto.
+    /// </summary>
+    public static class Fases
+    {
+        public const string Importacao = "importação dos seus dados";
+        public const string Treino = "aprendizado do padrão de venda";
+        public const string Comparacao = "comparação dos dois métodos";
     }
 
     /// <summary>

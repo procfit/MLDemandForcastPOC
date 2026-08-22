@@ -427,7 +427,7 @@ internal sealed class SessaoWorker(
         {
             case SessaoStatus.ProcessandoDados:
             {
-                const string fase = "importação dos seus dados";
+                const string fase = SessaoJobs.Fases.Importacao;
                 if (sessao.CargaStageId is not { } id) return FasePerdida(fase);
 
                 var job = await db.CargasStage.AsNoTracking()
@@ -448,7 +448,7 @@ internal sealed class SessaoWorker(
 
             case SessaoStatus.Treinando:
             {
-                const string fase = "aprendizado do padrão de venda";
+                const string fase = SessaoJobs.Fases.Treino;
                 if (sessao.TreinoJobId is not { } id) return FasePerdida(fase);
 
                 var job = await db.TreinoJobs.AsNoTracking()
@@ -469,7 +469,7 @@ internal sealed class SessaoWorker(
 
             case SessaoStatus.Comparando:
             {
-                const string fase = "comparação dos dois métodos";
+                const string fase = SessaoJobs.Fases.Comparacao;
                 if (sessao.ComparacaoPbsId is not { } id) return FasePerdida(fase);
 
                 var job = await db.ComparacoesPbs.AsNoTracking()

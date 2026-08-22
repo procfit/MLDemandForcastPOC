@@ -518,6 +518,34 @@ se qualquer etapa falhar — sem isso o gate do compose não teria efeito e os s
 contra um banco pela metade. Não há mais passo manual entre o `docker compose up` e o primeiro
 acesso; o único pré-requisito continua sendo preencher o `.env` (abaixo).
 
+#### Reinício, pull e jobs órfãos (buraco fechado depois de uma outage de dois dias)
+
+Produção ficou **dois dias sem `worker`**. Ele subiu num deploy, o processo saiu em algum
+momento, e a partir daí nada o levantou: o compose publicado não trazia `restart:`, e o default
+do Docker é `no`. A limpeza de Docker do Dokploy (`enableDockerCleanup`) removeu o container
+parado — junto com o log — e a imagem que ficou sem uso. A fila parou, e a tela do comprador
+seguiu dizendo "importando" todo esse tempo.
+
+O que torna essa falha diferente das outras é **quem** deveria relatá-la: o relógio que encerra
+uma fase abandonada (`SessaoJobs.FaseAbandonada`, 2h) roda dentro do worker. O processo que
+executa é o mesmo que denuncia, então a morte dele é a única falha que o sistema não tinha como
+contar. Três mudanças fecham isso, todas nascendo do modelo em vez de edição à mão no YAML:
+
+| Mudança | Onde | Por quê |
+|---|---|---|
+| `restart: unless-stopped` em todos os serviços, **menos** o `db-migrator` | `ConfigureComposeFile` no [AppHost.cs](CosmosPro.ML.DemandForCast.AppHost/AppHost.cs) | Processo que morre volta sozinho. O migrador fica de fora porque é one-shot e precisa terminar com exit 0 para o `service_completed_successfully` liberar — com política de reinício ele republicaria o DACPAC em loop. |
+| `pull_policy: always` nos quatro serviços com imagem deste repositório | idem | Eles usam a tag móvel `:main` e o Compose aceita "já existe local": sem isso, deploy depois de CI verde sobe o binário antigo **e reporta sucesso**. Já aconteceu; a correção vivia como edição à mão no YAML do Dokploy, que a próxima regeneração apagaria em silêncio. |
+| [`OrfaosWorker`](CosmosPro.ML.DemandForCast.Worker/OrfaosWorker.cs) encerra job em `Processando` além do limite | Worker | As quatro filas reclamam com `WHERE Status = 'Pendente'` e sem lease: linha reclamada por processo morto não é reclamada nem encerrada por ninguém. Por **idade**, não numa varredura de startup — o modelo admite mais de um worker, e ali um processo subindo mataria o job que outro está executando. |
+
+O `OrfaosWorker` **complementa** o `FaseAbandonada`, não o substitui: aquele encerra a *sessão*
+(é o que desbloqueia o comprador), este encerra a *linha do job* (é o que a página técnica
+mostra e a fila enxerga). Os dois compartilham o relógio e o texto de propósito, para dois
+registros do mesmo evento não poderem discordar.
+
+**O compose da produção é `raw` guardado no Dokploy.** A descrição dele diz "regenerar e
+recolar", e é isso: `aspire publish`, e o YAML gerado substitui o de lá. Os domínios do Traefik
+(`webfrontend`, `dbgate`) são configuração do Dokploy, fora do YAML, e sobrevivem à recolagem.
+
 ---
 
 ## 6. Roadmap do POC

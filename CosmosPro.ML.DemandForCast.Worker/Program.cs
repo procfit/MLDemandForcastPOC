@@ -46,5 +46,10 @@ builder.Services.AddHostedService<ComparacaoWorker>();
 builder.Services.AddScoped<SessaoResultadoMaterializador>();
 builder.Services.AddHostedService<SessaoWorker>();
 
+// Encerra job que ficou em `Processando` além do limite — o rastro de um processo que
+// morreu no meio e não voltou. As filas reclamam sem lease, então ninguém mais olharia
+// para essas linhas; ver OrfaosWorker para por que é por idade e não no startup.
+builder.Services.AddHostedService<OrfaosWorker>();
+
 var host = builder.Build();
 await host.RunAsync();

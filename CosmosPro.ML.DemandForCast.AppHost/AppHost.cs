@@ -259,6 +259,50 @@ compose.ConfigureComposeFile(composeFile =>
 
     composeFile.Services[dbMigrator.Resource.Name].DependsOn[sqlServer.Resource.Name] =
         new ServiceDependency { Condition = "service_healthy" };
+
+    // --- Política de reinício -------------------------------------------------
+    //
+    // O publisher do compose não emite `restart:` para nada, e o default do Docker é `no`:
+    // um processo que morre fica morto até alguém perceber. Custou dois dias de produção —
+    // o `worker` saiu, ninguém o levantou, a limpeza do Docker removeu o container parado
+    // (e a imagem, que ficou sem uso) junto com o log, e a fila parou. A tela do comprador
+    // seguiu dizendo "importando" o tempo todo, porque o relógio que encerra uma fase
+    // abandonada (`SessaoJobs.FaseAbandonada`) roda **dentro** do processo que morreu: o
+    // worker é, ao mesmo tempo, o que executa e o que denuncia, então a morte dele é a
+    // única falha que o sistema não tem como relatar.
+    //
+    // `unless-stopped` e não `always`: um container que o operador parou de propósito deve
+    // continuar parado depois de um restart do daemon.
+    //
+    // O `db-migrator` fica de fora, e isso não é esquecimento: ele é one-shot e **precisa**
+    // terminar com exit 0 para o `service_completed_successfully` dos outros três liberar.
+    // Com política de reinício, ele voltaria a rodar depois de concluir, republicando o
+    // DACPAC em loop e nunca satisfazendo o gate.
+    foreach (var (nome, servico) in composeFile.Services)
+    {
+        if (nome == dbMigrator.Resource.Name) continue;
+        servico.Restart = "unless-stopped";
+    }
+
+    // --- Política de pull ------------------------------------------------------
+    //
+    // Só nos serviços cuja imagem vem deste repositório — os quatro que o compose declara
+    // como `${*_IMAGE}`. Eles são publicados na tag móvel `:main`, e Compose considera
+    // "imagem já existe localmente" suficiente: sem `pull_policy`, um deploy depois de um
+    // CI verde sobe **o binário antigo** e reporta sucesso. Já aconteceu, e a correção
+    // vivia como edição à mão no YAML guardado no Dokploy — que a próxima regeneração
+    // apagaria em silêncio, reabrindo o mesmo buraco. Por isso mora aqui.
+    //
+    // As imagens de infraestrutura ficam de fora: são tags imutáveis ou fixadas (SQL
+    // Server, MinIO, DbGate), então consultar o registry a cada deploy custaria tempo sem
+    // mudar nada.
+    foreach (var servico in composeFile.Services.Values)
+    {
+        if (servico.Image?.StartsWith("${", StringComparison.Ordinal) == true)
+        {
+            servico.PullPolicy = "always";
+        }
+    }
 });
 
 // --- Services ----------------------------------------------------------------
