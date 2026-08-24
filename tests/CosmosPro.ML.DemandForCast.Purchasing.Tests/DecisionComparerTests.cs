@@ -17,7 +17,8 @@ public sealed class DecisionComparerTests
     private static DateOnly Dia(int offset) => new DateOnly(2025, 3, 1).AddDays(offset);
 
     private static IReadOnlyList<DiaAvaliado> Janela(
-        decimal vendaDia, double mlDia, int loja, string sku, int dias = Dias, int diaEmRuptura = -1) =>
+        decimal vendaDia, double mlDia, int loja, string sku, int dias = Dias, int diaEmRuptura = -1,
+        Func<int, double>? mlPorDia = null) =>
         [.. Enumerable.Range(0, dias).Select(i => new DiaAvaliado(
             new FeatureVector
             {
@@ -30,7 +31,7 @@ public sealed class DecisionComparerTests
                 ClasseAbc = "A",
                 UF = "SP",
             },
-            mlDia))];
+            mlPorDia?.Invoke(i) ?? mlDia))];
 
     private static DecisionItem Item(
         decimal demandaDiaErp,
@@ -53,7 +54,8 @@ public sealed class DecisionComparerTests
         string curva = "A",
         int redeId = 1,
         long sugestaoId = 1,
-        DateOnly? treinadoAte = null) => new()
+        DateOnly? treinadoAte = null,
+        Func<int, double>? mlPorDia = null) => new()
         {
             RedeId = redeId,
             SugestaoId = sugestaoId,
@@ -74,7 +76,7 @@ public sealed class DecisionComparerTests
             CompraSugerida = compraSugerida,
             PrecoCompra = precoCompra,
             FatorEmbalagem = fatorEmbalagem,
-            Dias = Janela(vendaDia, mlDia, loja, sku, diasNaJanela, diaEmRuptura),
+            Dias = Janela(vendaDia, mlDia, loja, sku, diasNaJanela, diaEmRuptura, mlPorDia),
         };
 
     // --- Reconciliacao: o portao de validade ---------------------------------
@@ -537,31 +539,47 @@ public sealed class DecisionComparerTests
     [Theory]
     [InlineData((short)15, 26)]
     [InlineData((short)30, 56)]
-    public void Cobertura_alem_do_horizonte_do_ml_sai_com_o_motivo_verdadeiro(short dias, int compra)
+    public void Cobertura_alem_do_horizonte_extrapola_a_taxa_em_vez_de_excluir_o_item(short dias, int compra)
     {
-        // Coberturas de 15 e 30 dias sao correntes no PBS. Decidir uma compra que cobre 30
-        // dias exige prever 30 dias a frente; o pipeline de hoje para em 7. O item tem de
-        // sair identificado por essa lacuna, e nao acusado de vazamento de informacao.
+        // Coberturas de 15 e 30 dias sao correntes no PBS e o pipeline preve 7. Antes o item
+        // era excluido e a camada terminava vazia — era isso que fazia a tela dizer "sem
+        // calculo do ML" nas 20.153 linhas. Agora a taxa dos 7 dias validos alimenta a MESMA
+        // multiplicacao que o ERP faz pela cobertura (demandaDia x DiasEstoque), e o
+        // esticamento e reportado em vez de escondido.
         var result = new DecisionComparer().Compare(
             [Item(2m, compraSugerida: compra, vendaDia: 2m, mlDia: 2.0,
                   diasEstoque: dias, diasNaJanela: dias)]);
 
         result.Reconciliacao.Reconciliados.Should().Be(1);
-        result.ItensComparados.Should().Be(0);
-        result.ItensDescartadosPorRuptura.Should().Be(0);
+        result.ItensComparados.Should().Be(1);
+        result.ForaDoHorizonteMl.Should().BeEmpty("cobertura longa deixou de excluir item");
 
-        var fora = result.ForaDoHorizonteMl.Single();
-        fora.Sku.Should().Be("SKU1");
-        fora.DiasEstoque.Should().Be(dias);
-        fora.HorizonteMaximoMl.Should().Be(7);
+        result.ItensComTaxaExtrapolada.Should().Be(1);
+        result.DiasDeTaxaMinimo.Should().Be(7);
+        result.FatorMaximoDeExtrapolacao.Should().BeApproximately((decimal)dias / 7m, 0.001m);
 
-        // O motivo vem uma vez por resultado, nao por item: e a mesma frase para a lista
-        // inteira, e repeti-la em cada linha gravava megabytes de texto identico no
-        // ResultadoJson. O que varia de item para item continua nos campos acima.
-        result.MotivoForaDoHorizonteMl.Should().Contain("7 dia(s)");
-        result.MotivoForaDoHorizonteMl.Should().Contain("multi-horizonte");
-        result.MotivoForaDoHorizonteMl.Should().Contain("DiasEstoque");
-        result.MotivoForaDoHorizonteMl.Should().NotContain("Regra de informação");
+        // Taxa do ML igual a do ERP produz a MESMA quantidade: e o que prova que a
+        // extrapolacao passa pela formula do ERP, e nao por uma conta paralela.
+        result.Detalhe.Single().CompraMl.Should().Be(compra);
+        result.MotivoTaxaExtrapolada.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void A_taxa_do_ml_ignora_a_previsao_dos_dias_alem_do_horizonte()
+    {
+        // O ponto sensivel da extrapolacao. Os dias alem do horizonte TEM previsao no item —
+        // o chamador monta a janela inteira —, e ela e alimentada por observacao posterior ao
+        // corte. Se entrarem na taxa, a regra de informacao cai por dentro: sem excecao, sem
+        // aviso, com numero plausivel na tela. Aqui os 8 ultimos dias preveem 1000/dia; se
+        // vazarem para a taxa, a compra do ML explode em vez de dar 26.
+        var result = new DecisionComparer().Compare(
+            [Item(2m, compraSugerida: 26m, vendaDia: 2m, mlDia: 2.0,
+                  diasEstoque: 15, diasNaJanela: 15,
+                  mlPorDia: i => i < 7 ? 2.0 : 1000.0)]);
+
+        result.ItensComparados.Should().Be(1);
+        result.Detalhe.Single().CompraMl.Should().Be(26m,
+            "a taxa sai dos 7 primeiros dias (2,0/dia x 15 dias - 4 de posicao), nao dos 1000/dia dos dias que violam a regra de informacao");
     }
 
     [Fact]
@@ -576,7 +594,7 @@ public sealed class DecisionComparerTests
     }
 
     [Fact]
-    public void Item_fora_do_horizonte_nao_derruba_os_itens_que_o_ml_alcanca()
+    public void Item_dentro_e_item_alem_do_horizonte_convivem_e_so_um_conta_como_extrapolado()
     {
         var result = new DecisionComparer().Compare(
         [
@@ -585,9 +603,9 @@ public sealed class DecisionComparerTests
                  diasEstoque: 15, diasNaJanela: 15),
         ]);
 
-        result.ItensComparados.Should().Be(1);
-        result.Detalhe.Single().Sku.Should().Be("SKU1");
-        result.ForaDoHorizonteMl.Single().Sku.Should().Be("SKU2");
+        result.ItensComparados.Should().Be(2);
+        result.ItensComTaxaExtrapolada.Should().Be(1, "SKU1 cobre exatamente o horizonte");
+        result.FatorMaximoDeExtrapolacao.Should().BeApproximately(15m / 7m, 0.001m);
     }
 
     [Fact]
@@ -677,23 +695,26 @@ public sealed class DecisionComparerTests
     // --- Utilidade do resultado: comparacao que nao comparou nada ------------
 
     [Fact]
-    public void Populacao_toda_alem_do_horizonte_nao_e_utilizavel_e_nao_finge_100_por_cento()
+    public void Populacao_toda_extrapolada_continua_utilizavel_e_declara_o_esticamento()
     {
-        // Cenario real: horizonte 7 contra sugestoes PBS de 30 dias. A aritmetica do ERP
-        // reconcilia por inteiro - o portao de validade fez o trabalho dele -, mas nenhum
-        // item chega a ter um braco ML para disputar. Isso nao pode se ler como sucesso.
+        // Cenario real: horizonte 7 contra sugestoes PBS de 30 dias. Antes a execucao inteira
+        // saia ForaDoHorizonteMl e nada era comparado. Agora compara, e o que precisa ser lido
+        // junto do resultado e o fator de extrapolacao, nao a ausencia de numero.
         var result = new DecisionComparer().Compare(
         [
             Item(2m, compraSugerida: 56m, vendaDia: 2m, mlDia: 2.0, sku: "SKU1", diasEstoque: 30, diasNaJanela: 30),
-            Item(2m, compraSugerida: 56m, vendaDia: 2m, mlDia: 2.0, sku: "SKU2", diasEstoque: 30, diasNaJanela: 30),
+            Item(2m, compraSugerida: 26m, vendaDia: 2m, mlDia: 2.0, sku: "SKU2", diasEstoque: 15, diasNaJanela: 15),
         ]);
 
-        result.ItensComparados.Should().Be(0);
+        result.ItensComparados.Should().Be(2);
         result.Reconciliacao.Reconciliados.Should().Be(2);
-        result.ForaDoHorizonteMl.Should().HaveCount(2);
+        result.ForaDoHorizonteMl.Should().BeEmpty();
 
-        result.Utilidade.Should().Be(UtilidadeComparacao.ForaDoHorizonteMl);
-        result.Reconciliacao.TaxaConcordancia.Should().BeNull();
+        result.Utilidade.Should().Be(UtilidadeComparacao.Utilizavel);
+        result.ItensComTaxaExtrapolada.Should().Be(2);
+        result.FatorMaximoDeExtrapolacao.Should().BeApproximately(30m / 7m, 0.001m,
+            "o fator reportado e o pior da execucao, nao a media");
+        result.Reconciliacao.TaxaConcordancia.Should().NotBeNull();
     }
 
     [Fact]

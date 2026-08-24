@@ -282,7 +282,8 @@ public sealed record SessaoResultadoView(
     int ItensComJanelaAlemDoHistorico,
     int ItensSemPrecoCompra,
     int? SkusSemCadastro,
-    string? RessalvaTreinoServe)
+    string? RessalvaTreinoServe,
+    string? RessalvaExtrapolacao = null)
 {
     /// <summary>
     /// Se existe braço de ML a colocar ao lado do do ERP. Falso é o estado normal de hoje,

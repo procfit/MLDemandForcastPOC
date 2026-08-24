@@ -569,6 +569,21 @@ public sealed record DecisaoComparada(
 /// faltar legitimamente, e lançar exceção seria pior), mas precisa ser contável: sem esta
 /// contagem, parte da população usaria silenciosamente a fórmula rejeitada.
 /// </param>
+/// <param name="ItensComTaxaExtrapolada">
+/// Itens comparados cuja cobertura (<c>DiasEstoque</c>) excede a janela de dias que pôde
+/// alimentar a taxa do ML. Não é exclusão: o braço ML existe para eles, com a taxa
+/// extrapolada pela MESMA multiplicação que o ERP faz (<c>demandaDia × DiasEstoque</c> no
+/// método 2). Precisa ser reportado junto do resultado — ver
+/// <see cref="DecisionComparisonResult.MotivoTaxaExtrapolada"/>.
+/// </param>
+/// <param name="DiasDeTaxaMinimo">
+/// Menor número de dias que alimentou uma taxa nesta execução. Com o fator máximo, delimita
+/// o quanto a extrapolação mais agressiva esticou: 1 dia de taxa para 30 de cobertura é uma
+/// afirmação bem mais fraca que 7 para 15, e a diferença tem de aparecer.
+/// </param>
+/// <param name="FatorMaximoDeExtrapolacao">
+/// Maior razão <c>DiasEstoque / diasDaTaxa</c> observada. 1 significa nenhuma extrapolação.
+/// </param>
 public sealed record DecisionComparisonResult(
     int ItensNaPopulacao,
     int ItensComparados,
@@ -583,7 +598,10 @@ public sealed record DecisionComparisonResult(
     ArmDecisionResult Ml,
     WinRate Vitoria,
     IReadOnlyDictionary<string, IReadOnlyDictionary<string, WinRate>> VitoriaPorDimensao,
-    IReadOnlyList<DecisaoComparada> Detalhe)
+    IReadOnlyList<DecisaoComparada> Detalhe,
+    int ItensComTaxaExtrapolada = 0,
+    int DiasDeTaxaMinimo = 0,
+    decimal FatorMaximoDeExtrapolacao = 1m)
 {
     /// <summary>
     /// A explicação de <see cref="ForaDoHorizonteMl"/>, uma vez para a lista inteira — ver
@@ -593,4 +611,27 @@ public sealed record DecisionComparisonResult(
     /// </summary>
     public string? MotivoForaDoHorizonteMl =>
         ForaDoHorizonteMl.Count == 0 ? null : ItemForaDoHorizonte.Motivo(ForaDoHorizonteMl[0].HorizonteMaximoMl);
+
+    /// <summary>
+    /// A ressalva da extrapolação, uma vez para a execução inteira. Nula quando nenhum item
+    /// extrapolou.
+    ///
+    /// <para>
+    /// <b>Por que extrapolar é legítimo aqui:</b> a fórmula do próprio ERP para o método 2 é
+    /// <c>demandaDia × DiasEstoque</c> — ele também não prevê 30 dias, ele multiplica uma taxa
+    /// diária pela cobertura. Exigir do braço ML uma previsão dia a dia de toda a cobertura,
+    /// enquanto o baseline extrapola uma taxa, não compararia dois métodos: desqualificaria um
+    /// deles por um critério que o outro não precisa cumprir. O que a extrapolação NÃO faz é
+    /// contornar a regra de informação: a taxa sai só dos dias cujas features param antes do
+    /// corte, e a venda real usada para pontuar continua sendo a da cobertura inteira.
+    /// </para>
+    /// </summary>
+    public string? MotivoTaxaExtrapolada => ItensComTaxaExtrapolada == 0
+        ? null
+        : $"Em {ItensComTaxaExtrapolada} item(ns) a compra cobre mais dias do que a janela que " +
+          $"alimentou a previsão do ML: a taxa de {DiasDeTaxaMinimo} dia(s) foi multiplicada pela " +
+          $"cobertura, com fator de até {FatorMaximoDeExtrapolacao:0.#}×. É a mesma conta que o " +
+          "ERP faz com a taxa dele (demanda/dia × dias de cobertura), então os dois braços são " +
+          "extrapolados do mesmo jeito — mas quanto maior o fator, mais o resultado depende de a " +
+          "demanda se manter estável ao longo da cobertura.";
 }

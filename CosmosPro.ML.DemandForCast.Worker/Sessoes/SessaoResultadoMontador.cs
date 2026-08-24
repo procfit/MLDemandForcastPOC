@@ -160,7 +160,8 @@ internal sealed record SessaoResultado(
     int ItensComJanelaAlemDoHistorico,
     int ItensSemPrecoCompra,
     int? SkusSemCadastro,
-    string RessalvaTreinoServe);
+    string RessalvaTreinoServe,
+    string? RessalvaExtrapolacao = null);
 
 /// <summary>
 /// Transforma a população do Stage e o resultado das camadas da comparação nas linhas de
@@ -285,6 +286,7 @@ internal static class SessaoResultadoMontador
                 MotivoMlIndisponivel: confronto is null
                     ? MotivoMlIndisponivel(comparacao.Decisao)
                     : null,
+                RessalvaExtrapolacao: comparacao.Decisao.MotivoTaxaExtrapolada,
                 ItensComDecisaoMl: comDecisaoMl,
                 ItensComPrevisaoMl: comPrevisaoMl,
                 UtilidadeDecisaoMl: comparacao.Decisao.Utilidade,

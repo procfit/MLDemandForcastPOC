@@ -139,18 +139,21 @@ public sealed class DecisionComparer
         var descartadosPorRuptura = 0;
         var semPreco = 0;
         var comFallbackEstoqueSeguranca = 0;
+        var comTaxaExtrapolada = 0;
+        var diasDeTaxaMinimo = int.MaxValue;
+        var fatorMaximo = 1m;
 
         foreach (var item in populacao)
         {
             ValidarItem(item);
 
-            // Uma compra que cobre DiasEstoque dias precisa de previsão até o último deles.
-            // Fora do horizonte declarado, o dia mais distante violaria a regra de
-            // informação por construção — é lacuna de capacidade do ML, não vazamento —
-            // então só essa checagem específica (não a janela inteira) é adiada para depois
-            // do portão de horizonte.
-            var dentroDoHorizonte = item.DiasEstoque <= _opt.HorizonteMaximoMl;
-            ValidarJanela(item, validarRegraDeInformacao: dentroDoHorizonte);
+            // A cobertura pode exceder o horizonte, e isso NÃO exclui mais o item: a taxa do
+            // ML sai dos dias que respeitam a regra de informação e é multiplicada pela
+            // cobertura — a mesma conta que o ERP faz com a taxa dele. Ver
+            // DecisionComparisonResult.MotivoTaxaExtrapolada para o porquê disso ser
+            // comparação e não indulgência. A regra de informação continua validada, mas
+            // sobre a janela da taxa (abaixo), não sobre a cobertura inteira.
+            ValidarJanela(item, validarRegraDeInformacao: false);
 
             var recalculada = QuantidadeCompra(item, item.DemandaDiaErp);
             var diferenca = recalculada - item.CompraSugerida;
@@ -163,13 +166,6 @@ public sealed class DecisionComparer
 
             if (status != StatusReconciliacao.Reconciliado) continue;
 
-            if (!dentroDoHorizonte)
-            {
-                foraDoHorizonte.Add(new ItemForaDoHorizonte(
-                    item.SugestaoId, item.LojaId, item.Sku, item.DiasEstoque, _opt.HorizonteMaximoMl));
-                continue;
-            }
-
             var dias = DiasPontuaveis(item);
             if (dias.Count == 0)
             {
@@ -177,11 +173,39 @@ public sealed class DecisionComparer
                 continue;
             }
 
+            // Janela da taxa: os dias cujas features param antes do corte. O predicado é o
+            // mesmo que ValidarJanela cobrava, aplicado por dia em vez de por item, e o
+            // tamanho é determinado — min(cobertura, horizonte). Divergir disso significa
+            // janela desalinhada do corte, que é erro do chamador e estoura alto.
+            var corteDoItem = DateOnly.FromDateTime(item.DataHora);
+            var diasDaTaxa = dias
+                .Where(d => d.Features.Data.AddDays(-_opt.LeadTimeDias) < corteDoItem)
+                .ToList();
+
+            var esperados = Math.Min(item.DiasEstoque, _opt.HorizonteMaximoMl);
+            if (diasDaTaxa.Count != esperados)
+                throw new ArgumentException(
+                    $"O item (sugestão {item.SugestaoId}, loja {item.LojaId}, sku {item.Sku}) " +
+                    $"tem {diasDaTaxa.Count} dia(s) elegível(is) para a taxa do ML, e a janela " +
+                    $"deveria dar {esperados} (cobertura {item.DiasEstoque}, horizonte " +
+                    $"{_opt.HorizonteMaximoMl}). Janela desalinhada do corte produziria taxa " +
+                    "medida em dias que não são os primeiros da cobertura.",
+                    ParamPopulacao);
+
             if (item.PrecoCompra is null) semPreco++;
             if (UsaFallbackEstoqueSeguranca(item)) comFallbackEstoqueSeguranca++;
 
+            // Venda real: cobertura inteira, porque é contra ela que uma compra dimensionada
+            // para a cobertura tem de ser pontuada. Taxa do ML: só a janela válida.
             var vendaReal = dias.Sum(d => d.Features.Target);
-            var demandaDiaMl = Math.Max(0m, (decimal)dias.Average(d => d.PrevisaoMl));
+            var demandaDiaMl = Math.Max(0m, (decimal)diasDaTaxa.Average(d => d.PrevisaoMl));
+
+            if (item.DiasEstoque > diasDaTaxa.Count)
+            {
+                comTaxaExtrapolada++;
+                diasDeTaxaMinimo = Math.Min(diasDeTaxaMinimo, diasDaTaxa.Count);
+                fatorMaximo = Math.Max(fatorMaximo, (decimal)item.DiasEstoque / diasDaTaxa.Count);
+            }
             var pontuada = PosicaoParaPontuacao(item);
 
             // O braço ERP usa o CompraSugerida gravado, não a nossa reconstrução: a decisão
@@ -217,7 +241,10 @@ public sealed class DecisionComparer
                 d.Erp.Compra, d.Ml.Compra,
                 d.Erp.Excesso, d.Ml.Excesso,
                 d.Erp.Falta, d.Ml.Falta,
-                d.Resultado))]);
+                d.Resultado))],
+            comTaxaExtrapolada,
+            comTaxaExtrapolada == 0 ? 0 : diasDeTaxaMinimo,
+            fatorMaximo);
     }
 
     // --- Utilidade do resultado ----------------------------------------------

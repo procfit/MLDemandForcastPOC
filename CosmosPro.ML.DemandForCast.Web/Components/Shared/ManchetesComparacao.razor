@@ -186,6 +186,14 @@
         </RadzenAlert>
     }
 
+    @if (!string.IsNullOrWhiteSpace(Resultado.RessalvaExtrapolacao))
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+            <strong>Até onde a previsão do ML alcança.</strong>
+            <div style="margin-top: 0.35rem">@Resultado.RessalvaExtrapolacao</div>
+        </RadzenAlert>
+    }
+
     @if (!string.IsNullOrWhiteSpace(Resultado.RessalvaTreinoServe))
     {
         <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
