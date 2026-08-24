@@ -176,25 +176,32 @@ public sealed class ComparacaoPbsIntegrationTests(AppHostFixture fixture)
     }
 
     /// <summary>
-    /// O desfecho esperado hoje: cobertura de 15 dias contra horizonte de 7. Um
-    /// resultado bem formado com zero itens comparados leria como empate se
-    /// <c>Utilidade</c> não dissesse o contrário.
+    /// Cobertura de 15 dias contra horizonte de 7: a compra do ML existe, com a taxa dos 7
+    /// dias válidos multiplicada pela cobertura — a mesma conta que o ERP faz com a taxa
+    /// dele. O que precisa viajar no JSON é o fator de esticamento, não a ausência de número:
+    /// antes esta execução saía com zero itens comparados e a coluna "Compraria (ML)" vazia
+    /// na tela do comprador.
     /// </summary>
     [Fact]
-    public async Task Camada_B_reporta_fora_do_horizonte_em_vez_de_sucesso_vazio()
+    public async Task Camada_B_extrapola_a_taxa_e_declara_o_fator()
     {
         var (_, saida) = await ExecucaoValidaAsync();
 
-        saida.Decisao.Utilidade.Should().Be(UtilidadeComparacao.ForaDoHorizonteMl,
-            "os dois itens cobrem 15 dias e o pipeline prevê 7 — não é empate, é ausência de braço ML");
-        saida.Decisao.ItensComparados.Should().Be(0);
-        saida.Decisao.ForaDoHorizonteMl.Should().HaveCount(2);
-        saida.Decisao.ForaDoHorizonteMl.Should().OnlyContain(i => i.DiasEstoque == DiasEstoque);
+        saida.Decisao.Utilidade.Should().Be(UtilidadeComparacao.Utilizavel,
+            "com a taxa extrapolada os dois itens têm braço ML para disputar");
+        saida.Decisao.ItensComparados.Should().Be(2);
+        saida.Decisao.ForaDoHorizonteMl.Should().BeEmpty(
+            "cobertura longa deixou de excluir item; o campo continua no contrato para o histórico já gravado");
+
+        saida.Decisao.ItensComTaxaExtrapolada.Should().Be(2);
+        saida.Decisao.DiasDeTaxaMinimo.Should().Be(7);
+        saida.Decisao.FatorMaximoDeExtrapolacao.Should().BeApproximately(DiasEstoque / 7m, 0.001m);
+        saida.Decisao.MotivoTaxaExtrapolada.Should().NotBeNullOrWhiteSpace();
 
         saida.Decisao.Reconciliacao.Reconciliados.Should().Be(2,
             "a aritmética do ERP foi reproduzida: o portão de validade fez o trabalho dele");
-        saida.Decisao.Reconciliacao.TaxaConcordancia.Should().BeNull(
-            "reconciliar 100% sem comparar nada não é 1,0 — é ausência de comparação");
+        saida.Decisao.Reconciliacao.TaxaConcordancia.Should().NotBeNull(
+            "agora há comparação, então a taxa de concordância tem denominador");
     }
 
     /// <summary>
