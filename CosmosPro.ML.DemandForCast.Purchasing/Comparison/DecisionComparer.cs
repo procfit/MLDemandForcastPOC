@@ -259,9 +259,21 @@ public sealed class DecisionComparer
         int itensNaPopulacao, int itensComparados, int reconciliados, int foraDoHorizonte,
         int descartadosPorRuptura)
     {
-        if (itensComparados > 0) return UtilidadeComparacao.Utilizavel;
         if (itensNaPopulacao == 0) return UtilidadeComparacao.PopulacaoVazia;
-        if (reconciliados == 0) return UtilidadeComparacao.ReconciliacaoDivergente;
+
+        // O portão de reconciliação vem ANTES de "comparou pelo menos um item". Reconciliar
+        // 93% e comparar 28 itens não é resultado utilizável: os 28 sobreviventes são os que a
+        // nossa fórmula reproduziu, o que os torna amostra enviesada na direção do que sabemos
+        // calcular. Na sugestão que motivou isto, 5 das 6 divergências eram o mesmo SKU de
+        // embalagem grande — exatamente o caso que o filtro remove.
+        //
+        // Enquanto este piso vivia só na renderização da tela técnica, a tela do COMPRADOR
+        // exibia números que a tela de validação recusava, e o comprador é justamente quem não
+        // tem como descontar a ressalva.
+        var taxa = (double)reconciliados / itensNaPopulacao;
+        if (taxa < Reconciliacao.PatamarAceitavel) return UtilidadeComparacao.ReconciliacaoDivergente;
+
+        if (itensComparados > 0) return UtilidadeComparacao.Utilizavel;
         if (foraDoHorizonte == reconciliados) return UtilidadeComparacao.ForaDoHorizonteMl;
         if (descartadosPorRuptura == reconciliados - foraDoHorizonte) return UtilidadeComparacao.DescartadoPorRuptura;
         return UtilidadeComparacao.SemItensComparaveis;

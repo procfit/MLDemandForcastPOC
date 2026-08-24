@@ -695,6 +695,30 @@ public sealed class DecisionComparerTests
     // --- Utilidade do resultado: comparacao que nao comparou nada ------------
 
     [Fact]
+    public void Reconciliacao_abaixo_do_patamar_nao_e_utilizavel_mesmo_comparando_itens()
+    {
+        // O defeito que este teste existe para impedir: enquanto o piso de 95% morava so na
+        // renderizacao da tela tecnica, bastava UM item comparado para o resultado se declarar
+        // Utilizavel — e a tela do comprador, que le esse campo, exibia numeros que a tela de
+        // validacao recusava. Quem menos pode descontar a ressalva era quem a recebia sem ela.
+        //
+        // 10 itens, 8 reconciliam (80%), e os 8 sao comparados. Ter comparacao nao basta: os
+        // sobreviventes sao os que a nossa formula reproduziu, amostra enviesada por construcao.
+        var populacao = new List<DecisionItem>();
+        for (var i = 0; i < 8; i++)
+            populacao.Add(Item(2m, compraSugerida: 10m, vendaDia: 2m, mlDia: 3.0, sku: $"OK{i}"));
+        for (var i = 0; i < 2; i++)
+            populacao.Add(Item(2m, compraSugerida: 99m, vendaDia: 2m, mlDia: 3.0, sku: $"DIV{i}"));
+
+        var result = new DecisionComparer().Compare(populacao);
+
+        result.Reconciliacao.Reconciliados.Should().Be(8);
+        result.ItensComparados.Should().Be(8, "os reconciliados seguem sendo comparados e gravados");
+        result.Utilidade.Should().Be(UtilidadeComparacao.ReconciliacaoDivergente,
+            "80% de concordancia nao sustenta numero de decisao, por mais itens que tenham sido comparados");
+    }
+
+    [Fact]
     public void Populacao_toda_extrapolada_continua_utilizavel_e_declara_o_esticamento()
     {
         // Cenario real: horizonte 7 contra sugestoes PBS de 30 dias. Antes a execucao inteira

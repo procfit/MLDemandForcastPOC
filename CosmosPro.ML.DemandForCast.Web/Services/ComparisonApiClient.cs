@@ -388,6 +388,11 @@ public sealed record ReconciliacaoResumoView(
     /// Patamar abaixo do qual nenhum número da camada B é apresentável — uma taxa baixa
     /// significa "não modelamos o ERP", nunca "o ML ganhou".
     /// </summary>
+    /// <summary>
+    /// Espelha <c>Purchasing.Comparison.Reconciliacao.PatamarAceitavel</c>, que é quem decide:
+    /// o projeto Web não referencia Purchasing e redeclara as views. Mudar um sem o outro faz a
+    /// tela pintar de vermelho um resultado que o domínio considerou apresentável, ou o oposto.
+    /// </summary>
     public const double PatamarAceitavel = 0.95;
 
     public bool AbaixoDoPatamar => TaxaConcordancia is { } t && t < PatamarAceitavel;

@@ -314,6 +314,20 @@ public sealed record ItemReconciliado(
 /// inclusive <c>DivergenciaAbsMedia</c> e <c>DivergenciaAbsMaxima</c>, computadas só sobre
 /// os itens divergentes do grupo (ver <see cref="ReconciliacaoResumo.DivergenciaAbsMaxima"/>).
 /// </summary>
+/// <summary>
+/// Piso de concordância abaixo do qual nenhum número da camada de decisão é apresentável.
+///
+/// <para>
+/// Mora no domínio, e não na tela, porque é uma afirmação sobre o RESULTADO: abaixo dele a
+/// diferença entre os dois braços mede o nosso desconhecimento da regra do ERP, e não a
+/// qualidade da previsão — o que vale para quem quer que leia o número.
+/// </para>
+/// </summary>
+public static class Reconciliacao
+{
+    public const double PatamarAceitavel = 0.95;
+}
+
 public sealed record ReconciliacaoPorCurva(
     string Curva,
     int Itens,
