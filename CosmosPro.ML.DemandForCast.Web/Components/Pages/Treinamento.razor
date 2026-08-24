@@ -15,6 +15,11 @@
         <RadzenFormField Text="Top SKUs" Variant="Variant.Outlined" Style="width: 120px">
             <RadzenNumeric @bind-Value="_maxSkus" Min="1" Max="5000" />
         </RadzenFormField>
+        <RadzenFormField Text="Treinar até (corte)" Variant="Variant.Outlined" Style="width: 190px">
+            <RadzenDatePicker @bind-Value="_treinoAte" DateFormat="dd/MM/yyyy" ShowTime="false"
+                              AllowClear="true" Placeholder="sem corte" />
+        </RadzenFormField>
+        <HelpTip Position="TooltipPosition.Bottom" Text="Corte de informação: o treino ignora tudo a partir desta data (exclusive). Deixe vazio para treinar sobre todo o histórico — mas a tela de Comparativo ERP × ML RECUSA um treino sem corte, porque ele aprenderia com as vendas posteriores à sugestão, que são o gabarito da comparação. Para comparar contra uma sugestão do ERP, informe aqui a data dela." />
         <RadzenButton Click="@Treinar"
                       Icon="@(_enqueuing ? "hourglass_empty" : "model_training")"
                       Text="@(_enqueuing ? "Enfileirando…" : "Treinar")"
@@ -307,6 +312,11 @@
     }
 
     private int _maxSkus = 80;
+
+    // Nulo = sem corte, que é o default histórico da tela. A tela de comparativo recusa
+    // treino sem corte (aprenderia com o gabarito), e antes deste campo ela mandava
+    // "rode um treino informando a data de corte" sem existir onde informar.
+    private DateTime? _treinoAte;
     private bool _enqueuing;
     private bool _loading;
     private List<TreinoJobView> _jobs = [];
@@ -353,14 +363,16 @@
         _enqueuing = true;
         try
         {
-            var job = await TrainingApi.EnqueueAsync(_maxSkus);
+            var corte = _treinoAte is { } dt ? DateOnly.FromDateTime(dt) : (DateOnly?)null;
+            var job = await TrainingApi.EnqueueAsync(_maxSkus, corte);
             if (job is not null)
             {
                 Notifications.Notify(new NotificationMessage
                 {
                     Severity = NotificationSeverity.Success,
                     Summary = "Treino enfileirado",
-                    Detail = $"O Worker vai processar em background ({_maxSkus} SKUs).",
+                    Detail = $"O Worker vai processar em background ({_maxSkus} SKUs, " +
+                             $"{(corte is null ? "sem corte" : $"corte em {corte:dd/MM/yyyy}")}).",
                     Duration = 5000,
                 });
                 await RefreshAsync();
