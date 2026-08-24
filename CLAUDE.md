@@ -144,7 +144,7 @@ Repositório **é git**, com remoto `origin` no GitHub (`procfit/MLDemandForcast
 | Treinar um modelo por SKU. | Inviável em escala farma (dezenas de milhares). Padrão é **modelo global** com SKU como feature (embedding/one-hot/target encoding). |
 | MAPE como métrica única. | Quebra em demanda zero/baixa (comum em farma). Sempre acompanhar com WAPE/MAE. |
 | Misturar treino/validação cronologicamente. | Sempre **walk-forward**, nunca split aleatório em séries temporais. |
-| Esconder *leakage* em features. | Lags precisam respeitar lead time da decisão de compra; preço/promoção precisam ser conhecidos no momento da previsão. |
+| Esconder *leakage* em features. | Lags precisam respeitar lead time da decisão de compra; preço/promoção precisam ser conhecidos no momento da previsão. **Já aconteceu, e passou pela suíte:** o `PrecoUnitario` do dia-alvo era o preço REALIZADO daquele dia, e dia sem venda é densificado com preço zero — então a coluna valia zero exatamente quando o alvo era zero (99,5% das linhas). O LightGBM marcava WAPE 3,7% contra 280% dos baselines; corrigido, 166,4%. Os testes de preço não pegaram porque usavam série com venda **todo dia**, onde o preço nunca é zero. Ao mexer em feature derivada de venda (preço, ticket, mix), o teste tem de usar série **esparsa**. Ver o comentário de classe do `FeatureBuilder`. |
 
 ---
 

@@ -31,9 +31,17 @@ public sealed record FeatureConfig
     /// <c>PrecoUnitario</c> de <c>Vendas</c>), não um preço de tabela planejado.
     /// Num dia com remarcação não planejada, o desconto realizado entraria na linha de
     /// features daquele mesmo dia e o modelo leria desconto → volume no dia que está
-    /// sendo pontuado (CLAUDE.md §6). Para treino isso é indiferente — o passado é
-    /// passado —, mas para avaliar previsão contra um baseline que não tinha essa
-    /// informação (F13, camada A) o corte é obrigatório.
+    /// sendo pontuado (CLAUDE.md §6).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A frase que estava aqui antes — "para treino isso é indiferente, o passado é
+    /// passado" — estava errada, e o erro foi para produção.</b> Não é indiferente: o preço
+    /// realizado do dia D só existe PORQUE houve venda em D, e em dia sem venda ele é zero.
+    /// A coluna virava o rótulo. Hoje o <see cref="FeatureBuilder"/> ancora o preço em
+    /// <c>D - LeadTimeDias</c> nos DOIS caminhos, então o congelamento não é mais o que
+    /// separa treino de serving — ele só impede que o dia-alvo além do lead time alcance o
+    /// corte.
     /// </para>
     ///
     /// <para>

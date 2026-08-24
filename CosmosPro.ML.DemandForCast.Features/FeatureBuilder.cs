@@ -10,10 +10,21 @@ namespace CosmosPro.ML.DemandForCast.Features;
 /// tratados como conhecidos (planejados com antecedência).
 ///
 /// <para>
-/// O preço é o ponto sensível: o que chega aqui é o preço médio REALIZADO da venda
-/// do dia, não um preço de tabela. Serve para treino, mas para avaliação contra um
-/// baseline que não dispunha dessa informação use
-/// <see cref="FeatureConfig.PrecoCongeladoAPartirDe"/>.
+/// <b>O preço obedece à mesma regra, e isso já custou caro.</b> O que chega aqui é o preço
+/// médio REALIZADO da venda do dia, e a densificação dá preço ZERO a dia sem venda — então
+/// usar o preço do próprio dia-alvo faz a coluna valer zero exatamente quando o alvo é
+/// zero. Em série esparsa (o caso normal em farma) isso entrega o rótulo ao modelo: medido
+/// neste repositório, 99,5% das linhas de alvo válido tinham `preço == 0 ⟺ alvo == 0`, e o
+/// LightGBM marcava WAPE de 3,7% no walk-forward contra 280% dos baselines. Corrigido para
+/// o último preço conhecido até <c>D - LeadTimeDias</c>, o mesmo modelo faz 166,4% — que é
+/// o número honesto, e ainda vence os baselines.
+/// </para>
+///
+/// <para>
+/// Consequência de projeto: treino e serving constroem a MESMA linha, e
+/// <see cref="FeatureConfig.PrecoCongeladoAPartirDe"/> deixou de ser o que separa os dois
+/// caminhos — virou uma trava a mais para o dia-alvo além do lead time. Não volte a ler
+/// preço (nem qualquer coisa derivada da venda) do dia pontuado.
 /// </para>
 /// </summary>
 public sealed class FeatureBuilder(FeatureConfig? config = null)
@@ -59,8 +70,11 @@ public sealed class FeatureBuilder(FeatureConfig? config = null)
 
         int historicoMin = _cfg.HistoricoMinimoDias;
 
-        var corteDePreco = _cfg.PrecoCongeladoAPartirDe;
-        var ancora = corteDePreco is { } corte ? AncoraDePreco(densa, corte, _cfg.RollingLongo) : default;
+        // Índice do primeiro dia >= corte, ou null sem congelamento. A série densa é
+        // contígua a partir de `inicio`, então a posição sai da diferença de dias.
+        int? idxCorte = _cfg.PrecoCongeladoAPartirDe is { } corte
+            ? Math.Clamp(corte.DayNumber - inicio.DayNumber, 0, densa.Count)
+            : null;
 
         for (int d = historicoMin; d < densa.Count; d++)
         {
@@ -73,13 +87,23 @@ public sealed class FeatureBuilder(FeatureConfig? config = null)
             var (mean7, _, _) = RollingStats(qtd, d, _cfg.LeadTimeDias, _cfg.RollingCurto);
             var (mean28, std28, max28) = RollingStats(qtd, d, _cfg.LeadTimeDias, _cfg.RollingLongo);
 
-            var congelado = corteDePreco is { } c && alvo.Data >= c;
+            // Índice de referência do preço: NUNCA o próprio dia-alvo. Mesma regra dos lags
+            // e do rolling — ver a nota de vazamento no comentário da classe.
+            var refPreco = d - _cfg.LeadTimeDias;
 
-            var precoMediaRecente = RollingPrecoMedia(densa, d, _cfg.LeadTimeDias, _cfg.RollingLongo);
-            var precoAlvo = congelado ? ancora.Preco : alvo.PrecoUnitario;
-            var precoRel = congelado
-                ? ancora.Relativo
-                : (precoMediaRecente > 0 ? alvo.PrecoUnitario / precoMediaRecente : 1m);
+            // O congelamento só aperta o índice; não muda a fórmula. Para a janela que a
+            // camada A pontua (corte .. corte + LeadTime - 1) o `min` já é `d - LeadTime`,
+            // então treino e serving constroem a MESMA linha. A trava existe para o dia-alvo
+            // além do lead time, que o comparador recusa hoje mas que um chamador futuro
+            // poderia pedir: ali, sem ela, o preço de referência alcançaria o corte.
+            if (idxCorte is { } ic && d >= ic)
+            {
+                refPreco = Math.Min(refPreco, ic - 1);
+            }
+
+            var precoMediaRecente = RollingPrecoMedia(densa, refPreco, _cfg.RollingLongo);
+            var precoAlvo = UltimoPrecoConhecido(densa, refPreco);
+            var precoRel = precoMediaRecente > 0 ? precoAlvo / precoMediaRecente : 1m;
 
             yield return new FeatureVector
             {
@@ -199,59 +223,44 @@ public sealed class FeatureBuilder(FeatureConfig? config = null)
     }
 
     /// <summary>
-    /// Estado de preço da série no instante do corte: último preço praticado
-    /// estritamente antes de <paramref name="corte"/> e sua razão contra a média
-    /// rolling que termina no último dia antes do corte. Os dois valores são
-    /// carregados para a frente em todo dia-alvo a partir do corte, então nenhuma
-    /// informação de preço posterior ao corte alcança a linha de features.
+    /// Último preço praticado até <paramref name="refIdx"/> (inclusive), carregado para a
+    /// frente. Zero quando a série não teve nenhum dia com venda até ali — mesma leitura de
+    /// um dia densificado sem venda.
     ///
     /// <para>
-    /// Preço zero quando a série não tem nenhum dia com venda antes do corte — mesma
-    /// leitura que um dia densificado sem venda.
-    /// </para>
-    ///
-    /// <para>
-    /// Muda o invariante da razão para o dia-alvo igual ao corte: no caminho sem
-    /// congelamento a janela rolling de <c>PrecoRelativoMedia</c> termina em
-    /// <c>D - LeadTimeDias</c>; aqui ela termina em <c>corte - 1</c>, que para
-    /// <c>D == corte</c> é uma janela mais recente. É defensável — o ERP também
-    /// calculou no instante do corte, não <c>LeadTimeDias</c> antes dele —, mas é uma
-    /// mudança deliberada de qual janela alimenta a razão, não uma continuação do
-    /// invariante do caminho de treino.
+    /// <b>Nunca recebe o índice do dia-alvo.</b> O preço que chega ao builder é o preço
+    /// REALIZADO da venda do dia, e em dia sem venda ele é zero: usar o do próprio dia-alvo
+    /// faz a coluna valer zero exatamente quando o alvo é zero, o que entrega o rótulo ao
+    /// modelo. Ver a nota de vazamento no comentário da classe.
     /// </para>
     /// </summary>
-    private static (decimal Preco, decimal Relativo) AncoraDePreco(
-        List<DailyObservation> densa, DateOnly corte, int window)
+    private static decimal UltimoPrecoConhecido(List<DailyObservation> densa, int refIdx)
     {
-        int ultimo = -1;
-        for (int i = densa.Count - 1; i >= 0; i--)
+        if (refIdx >= densa.Count) refIdx = densa.Count - 1;
+        for (int i = refIdx; i >= 0; i--)
         {
-            if (densa[i].Data < corte) { ultimo = i; break; }
+            if (densa[i].PrecoUnitario > 0) return densa[i].PrecoUnitario;
         }
-        if (ultimo < 0) return (0m, 1m);
-
-        decimal preco = 0m;
-        for (int i = ultimo; i >= 0; i--)
-        {
-            if (densa[i].PrecoUnitario > 0) { preco = densa[i].PrecoUnitario; break; }
-        }
-
-        var media = RollingPrecoMedia(densa, ultimo, 0, window);
-        return (preco, media > 0 ? preco / media : 1m);
+        return 0m;
     }
 
-    private static decimal RollingPrecoMedia(List<DailyObservation> densa, int targetIdx, int offset, int window)
+    /// <summary>
+    /// Média dos preços praticados na janela que termina em <paramref name="fim"/>
+    /// (inclusive) e volta <paramref name="window"/> dias. Só dias com venda entram: um dia
+    /// densificado tem preço zero, e incluí-lo faria a média cair conforme a série fica
+    /// esparsa, misturando "ficou mais barato" com "vendeu menos vezes".
+    /// </summary>
+    private static decimal RollingPrecoMedia(List<DailyObservation> densa, int fim, int window)
     {
-        int fim = targetIdx - offset;
+        if (fim >= densa.Count) fim = densa.Count - 1;
+        if (fim < 0) return 0m;
         int ini = fim - window + 1;
-        if (fim < 0) return 0;
         if (ini < 0) ini = 0;
 
         decimal soma = 0;
         int n = 0;
         for (int i = ini; i <= fim; i++)
         {
-            // Só considera dias com preço > 0 (dias com venda); ignora zeros.
             if (densa[i].PrecoUnitario > 0)
             {
                 soma += densa[i].PrecoUnitario;

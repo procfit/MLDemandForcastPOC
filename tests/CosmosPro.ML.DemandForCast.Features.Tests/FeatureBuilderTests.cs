@@ -191,16 +191,75 @@ public sealed class FeatureBuilderTests
     }
 
     [Fact]
+    public void Preco_do_dia_alvo_nunca_carrega_a_venda_do_proprio_dia()
+    {
+        // O teste que faltava, e que deixou passar um vazamento de rótulo em produção.
+        //
+        // O preço que chega ao builder é o preço REALIZADO da venda do dia, e a densificação
+        // dá preço ZERO a dia sem venda. Se a feature do dia-alvo vier do próprio dia-alvo,
+        // ela vale zero exatamente quando o alvo é zero — a coluna passa a SER o rótulo, e o
+        // modelo "acerta" sem prever nada. É preciso série ESPARSA para ver isso: com venda
+        // todo dia (como nos outros testes deste arquivo) o preço nunca é zero e o vazamento
+        // fica invisível.
+        const int lead = 7;
+        var serie = SerieIndexada(60, i => new DailyObservation
+        {
+            Data = Origem, LojaId = 1, Sku = "SKU1",
+            // Venda só a cada 10 dias; nos outros, sem venda e sem preço.
+            Quantidade = i % 10 == 0 ? 5m : 0m,
+            PrecoUnitario = i % 10 == 0 ? 20m : 0m,
+        });
+
+        var fvs = new FeatureBuilder(new FeatureConfig { LeadTimeDias = lead }).BuildSeries(serie).ToList();
+
+        fvs.Should().NotBeEmpty();
+
+        // Nenhuma linha carrega preço zero: o último preço conhecido é sempre carregado para
+        // a frente. É isso que impede a coluna de identificar o alvo.
+        fvs.Should().OnlyContain(f => f.PrecoUnitario == 20m,
+            "o preço do dia-alvo tem de ser o último conhecido até D - LeadTime, carregado para a frente");
+
+        // E o teste que amarra a regra: dia-alvo SEM venda tem exatamente o mesmo preço que
+        // dia-alvo COM venda. Se algum dia esses dois conjuntos divergirem, a coluna voltou a
+        // discriminar o rótulo.
+        var comVenda = fvs.Where(f => f.Target > 0).Select(f => f.PrecoUnitario).Distinct();
+        var semVenda = fvs.Where(f => f.Target == 0).Select(f => f.PrecoUnitario).Distinct();
+        comVenda.Should().BeEquivalentTo(semVenda);
+    }
+
+    [Fact]
+    public void Preco_do_dia_alvo_vem_da_referencia_em_lead_time_e_nao_do_dia()
+    {
+        // Rampa de preço (10, 11, 12, ...) com venda todo dia: aqui não há zero para
+        // confundir, e o que o teste discrimina é QUAL índice alimenta a feature. Com
+        // LeadTime 7, o dia-alvo d recebe o preço de d-7 — não o de d.
+        const int lead = 7;
+        var serie = SerieIndexada(45, i => new DailyObservation
+        {
+            Data = Origem, LojaId = 1, Sku = "SKU1",
+            Quantidade = 1m,
+            PrecoUnitario = 10m + i,
+        });
+
+        var fvs = new FeatureBuilder(new FeatureConfig { LeadTimeDias = lead })
+            .BuildSeries(serie).ToList();
+
+        foreach (var f in fvs)
+        {
+            var d = f.Data.DayNumber - Origem.DayNumber;
+            f.PrecoUnitario.Should().Be(10m + (d - lead),
+                "o preço do dia-alvo {0} tem de ser o do dia {1}", d, d - lead);
+        }
+    }
+
+    [Fact]
     public void Preco_congelado_nao_deixa_remarcacao_do_dia_alvo_entrar_na_linha()
     {
-        // Serie em rampa (10, 11, 12...) ate 04/02 (indice 34) e remarcada para 4,00
-        // dali em diante. O corte cai em 04/02: nenhum dia-alvo a partir do corte pode
-        // carregar o preco remarcado, porque o desconto so foi conhecido no proprio dia
-        // da venda. A rampa (em vez de um preco pre-corte fixo) faz a media rolling da
-        // ancora discriminar tambem o COMPRIMENTO da janela: com preco fixo, qualquer
-        // janela pre-corte — certa ou errada — daria a mesma media, e um bug de janela
-        // passaria batido.
+        // Serie em rampa (10, 11, 12...) ate 04/02 (indice 34) e remarcada para 4,00 dali em
+        // diante. Nenhum dia-alvo pode carregar o preco remarcado — nem por ser o preco do
+        // proprio dia (vazamento), nem por o congelamento falhar.
         const int diaDoCorte = 34;
+        const int lead = 7;
         var corte = Origem.AddDays(diaDoCorte);
 
         var serie = SerieIndexada(45, i => new DailyObservation
@@ -210,40 +269,57 @@ public sealed class FeatureBuilderTests
             PrecoUnitario = i >= diaDoCorte ? 4m : 10m + i,
         });
 
-        var cfg = new FeatureConfig { PrecoCongeladoAPartirDe = corte };
+        var cfg = new FeatureConfig { LeadTimeDias = lead, PrecoCongeladoAPartirDe = corte };
         var fvs = new FeatureBuilder(cfg).BuildSeries(serie).ToList();
-
-        // Ancora esperada, calculada independente do FeatureBuilder: ultimo preco antes
-        // do corte (indice 33) e a media rolling de 28 dias terminando nele (6..33).
-        var precoAncora = 10m + (diaDoCorte - 1);
-        var mediaJanela = Enumerable.Range(diaDoCorte - 28, 28).Select(i => 10m + i).Average();
-        var relativoAncora = precoAncora / mediaJanela;
 
         fvs.Should().NotBeEmpty();
         fvs.Should().OnlyContain(f => f.Data >= corte);
-        fvs.Should().OnlyContain(f => f.PrecoUnitario == precoAncora,
-            "o preco do dia-alvo tem de ser o ultimo conhecido ANTES do corte");
-        fvs.Should().NotContain(f => f.PrecoUnitario == 4m);
-        fvs.Should().OnlyContain(f => f.PrecoRelativoMedia == relativoAncora);
+        fvs.Should().NotContain(f => f.PrecoUnitario == 4m,
+            "o preco remarcado a partir do corte nao pode alcancar nenhuma linha");
+
+        // Referencia esperada: d - lead, travado em corte - 1 para o dia-alvo alem do lead
+        // time (onde d - lead ja alcancaria o corte).
+        foreach (var f in fvs)
+        {
+            var d = f.Data.DayNumber - Origem.DayNumber;
+            var esperado = 10m + Math.Min(d - lead, diaDoCorte - 1);
+            f.PrecoUnitario.Should().Be(esperado);
+        }
     }
 
     [Fact]
-    public void Sem_congelamento_o_preco_realizado_do_dia_alvo_entra_na_linha()
+    public void Treino_e_serving_constroem_a_mesma_linha_na_janela_pontuada()
     {
-        // O congelamento e opt-in: o caminho de treino continua vendo o preco realizado.
-        const int diaDoCorte = 34;
+        // A invariante que o vazamento quebrava: para a janela que a camada A pontua
+        // (corte .. corte + LeadTime - 1), a linha construida SEM congelamento (caminho de
+        // treino) tem de ser identica a construida COM congelamento (caminho de serving).
+        // Divergencia aqui significa modelo treinado com uma distribuicao e servido com
+        // outra — que foi exatamente o defeito: WAPE 20% no backtest, 1.505% no serving.
+        const int diaDoCorte = 40;
+        const int lead = 7;
+        var corte = Origem.AddDays(diaDoCorte);
 
-        var serie = SerieIndexada(45, i => new DailyObservation
+        // Serie esparsa e com precos variados: o caso em que o defeito aparecia.
+        var serie = SerieIndexada(60, i => new DailyObservation
         {
             Data = Origem, LojaId = 1, Sku = "SKU1",
-            Quantidade = 1m,
-            PrecoUnitario = i >= diaDoCorte ? 4m : 10m,
+            Quantidade = i % 3 == 0 ? 2m : 0m,
+            PrecoUnitario = i % 3 == 0 ? 15m + (i % 7) : 0m,
         });
 
-        var fvs = new FeatureBuilder().BuildSeries(serie).ToList();
+        var treino = new FeatureBuilder(new FeatureConfig { LeadTimeDias = lead })
+            .BuildSeries(serie).ToDictionary(f => f.Data);
+        var serving = new FeatureBuilder(new FeatureConfig { LeadTimeDias = lead, PrecoCongeladoAPartirDe = corte })
+            .BuildSeries(serie).ToDictionary(f => f.Data);
 
-        fvs.Should().OnlyContain(f => f.PrecoUnitario == 4m);
-        fvs.Should().Contain(f => f.PrecoRelativoMedia < 1m);
+        var janela = Enumerable.Range(diaDoCorte, lead).Select(Origem.AddDays).ToList();
+        janela.Should().OnlyContain(dia => treino.ContainsKey(dia) && serving.ContainsKey(dia));
+
+        foreach (var dia in janela)
+        {
+            serving[dia].PrecoUnitario.Should().Be(treino[dia].PrecoUnitario, "dia {0}", dia);
+            serving[dia].PrecoRelativoMedia.Should().Be(treino[dia].PrecoRelativoMedia, "dia {0}", dia);
+        }
     }
 
     [Fact]
