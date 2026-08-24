@@ -385,7 +385,8 @@ public sealed record SessaoAnalise(
     decimal SobraExtraMlUnidades,
     decimal SobraExtraMlValor,
     IReadOnlyList<ItemPior>? PioresNaCompra,
-    IReadOnlyList<ItemPior>? PioresNaPrevisao)
+    IReadOnlyList<ItemPior>? PioresNaPrevisao,
+    IReadOnlyList<SessaoFatia>? PorGiro = null)
 {
     public int ItensComPrevisaoMl => PorCurva?.Sum(f => f.ItensComPrevisaoMl) ?? 0;
 

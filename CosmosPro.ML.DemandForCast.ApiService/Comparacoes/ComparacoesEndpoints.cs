@@ -352,6 +352,26 @@ internal static class ComparacoesEndpoints
             escopo, i => i.Curva, c => string.IsNullOrWhiteSpace(c) ? "sem curva" : c, ct);
         var porLoja = await FatiasAsync(escopo, i => i.LojaId, l => $"Loja {l}", ct);
 
+        // Abertura por giro: a dimensão em que o resultado do ML de fato varia. Medido em
+        // três execuções sobre extrações diferentes, o ML ganha do ERP onde a demanda real
+        // é densa (~3 un./dia), empata em torno de 0,2 e desaba abaixo disso — que é onde
+        // vive a maior parte de uma grade de farmácia. Sem esta abertura o número global
+        // responde "o ML perdeu" para uma população em que ele nunca teve chance, e as
+        // outras dimensões (curva do ERP, loja) não separam isso: a curva é do ERP e mistura
+        // giro com critério dele, e loja é geografia.
+        //
+        // Os cortes (0,2 e 1,0 un./dia) saem dessas medições, não de convenção — e são o
+        // mínimo honesto: dizem ONDE o ganho existe em vez de afirmar que existe em média.
+        var porGiro = await FatiasAsync(
+            escopo,
+            i => i.DemandaDiaReal == null ? 0
+               : i.DemandaDiaReal >= 1m ? 3
+               : i.DemandaDiaReal >= 0.2m ? 2
+               : i.DemandaDiaReal > 0m ? 1
+               : 4,
+            RotuloDeGiro,
+            ct);
+
         var comDecisaoMl = await escopo.CountAsync(i => i.CompraSugeridaMl != null, ct);
 
         var sobrouMais = escopo.Where(i =>
@@ -397,6 +417,7 @@ internal static class ComparacoesEndpoints
             Itens: total,
             PorCurva: porCurva,
             PorLoja: porLoja,
+            PorGiro: porGiro,
             ItensComDecisaoMl: comDecisaoMl,
             ItensComSobraMlMaior: itensComSobraMlMaior,
             SobraExtraMlUnidades: sobraExtraUnidades,
@@ -447,6 +468,21 @@ internal static class ComparacoesEndpoints
             .Where(s => s.Id == id && s.RedeId == redeId)
             .Select(s => (int?)db.ComparacaoSessaoItens.Count(i => i.SessaoId == s.Id))
             .FirstOrDefaultAsync(ct);
+
+    /// <summary>
+    /// Faixa de giro do item, pela demanda real medida na janela. "Sem previsão do ML" é faixa
+    /// à parte de "sem venda no período": a primeira é ausência de medição, a segunda é medição
+    /// que deu zero, e somá-las esconderia justamente a diferença entre não saber e saber que
+    /// não vendeu.
+    /// </summary>
+    private static string RotuloDeGiro(int faixa) => faixa switch
+    {
+        3 => "1 un./dia ou mais",
+        2 => "0,2 a 1 un./dia",
+        1 => "até 0,2 un./dia",
+        4 => "sem venda no período",
+        _ => "sem previsão do ML",
+    };
 
     /// <summary>
     /// Uma dimensão do drill-down. Somas cruas em vez de MAE/WAPE prontos: quem renderiza
@@ -698,7 +734,8 @@ internal sealed record SessaoAnaliseView(
     decimal SobraExtraMlUnidades,
     decimal SobraExtraMlValor,
     IReadOnlyList<ItemPiorView> PioresNaCompra,
-    IReadOnlyList<ItemPiorView> PioresNaPrevisao);
+    IReadOnlyList<ItemPiorView> PioresNaPrevisao,
+    IReadOnlyList<SessaoFatiaView>? PorGiro = null);
 
 internal sealed record SessaoFatiaView(
     string Chave,

@@ -88,8 +88,11 @@
                             {
                                 <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Style="margin-bottom: 0.5rem">
                                     <RadzenIcon Icon="warning" Style="margin-right: 0.25rem; vertical-align: middle;" />
-                                    @regressoes de @fatias.Count grupo(s) com o ML errando MAIS que o seu ERP
-                                    @(Analise.Global.MlPerde ? "." : " — e o resultado do conjunto todo favorece o ML. A média está escondendo estes grupos.")
+                                    Nos itens com previsão comparável desta execução, o PBS errou menos em
+                                    @regressoes de @fatias.Count grupo(s) desta abertura.
+                                    @(Analise.Global.MlPerde
+                                        ? " Vale para o subconjunto medido — confira a cobertura acima antes de concluir sobre o método."
+                                        : " No conjunto todo o resultado favorece o ML: a média está escondendo estes grupos.")
                                 </RadzenAlert>
                             }
                             <RadzenDataGrid TItem="SessaoFatia" Data="@fatias" AllowPaging="true" PageSize="10" AllowSorting="true" Density="Density.Compact">
@@ -187,6 +190,7 @@
 
     private static IReadOnlyList<Dimensao> Dimensoes(SessaoAnalise analise) =>
     [
+        new("Giro (un./dia)", analise.PorGiro ?? []),
         new("Curva do ERP", analise.PorCurva ?? []),
         new("Loja", analise.PorLoja ?? []),
     ];
