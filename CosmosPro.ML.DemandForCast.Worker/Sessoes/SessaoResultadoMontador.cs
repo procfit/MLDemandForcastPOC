@@ -52,10 +52,17 @@ internal sealed record Materializacao(
 /// tela denunciasse um erro nele.
 /// </para>
 /// </summary>
+/// <param name="SobraDaCompraUnidades">
+/// A parcela da sobra atribuível à compra desta sugestão — ver
+/// <c>SobraCalculator.CalcularDaCompra</c>. Sempre menor ou igual a
+/// <paramref name="SobraUnidades"/>, e igual a zero onde o braço não comprou nada.
+/// </param>
 internal sealed record BracoDaSessao(
     decimal CompraUnidades,
     decimal SobraUnidades,
-    decimal SobraValor);
+    decimal SobraValor,
+    decimal SobraDaCompraUnidades = 0m,
+    decimal SobraDaCompraValor = 0m);
 
 /// <summary>
 /// Confronto braço a braço, restrito aos itens em que <b>os dois</b> braços existem.
@@ -216,17 +223,31 @@ internal static class SessaoResultadoMontador
                 vendido: linha.VendidoNaJanela,
                 precoCompra: item.PrecoCompra);
 
+            var sobraDaCompraPbs = SobraCalculator.CalcularDaCompra(
+                comprado: item.CompraSugerida,
+                estoqueInicial: item.EstoqueSaldo,
+                pedidosPendentes: item.PedidosPendentes,
+                vendido: linha.VendidoNaJanela,
+                precoCompra: item.PrecoCompra);
+
             // Os dois valores do braço de ML andam num par nulável só porque eles nascem e
             // morrem juntos: separá-los em duas variáveis obrigaria a repetir a mesma
             // condição em cada uso, e foi exatamente essa repetição que divergiu antes.
             var ml = camadaB is null
-                ? default((decimal Compra, Sobra Sobra)?)
-                : (camadaB.CompraMl, SobraCalculator.Calcular(
-                    comprado: camadaB.CompraMl,
-                    estoqueInicial: item.EstoqueSaldo,
-                    pedidosPendentes: item.PedidosPendentes,
-                    vendido: linha.VendidoNaJanela,
-                    precoCompra: item.PrecoCompra));
+                ? default((decimal Compra, Sobra Sobra, Sobra SobraDaCompra)?)
+                : (camadaB.CompraMl,
+                   SobraCalculator.Calcular(
+                       comprado: camadaB.CompraMl,
+                       estoqueInicial: item.EstoqueSaldo,
+                       pedidosPendentes: item.PedidosPendentes,
+                       vendido: linha.VendidoNaJanela,
+                       precoCompra: item.PrecoCompra),
+                   SobraCalculator.CalcularDaCompra(
+                       comprado: camadaB.CompraMl,
+                       estoqueInicial: item.EstoqueSaldo,
+                       pedidosPendentes: item.PedidosPendentes,
+                       vendido: linha.VendidoNaJanela,
+                       precoCompra: item.PrecoCompra));
 
             itens.Add(new ComparacaoSessaoItem
             {
@@ -249,7 +270,7 @@ internal static class SessaoResultadoMontador
             });
 
             vendidoTotal += linha.VendidoNaJanela;
-            pbs.Somar(item.CompraSugerida, sobraPbs);
+            pbs.Somar(item.CompraSugerida, sobraPbs, sobraDaCompraPbs);
 
             if (camadaA is not null) comPrevisaoMl++;
             if (linha.JanelaAlemDoHistorico) alemDoHistorico++;
@@ -258,8 +279,8 @@ internal static class SessaoResultadoMontador
             if (ml is { } bracoMl)
             {
                 comDecisaoMl++;
-                pbsComparavel.Somar(item.CompraSugerida, sobraPbs);
-                mlComparavel.Somar(bracoMl.Compra, bracoMl.Sobra);
+                pbsComparavel.Somar(item.CompraSugerida, sobraPbs, sobraDaCompraPbs);
+                mlComparavel.Somar(bracoMl.Compra, bracoMl.Sobra, bracoMl.SobraDaCompra);
             }
 
             diasNaJanela += Math.Max(0, (int)item.DiasEstoque);
@@ -363,14 +384,20 @@ internal static class SessaoResultadoMontador
         private decimal _compraUnidades;
         private decimal _sobraUnidades;
         private decimal _sobraValor;
+        private decimal _sobraDaCompraUnidades;
+        private decimal _sobraDaCompraValor;
 
-        public void Somar(decimal comprado, Sobra sobra)
+        public void Somar(decimal comprado, Sobra sobra, Sobra sobraDaCompra)
         {
             _compraUnidades += comprado;
             _sobraUnidades += sobra.Unidades;
             _sobraValor += sobra.Valor;
+            _sobraDaCompraUnidades += sobraDaCompra.Unidades;
+            _sobraDaCompraValor += sobraDaCompra.Valor;
         }
 
-        public BracoDaSessao Fechar() => new(_compraUnidades, _sobraUnidades, _sobraValor);
+        public BracoDaSessao Fechar() => new(
+            _compraUnidades, _sobraUnidades, _sobraValor,
+            _sobraDaCompraUnidades, _sobraDaCompraValor);
     }
 }

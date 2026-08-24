@@ -321,7 +321,9 @@ public sealed record SessaoResultadoView(
 public sealed record BracoDaSessaoView(
     decimal CompraUnidades,
     decimal SobraUnidades,
-    decimal SobraValor);
+    decimal SobraValor,
+    decimal SobraDaCompraUnidades = 0m,
+    decimal SobraDaCompraValor = 0m);
 
 /// <param name="Itens">
 /// Itens em que <b>os dois</b> braços existem. É o denominador honesto do confronto: somar

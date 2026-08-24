@@ -87,4 +87,60 @@ public sealed class SobraCalculatorTests
         s.Unidades.Should().Be(33);
         s.Valor.Should().Be(4.79m);
     }
+
+    // --- Sobra ATRIBUIVEL A COMPRA -------------------------------------------
+
+    [Fact]
+    public void Compra_zero_nao_deixa_sobra_atribuivel_por_mais_cheia_que_a_prateleira_esteja()
+    {
+        // O caso que motivou a segunda medida. Na grade real, o ERP comprou 207 unidades e a
+        // prateleira terminou com 4.194 de excesso: cobrar isso da decisao de compra e cobrar
+        // dela o que ela nao fez. Comprou zero, causou zero.
+        var total = SobraCalculator.Calcular(
+            comprado: 0, estoqueInicial: 100, pedidosPendentes: 0, vendido: 10, precoCompra: 2m);
+        var daCompra = SobraCalculator.CalcularDaCompra(
+            comprado: 0, estoqueInicial: 100, pedidosPendentes: 0, vendido: 10, precoCompra: 2m);
+
+        total.Unidades.Should().Be(90, "a prateleira de fato terminou com 90");
+        daCompra.Unidades.Should().Be(0);
+        daCompra.Valor.Should().Be(0m);
+    }
+
+    [Fact]
+    public void Venda_consome_primeiro_a_posicao_que_ja_existia()
+    {
+        // Estoque previo 10 (+2 em transito) cobre a venda de 8 inteira: nenhuma das 5
+        // compradas foi necessaria.
+        var s = SobraCalculator.CalcularDaCompra(
+            comprado: 5, estoqueInicial: 10, pedidosPendentes: 2, vendido: 8, precoCompra: 3m);
+
+        s.Unidades.Should().Be(5);
+        s.Valor.Should().Be(15m);
+    }
+
+    [Fact]
+    public void So_o_que_a_venda_ultrapassa_da_posicao_previa_e_atribuido_a_compra()
+    {
+        // Posicao previa 12, venda 20: 8 unidades sairam da compra de 10, sobram 2.
+        var s = SobraCalculator.CalcularDaCompra(
+            comprado: 10, estoqueInicial: 10, pedidosPendentes: 2, vendido: 20, precoCompra: 4m);
+
+        s.Unidades.Should().Be(2);
+        s.Valor.Should().Be(8m);
+    }
+
+    [Fact]
+    public void Sobra_da_compra_nunca_excede_a_sobra_total()
+    {
+        // Invariante das duas medidas: a parcela atribuivel nunca e maior que o todo, e a
+        // diferenca entre elas e exatamente o estoque herdado que sobrou.
+        var total = SobraCalculator.Calcular(
+            comprado: 10, estoqueInicial: 50, pedidosPendentes: 0, vendido: 20, precoCompra: null);
+        var daCompra = SobraCalculator.CalcularDaCompra(
+            comprado: 10, estoqueInicial: 50, pedidosPendentes: 0, vendido: 20, precoCompra: null);
+
+        total.Unidades.Should().Be(40);
+        daCompra.Unidades.Should().Be(10);
+        daCompra.Unidades.Should().BeLessThanOrEqualTo(total.Unidades);
+    }
 }

@@ -59,6 +59,39 @@ public static class SobraCalculator
 
         return new Sobra(unidades, valor);
     }
+
+    /// <summary>
+    /// A parcela da sobra que a COMPRA causou, separada do estoque que já estava lá.
+    ///
+    /// <para>
+    /// <c>max(0, comprado − max(0, vendido − estoqueInicial − pedidosPendentes))</c>: das
+    /// unidades compradas, quantas não chegaram a ser necessárias porque o que já havia na
+    /// prateleira (mais o que estava a caminho) deu conta da venda. A venda consome primeiro
+    /// a posição que existia — só o excedente dela é atribuível à compra.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Por que as duas medidas convivem.</b> <see cref="Calcular"/> responde "o que sobrou
+    /// na prateleira", que é o estado do capital parado e é o que o comprador vê ao abrir a
+    /// loja. Esta responde "o que ESTA compra deixou parado", que é a única das duas
+    /// atribuível à decisão sob teste. Numa sugestão em que o ERP comprou 207 unidades e a
+    /// prateleira terminou com 4.194 de excesso, a primeira mede sobretudo inventário
+    /// herdado: usá-la para julgar a decisão de compra é cobrar da compra o que ela não fez.
+    /// Nenhuma das duas substitui a outra, e é por isso que a tela mostra ambas.
+    /// </para>
+    /// </summary>
+    public static Sobra CalcularDaCompra(
+        decimal comprado, decimal estoqueInicial, decimal pedidosPendentes, decimal vendido, decimal? precoCompra)
+    {
+        var posicaoPrevia = estoqueInicial + pedidosPendentes;
+        var consumoDaCompra = Math.Max(0m, vendido - posicaoPrevia);
+        var unidades = Math.Max(0m, comprado - consumoDaCompra);
+        var valor = precoCompra is null
+            ? 0m
+            : Math.Round(unidades * precoCompra.Value, 2, MidpointRounding.AwayFromZero);
+
+        return new Sobra(unidades, valor);
+    }
 }
 
 /// <summary>Sobra de um item: unidades que não venderam e o valor delas em R$.</summary>

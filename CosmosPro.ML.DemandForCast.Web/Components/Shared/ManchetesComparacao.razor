@@ -41,12 +41,25 @@
                     {
                         <RadzenStack Gap="0.25rem">
                             <RadzenText TextStyle="TextStyle.Overline" Style="margin: 0">
+                                Dinheiro parado por causa desta compra
+                            </RadzenText>
+                            <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">@Reais(pbs.SobraDaCompraValor)</RadzenText>
+                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                                @pbs.SobraDaCompraUnidades.ToString("N0") de @pbs.CompraUnidades.ToString("N0") unidade(s)
+                                compradas não chegaram a ser necessárias: o que já estava na prateleira (mais o que
+                                estava a caminho) deu conta da venda.
+                            </RadzenText>
+                        </RadzenStack>
+
+                        <RadzenStack Gap="0.25rem">
+                            <RadzenText TextStyle="TextStyle.Overline" Style="margin: 0">
                                 Dinheiro parado na prateleira no fim do período
                             </RadzenText>
-                            <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">@Reais(pbs.SobraValor)</RadzenText>
+                            <RadzenText TextStyle="TextStyle.H5" Style="margin: 0">@Reais(pbs.SobraValor)</RadzenText>
                             <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
-                                @pbs.SobraUnidades.ToString("N0") unidade(s) compradas além do que a loja vendeu,
-                                de @pbs.CompraUnidades.ToString("N0") comprada(s) no total.
+                                @pbs.SobraUnidades.ToString("N0") unidade(s) na prateleira além do que a loja vendeu.
+                                Inclui o estoque que já existia antes desta compra, então mede o capital parado —
+                                não o efeito da decisão de comprar.
                             </RadzenText>
                         </RadzenStack>
 
@@ -185,6 +198,18 @@
             </div>
         </RadzenAlert>
     }
+
+    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        <strong>Sobre quantos itens este resultado fala.</strong>
+        <div style="margin-top: 0.35rem">
+            A sugestão tem @Resultado.ItensAvaliados.ToString("N0") item(ns) acompanhado(s).
+            O método de ML calculou quantidade a comprar em @Resultado.ItensComDecisaoMl.ToString("N0")
+            e estimou a venda por dia em @Resultado.ItensComPrevisaoMl.ToString("N0").
+            Os demais ficaram de fora por falta de histórico suficiente, por ruptura na janela ou por
+            estarem fora do conjunto de SKUs que o modelo aprendeu — os números abaixo descrevem a parte
+            medida, não a sugestão inteira.
+        </div>
+    </RadzenAlert>
 
     @if (!string.IsNullOrWhiteSpace(Resultado.RessalvaExtrapolacao))
     {
