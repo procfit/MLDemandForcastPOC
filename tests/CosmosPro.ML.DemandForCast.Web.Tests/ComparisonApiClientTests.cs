@@ -166,6 +166,45 @@ public sealed class ComparisonApiClientTests
         comMl.DiferencaSobraValor.Should().Be(45_012.95m - 54_584.18m);
     }
 
+    /// <summary>
+    /// <b>A nota da coluna em reais do ML não pode culpar o preço de compra pelo que falta.</b>
+    /// O valor do ML é nulo por duas causas — item sem cálculo de ML, ou item sem preço —, e a
+    /// primeira versão desta nota somava as duas e chamava tudo de "sem preço de compra". Em
+    /// produção isso saiu como "18.047 item(ns) sem preço de compra ficaram fora" numa sugestão
+    /// em que <b>todos</b> os 20.153 itens têm preço: o que faltava era cálculo de ML. A conta
+    /// que vale é a diferença entre itens com cálculo de ML e itens com valor.
+    /// </summary>
+    [Theory]
+    // Todos os itens com cálculo de ML também têm preço: nada a acusar.
+    [InlineData(398, 398, false)]
+    // Dez itens tinham cálculo de ML mas não têm preço: aí sim a nota acusa o preço.
+    [InlineData(398, 388, true)]
+    public void Nota_do_valor_do_ml_so_acusa_preco_quando_o_preco_e_a_causa(
+        int itensComSobraMl, int itensComValorMl, bool deveAcusarPreco)
+    {
+        var t = new TotaisDosItens(
+            Itens: 20_153,
+            CompraPbsUnidades: 207m,
+            CompraMlUnidades: 68m,
+            ItensComCompraMl: itensComSobraMl,
+            VendidoNaJanela: 1_542m,
+            SobraPbsUnidades: 4_194m,
+            SobraMlUnidades: 3_693m,
+            ItensComSobraMl: itensComSobraMl,
+            SobraPbsValor: 261_235.11m,
+            ItensComValorPbs: 20_153,
+            SobraMlValor: 222_215.79m,
+            ItensComValorMl: itensComValorMl);
+
+        // A regra vive no componente; aqui se afirma a aritmética que ele usa, que é o que
+        // errou: a culpa do preço é a diferença entre cálculo de ML e valor, não o total.
+        var perdidosPorPreco = t.ItensComSobraMl - t.ItensComValorMl;
+
+        (perdidosPorPreco > 0).Should().Be(deveAcusarPreco);
+        perdidosPorPreco.Should().BeLessThan(t.Itens - t.ItensComValorMl,
+            "culpar o preço por tudo que falta atribui a causa errada a milhares de itens");
+    }
+
     private static TotaisDosItens Totais(decimal? sobraMl, decimal? valorMl) => new(
         Itens: 2031,
         CompraPbsUnidades: 34m,

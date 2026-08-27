@@ -88,9 +88,9 @@
                              Nota="@ApuradoSobre(t.ItensComSobraMl)" />
                 <Totalizador Rotulo="Diferença de sobra (un.)" Valor="@DiferencaUnidades(t.DiferencaSobraUnidades)" />
                 <Totalizador Rotulo="R$ parado PBS" Valor="@Dinheiro(t.SobraPbsValor)"
-                             Nota="@ApuradoSobrePreco(t.ItensComValorPbs, t.Itens)" />
+                             Nota="@SemPrecoDeCompra(t.ItensComValorPbs, t.Itens)" />
                 <Totalizador Rotulo="R$ parado ML" Valor="@Dinheiro(t.SobraMlValor)"
-                             Nota="@ApuradoSobrePreco(t.ItensComValorMl, t.Itens)" />
+                             Nota="@ApuradoSobreValorMl(t)" />
             </RadzenStack>
         </RadzenCard>
     }
@@ -416,11 +416,31 @@
     private static string ApuradoSobre(int itens) => $"sobre {itens:N0} item(ns) com cálculo do ML";
 
     /// <summary>
-    /// Nota das colunas em reais. Só aparece quando <b>falta</b> preço em algum item: o valor
-    /// sai por menos do que a realidade, e omitir isso deixaria o comprador comparar um total
-    /// incompleto com um completo. Quando todos têm preço não há ressalva a fazer, e um aviso
-    /// permanente viraria ruído.
+    /// Nota da coluna em reais <b>do PBS</b>. Aqui o valor é nulo por um motivo só — o item não
+    /// tem preço de compra cadastrado —, então nomear essa causa é correto. Só aparece quando
+    /// falta preço em algum item: um aviso permanente viraria ruído.
     /// </summary>
-    private static string? ApuradoSobrePreco(int comPreco, int itens) =>
+    private static string? SemPrecoDeCompra(int comPreco, int itens) =>
         comPreco >= itens ? null : $"{itens - comPreco:N0} item(ns) sem preço de compra ficaram fora";
+
+    /// <summary>
+    /// Nota da coluna em reais <b>do ML</b>, e ela não pode copiar a do PBS.
+    ///
+    /// <para>
+    /// O valor do ML é nulo por <b>duas</b> causas diferentes: o item não teve cálculo de ML, ou
+    /// não tem preço de compra. Atribuir tudo a "sem preço" — como esta nota fazia — é
+    /// misattribuição visível: na sugestão 125595, dos 18.047 itens fora da soma praticamente
+    /// todos faltam por não ter cálculo de ML, e nenhum por falta de preço. A nota diz sobre
+    /// quantos a soma foi apurada, e só acusa preço quando ele de fato tira item que <b>tinha</b>
+    /// cálculo de ML.
+    /// </para>
+    /// </summary>
+    private static string ApuradoSobreValorMl(TotaisDosItens t)
+    {
+        var perdidosPorPreco = t.ItensComSobraMl - t.ItensComValorMl;
+        var basico = $"sobre {t.ItensComValorMl:N0} item(ns) com cálculo do ML";
+        return perdidosPorPreco > 0
+            ? $"{basico} — {perdidosPorPreco:N0} ficaram fora por não ter preço de compra"
+            : basico;
+    }
 }
