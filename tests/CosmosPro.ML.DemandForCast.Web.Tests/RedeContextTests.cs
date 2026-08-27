@@ -3,6 +3,7 @@ using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
 using CosmosPro.ML.DemandForCast.Web.Services;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -204,10 +205,57 @@ public sealed class RedeContextTests
     {
         await using var sp = Construir(seed: _ => Task.CompletedTask);
         var ctx = new RedeContext(new AuthProviderFalso(new ClaimsPrincipal(new ClaimsIdentity())),
+                                 new HttpContextAccessor(),
                                  sp.GetRequiredService<IServiceScopeFactory>());
 
         var act = async () => await ctx.EhPowerUserAsync();
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    /// <summary>
+    /// <b>Regressão de um 500 em produção.</b> O download do ZIP da sessão é um endpoint HTTP
+    /// comum, não um componente Razor, e ali o <see cref="AuthenticationStateProvider"/> do
+    /// Blazor Server lança. O escopo tem de sair do <see cref="HttpContext"/> — sem deixar de
+    /// ser derivado do <b>usuário autenticado</b>, que é a invariante de F11.
+    /// </summary>
+    [Fact]
+    public async Task Fora_de_componente_razor_o_escopo_vem_do_http_context()
+    {
+        var userId = Guid.CreateVersion7();
+        await using var sp = Construir(seed: async db =>
+        {
+            db.Redes.Add(new Rede { Id = RedeDoUsuario, Nome = "A", Slug = "a", Ativo = true });
+            db.Users.Add(NovoUsuario(userId, RedeDoUsuario));
+            await db.SaveChangesAsync();
+        });
+
+        var ctx = CriarForaDeComponente(sp, userId, ehPowerUser: false);
+
+        (await ctx.GetRedeIdAtualAsync()).Should().Be(RedeDoUsuario);
+        (await ctx.GetUsuarioIdAtualAsync()).Should().Be(userId);
+    }
+
+    /// <summary>
+    /// O mesmo caminho para o <c>PowerUser</c>, que é quem de fato usa a tela: o escopo sai do
+    /// claim de rede escolhida, e não da primeira rede ativa. Sem esta asserção, um PowerUser
+    /// olhando a Rede Retiro baixaria o envio de outro inquilino.
+    /// </summary>
+    [Fact]
+    public async Task Fora_de_componente_razor_o_poweruser_mantem_a_rede_escolhida()
+    {
+        var userId = Guid.CreateVersion7();
+        await using var sp = Construir(seed: async db =>
+        {
+            db.Redes.Add(new Rede { Id = RedeDoUsuario, Nome = "A", Slug = "a", Ativo = true });
+            db.Redes.Add(new Rede { Id = OutraRede, Nome = "B", Slug = "b", Ativo = true });
+            db.Users.Add(NovoUsuario(userId, null));
+            await db.SaveChangesAsync();
+        });
+
+        var ctx = CriarForaDeComponente(sp, userId, ehPowerUser: true, redeNoClaim: OutraRede);
+
+        (await ctx.GetRedeIdAtualAsync()).Should().Be(OutraRede,
+            "a rede escolhida na barra tem de valer no download, senão ele baixaria o envio de outra rede");
     }
 
     // ---- infraestrutura dos testes ----
@@ -241,7 +289,36 @@ public sealed class RedeContextTests
     private static RedeContext Criar(
         IServiceProvider sp, Guid userId, bool ehPowerUser, int? redeNoClaim = null) =>
         new(new AuthProviderFalso(Principal(userId, ehPowerUser, redeNoClaim)),
+            new HttpContextAccessor(),
             sp.GetRequiredService<IServiceScopeFactory>());
+
+    /// <summary>
+    /// Fora de um componente Razor — num endpoint HTTP comum, como o download do ZIP da
+    /// sessão — o principal tem de vir do <see cref="HttpContext"/>, porque o
+    /// <see cref="AuthenticationStateProvider"/> do Blazor Server <b>lança</b> nesse caminho.
+    /// O acessor recebe o usuário e o provider é o que estoura se for consultado.
+    /// </summary>
+    private static RedeContext CriarForaDeComponente(
+        IServiceProvider sp, Guid userId, bool ehPowerUser, int? redeNoClaim = null)
+    {
+        var acessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext { User = Principal(userId, ehPowerUser, redeNoClaim) },
+        };
+        return new RedeContext(new AuthProviderQueLanca(), acessor, sp.GetRequiredService<IServiceScopeFactory>());
+    }
+
+    /// <summary>
+    /// Reproduz o comportamento real do <c>ServerAuthenticationStateProvider</c> fora do
+    /// escopo de um componente: ele não devolve anônimo, ele <b>lança</b>. Um duplo que
+    /// devolvesse principal vazio deixaria o teste passar com o bug de volta.
+    /// </summary>
+    private sealed class AuthProviderQueLanca : AuthenticationStateProvider
+    {
+        public override Task<AuthenticationState> GetAuthenticationStateAsync() =>
+            throw new InvalidOperationException(
+                "Do not call GetAuthenticationStateAsync outside of the DI scope for a Razor component.");
+    }
 
     private static ClaimsPrincipal Principal(Guid userId, bool ehPowerUser, int? redeNoClaim = null)
     {

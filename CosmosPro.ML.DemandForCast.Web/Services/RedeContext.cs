@@ -25,6 +25,7 @@ namespace CosmosPro.ML.DemandForCast.Web.Services;
 /// </summary>
 internal sealed class RedeContext(
     AuthenticationStateProvider authProvider,
+    IHttpContextAccessor httpContextAccessor,
     IServiceScopeFactory scopeFactory) : IRedeContext
 {
     /// <summary>
@@ -117,8 +118,16 @@ internal sealed class RedeContext(
             return cache;
         }
 
-        var state = await authProvider.GetAuthenticationStateAsync();
-        var principal = state.User;
+        // Duas fontes para o MESMO principal, e a ordem importa. Fora de um componente
+        // Razor — num endpoint HTTP comum, como o download do ZIP da sessão — o
+        // AuthenticationStateProvider do Blazor Server **lança**: ele exige o escopo de DI
+        // de um componente. Ali o HttpContext existe e é a fonte. Em circuito interativo é o
+        // inverso: o HttpContext não vale (a requisição que o criou já terminou) e o provider
+        // é quem sabe. Custou um 500 em produção, num caminho que os testes de API e o E2E
+        // de renderização não tocavam.
+        var principal = httpContextAccessor.HttpContext?.User is { Identity.IsAuthenticated: true } doRequest
+            ? doRequest
+            : (await authProvider.GetAuthenticationStateAsync()).User;
 
         if (principal.Identity?.IsAuthenticated != true)
         {

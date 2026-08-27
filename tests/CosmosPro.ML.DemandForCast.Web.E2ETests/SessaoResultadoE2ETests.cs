@@ -198,10 +198,11 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
     }
 
     /// <summary>
-    /// O botão de baixar o ZIP enviado. Sem ele, repetir uma comparação sobre o mesmo envio
-    /// depende de o cliente ainda ter o arquivo no disco — e cada import substitui o Stage
-    /// inteiro da rede, então uma extração nova traz outra janela de vendas e os números das
-    /// duas execuções não se comparam.
+    /// O botão de baixar o ZIP enviado, e a rota por trás dele respondendo <b>autenticada</b>.
+    /// Sem esse download, repetir uma comparação sobre o mesmo envio depende de o cliente
+    /// ainda ter o arquivo no disco — e cada import substitui o Stage inteiro da rede, então
+    /// uma extração nova traz outra janela de vendas e os números das duas execuções não se
+    /// comparam.
     ///
     /// <para>
     /// Único caso desta classe que abre página própria, e não por capricho: os demais leem o
@@ -209,9 +210,22 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
     /// aparece. Asserção por <c>data-test</c> em vez de pelo rótulo porque o rótulo é redação
     /// e muda; o que não pode sumir é a oferta do download quando a sessão tem envio.
     /// </para>
+    ///
+    /// <para>
+    /// <b>404 é o resultado esperado aqui, e é ele que carrega a asserção que importa.</b> A
+    /// carga é semeada sem objeto no MinIO (ver <c>SemearCargaNaSessaoAsync</c>), então a rota
+    /// chega ao armazenamento e não encontra o arquivo. O que se afirma é que ela <b>chega
+    /// lá</b> — ou seja, que autenticação e resolução de rede funcionam num endpoint HTTP
+    /// comum, fora de componente Razor. Esse é exatamente o caminho que quebrou em produção
+    /// com 500: o <c>IRedeContext</c> lia o estado de autenticação do Blazor, que <b>lança</b>
+    /// fora do escopo de um componente. Os testes de API não passavam por aqui (a apiservice
+    /// não tem esse problema) e a asserção anterior, só de presença do botão, nunca clicava.
+    /// A integridade dos bytes é afirmada onde há upload de verdade, em
+    /// <c>SessaoDownloadIntegrationTests</c>.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Sessao_com_envio_oferece_o_download_do_zip()
+    public async Task Sessao_com_envio_oferece_o_download_e_a_rota_responde_autenticada()
     {
         // Garante a semeadura (sessão + carga) reusando o mesmo caminho dos outros casos.
         await ResultadoRenderizadoAsync();
@@ -219,12 +233,20 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         var page = await fixture.NovaPaginaLogadaAsync();
         try
         {
-            await page.GotoAsync($"{fixture.WebfrontendUrl.TrimEnd('/')}/comparacoes/{_sessaoId}");
+            var baseUrl = fixture.WebfrontendUrl.TrimEnd('/');
+            await page.GotoAsync($"{baseUrl}/comparacoes/{_sessaoId}");
             await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
             var botao = page.Locator("[data-test='baixar-zip-enviado']");
             await botao.First.WaitForAsync(new() { Timeout = 60_000 });
             (await botao.CountAsync()).Should().Be(1);
+
+            var resposta = await page.GotoAsync($"{baseUrl}/comparacoes/{_sessaoId}/dados/download");
+
+            resposta.Should().NotBeNull();
+            resposta!.Status.Should().Be(404,
+                "a rota tem de alcançar o armazenamento; 500 aqui significa que ela caiu antes, "
+                + "ao resolver usuário ou rede — foi assim que o caminho quebrou em produção");
         }
         finally
         {

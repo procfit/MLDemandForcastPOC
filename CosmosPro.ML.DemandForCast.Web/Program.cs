@@ -160,6 +160,11 @@ builder.Services.AddHttpClient<ExtratorApiClient>(client =>
 
 #pragma warning restore EXTEXP0001
 
+// Necessário pelo RedeContext: nos endpoints HTTP comuns (download do ZIP da sessão) o
+// principal vem do HttpContext, porque o AuthenticationStateProvider do Blazor só vale
+// dentro do escopo de um componente Razor.
+builder.Services.AddHttpContextAccessor();
+
 const long MaxUploadBytes = 500L * 1024 * 1024;
 builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(o =>
     o.Limits.MaxRequestBodySize = MaxUploadBytes);
