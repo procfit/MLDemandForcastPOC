@@ -1,3 +1,4 @@
+using System.Globalization;
 using ClosedXML.Excel;
 using CosmosPro.ML.DemandForCast.Web;
 
@@ -61,7 +62,10 @@ public sealed class ComparacaoItensExcelExporterTests
 
         var texto = TextoDaAba(ws);
         texto.Should().Contain("18", "sem a loja na capa, dois recortes ficam indistinguíveis no disco");
-        texto.Should().Contain("2 de 20.153 da sugestão",
+        // Separador de milhar vem da cultura do processo (pt-BR em produção, invariante no
+        // runner do CI). O esperado é construído com a mesma formatação: o que se afirma é o
+        // denominador na capa, não a convenção decimal do host.
+        texto.Should().Contain($"2 de {20_153.ToString("N0", CultureInfo.CurrentCulture)} da sugestão",
             "o denominador é o que impede comparar um recorte com a população inteira sem perceber");
         texto.Should().Contain("125595");
     }

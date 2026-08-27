@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 
@@ -72,7 +73,14 @@ public sealed class ComparisonApiClientTests
         camada.ParesSemDemandaReal.Should().Be(3);
         camada.FracaoSemDemandaReal.Should().BeApproximately(0.75, 1e-9);
         camada.RessalvaDemandaZero.Should().NotBeNull();
-        camada.RessalvaDemandaZero.Should().Contain("3").And.Contain("4").And.Contain("75,0%");
+        // A fração é formatada com a cultura do processo — pt-BR em produção (a Web fixa
+        // CultureInfo.DefaultThreadCurrentCulture), invariante no runner do CI. O esperado é
+        // construído com a MESMA formatação, para o teste afirmar o conteúdo em vez de a
+        // convenção decimal do host onde ele roda.
+        camada.RessalvaDemandaZero.Should()
+            .Contain("3 dos 4 pares avaliados")
+            .And.Contain(0.75.ToString("P1", CultureInfo.CurrentCulture))
+            .And.Contain("não tiveram venda nenhuma no período");
     }
 
     /// <summary>
