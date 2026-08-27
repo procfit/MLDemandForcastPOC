@@ -241,6 +241,33 @@ public sealed record CamadaAResultado(
             "Um ponto de erro por (dia, loja, SKU) — a mesma unidade do backtest walk-forward.",
         _ => "Unidade de erro não informada pelo resultado; não compare estes números com os do backtest.",
     };
+
+    /// <summary>
+    /// Pares cuja demanda real no período foi <b>zero</b>.
+    ///
+    /// <para>
+    /// Derivado de <see cref="Detalhe"/> em vez de vir num campo do resultado, de propósito:
+    /// assim vale também para as execuções já gravadas, que é justamente onde a ressalva
+    /// faltava.
+    /// </para>
+    /// </summary>
+    public int ParesSemDemandaReal => Detalhe?.Count(p => p.DemandaDiaReal == 0) ?? 0;
+
+    public double FracaoSemDemandaReal =>
+        ParesAvaliados == 0 ? 0 : (double)ParesSemDemandaReal / ParesAvaliados;
+
+    /// <summary>
+    /// Ressalva que precisa acompanhar o placar. Num par sem demanda real, acertar é prever
+    /// zero — barato para qualquer método —, então taxa de vitória alta sobre uma população
+    /// cheia desses pares mede <b>facilidade</b>, não qualidade de previsão. O texto sai
+    /// daqui e não da tela para o número e a ressalva não poderem se separar.
+    /// </summary>
+    public string? RessalvaDemandaZero => ParesAvaliados == 0 || ParesSemDemandaReal == 0
+        ? null
+        : $"{ParesSemDemandaReal:N0} dos {ParesAvaliados:N0} pares avaliados "
+          + $"({FracaoSemDemandaReal:P1}) não tiveram venda nenhuma no período. Neles acertar é prever "
+          + "zero, o que é barato para qualquer método: leia o placar junto deste número e prefira o "
+          + "drill-down por giro, que separa as faixas de demanda em vez de somá-las.";
 }
 
 public sealed record ArmResultado(

@@ -193,6 +193,23 @@ public sealed class ComparacaoE2ETests(AppHostFixture fixture)
     }
 
     /// <summary>A ressalva metodológica viaja com os números, na mesma página deles.</summary>
+    /// <summary>
+    /// A ressalva de demanda zero tem de estar na página, encostada no placar. Num par sem
+    /// venda no período acertar é prever zero, então taxa de vitória alta sobre uma população
+    /// cheia desses pares mede facilidade e não qualidade — e foi exatamente o que passou a
+    /// acontecer quando o loader começou a materializar os dias com estoque e sem venda: a
+    /// população saltou de 563 para 2.301 pares, 88,5% deles sem demanda. Sem esta frase ao
+    /// lado, "o ML venceu 57,8%" lê-se como triunfo.
+    /// </summary>
+    [Fact]
+    public async Task Ressalva_de_demanda_zero_acompanha_o_placar_da_camada_A()
+    {
+        var corpo = await ResultadoRenderizadoAsync();
+
+        corpo.Should().Contain("Quanto da população medida não vendeu nada");
+        corpo.Should().Contain("acertar é prever zero");
+    }
+
     [Fact]
     public async Task Ressalva_de_treino_versus_servico_esta_na_pagina_junto_dos_resultados()
     {
@@ -323,7 +340,15 @@ public sealed class ComparacaoE2ETests(AppHostFixture fixture)
                     ["Antialérgico"] = new(160, 60, 98, 2),
                 },
             },
-            Detalhe: []);
+            // Amostra de detalhe com DOIS pares de demanda real zero. Os agregados desta
+            // fixture já são semeados independentes do detalhe (Vitoria diz 400 pares), e o que
+            // se quer aqui é acionar a ressalva de demanda zero, que é derivada do detalhe.
+            Detalhe:
+            [
+                new ParComparado(1, 1, "SKU-E2E-Z1", 7, 0d, 0d, 0.02d, 0d, 0.02d, ResultadoPar.VitoriaErp),
+                new ParComparado(1, 1, "SKU-E2E-Z2", 7, 0d, 0d, 0.01d, 0d, 0.01d, ResultadoPar.VitoriaErp),
+                new ParComparado(1, 1, "SKU-E2E-V1", 7, 1.5d, 1.4d, 1.6d, 0.1d, 0.1d, ResultadoPar.Empate),
+            ]);
 
         var reconciliacao = new ReconciliacaoResumo(
             Itens: 300,

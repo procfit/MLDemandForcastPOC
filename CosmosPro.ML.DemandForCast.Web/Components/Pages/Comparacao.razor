@@ -310,6 +310,18 @@
                                                     </RadzenText>
                                                 }
 
+                                                @* A ressalva encosta no placar de propósito: separada dele por uma aba ou
+                                                   por um scroll, o número volta a ser lido sozinho. *@
+                                                @if (a.RessalvaDemandaZero is { } ressalvaZero)
+                                                {
+                                                    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat"
+                                                                 Shade="Shade.Lighter" AllowClose="false"
+                                                                 data-test="ressalva-demanda-zero">
+                                                        <strong>Quanto da população medida não vendeu nada.</strong>
+                                                        <div style="margin-top: 0.35rem">@ressalvaZero</div>
+                                                    </RadzenAlert>
+                                                }
+
                                                 @* --- Drill-down camada A --------------------------------- *@
                                                 <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
                                                     <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Drill-down por hierarquia</RadzenText>

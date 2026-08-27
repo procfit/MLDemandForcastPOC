@@ -40,6 +40,16 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
     private const int LojaId = 4821;
     private const string SkuComPrevisao = "SKU-E2E-R1";
     private const string SkuSemPreco = "SKU-E2E-R2";
+
+    /// <summary>
+    /// Item <b>medido</b> que não vendeu nada: demanda real zero, não nula. É a classe mais
+    /// numerosa da população depois que o loader passou a materializar os dias com estoque e
+    /// sem venda (88,5% dos pares na Retiro), e é ela que obriga a tela a declarar quanto do
+    /// resultado descreve a facilidade de acertar zero. Não confundir com
+    /// <see cref="SkuSemPreco"/>, cuja demanda real é <b>nula</b> — "não deu para medir" e
+    /// "medi, e foi zero" são afirmações diferentes, e a faixa de giro as separa.
+    /// </summary>
+    private const string SkuSemVenda = "SKU-E2E-R3";
     private const string NomeDoProduto = "Dipirona E2E 500mg";
     private const long SugestaoId = 88_101;
     private const byte TipoCalculo = 2;
@@ -91,7 +101,7 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         var corpo = await ResultadoRenderizadoAsync();
 
         corpo.Should().Contain("Dinheiro parado na prateleira no fim do período");
-        corpo.Should().Contain("2 item(ns) desta sugestão foram acompanhados");
+        corpo.Should().Contain("3 item(ns) desta sugestão foram acompanhados");
         corpo.Should().Contain("Faltou produto na prateleira em 3 dia(s)");
         // Program.cs fixa pt-BR (CultureInfo.DefaultThreadCurrentCulture), então "P0" para
         // 5/60 sempre sai "8%" — sem o fixador isto oscilaria com a cultura do host.
@@ -161,7 +171,7 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         var corpo = await ResultadoRenderizadoAsync();
 
         corpo.Should().Contain("Item por item");
-        corpo.Should().Contain("2 itens");
+        corpo.Should().Contain("3 itens");
         corpo.Should().Contain(NomeDoProduto, "o nome é copiado na materialização porque o Stage é apagado");
         corpo.Should().Contain(SkuComPrevisao);
         corpo.Should().Contain(SkuSemPreco);
@@ -186,7 +196,7 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         var corpo = await ResultadoRenderizadoAsync();
 
         corpo.Should().Contain("Previsão de venda: o seu ERP contra o ML");
-        corpo.Should().Contain("Apurado sobre 1 de 2 item(ns) da sugestão",
+        corpo.Should().Contain("Apurado sobre 1 de 3 item(ns) da sugestão",
             "a métrica não fala da população inteira, e a tela precisa dizer sobre quanto ela fala");
         corpo.Should().Contain("WAPE");
         corpo.Should().Contain("Abertura por curva e por loja");
@@ -195,6 +205,21 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         corpo.Should().Contain("Venda perdida em reais não é exibida em lugar nenhum desta tela");
         corpo.Should().Contain("o método que prevê mais alto compra mais",
             "a premissa que torna a estimativa circular precisa estar ao lado da recusa");
+    }
+
+    /// <summary>
+    /// A declaração de que parte da população não vendeu nada, na tela do <b>comprador</b>.
+    /// Ele lê a comparação sem ver o placar técnico, mas lê as sobras — e se a maior parte dos
+    /// itens medidos não teve venda, o resultado descreve sobretudo a facilidade de acertar
+    /// zero. A frase manda o leitor ao detalhe por faixa de giro, que separa em vez de somar.
+    /// </summary>
+    [Fact]
+    public async Task Manchete_declara_quantos_itens_nao_venderam_no_periodo()
+    {
+        var corpo = await ResultadoRenderizadoAsync();
+
+        corpo.Should().Contain("não venderam nada no período");
+        corpo.Should().Contain("faixa de giro");
     }
 
     /// <summary>
@@ -351,7 +376,7 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             ComparacaoPbsId: Guid.CreateVersion7(),
             SugestaoDataHora: new DateTime(2026, 7, 1, 9, 30, 0),
             TipoCalculo: TipoCalculo,
-            ItensAvaliados: 2,
+            ItensAvaliados: 3,
             VendidoNaJanelaUnidades: 60m,
             Pbs: new BracoDaSessao(
                 CompraUnidades: 120m, SobraUnidades: 75m, SobraValor: 192.5m),
@@ -416,6 +441,28 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             SobraPbsValor = null,
             SobraMlValor = null,
             JanelaAlemDoHistorico = true,
+        },
+        new()
+        {
+            LojaId = LojaId,
+            Sku = SkuSemVenda,
+            NomeProduto = "Loratadina E2E 10mg",
+            Curva = "E",
+            CompraSugeridaPbs = 0m,
+            // Braço de ML todo nulo, de propósito: o cenário desta classe é "nenhum item com
+            // os dois métodos calculados", e preenchê-lo aqui destruiria isso. O que este item
+            // contribui é apenas DemandaDiaReal = 0 — demanda medida e igual a zero, que é o
+            // que a faixa de giro usa para a declaração de cobertura.
+            CompraSugeridaMl = null,
+            VendidoNaJanela = 0m,
+            DemandaDiaPbs = 0m,
+            DemandaDiaMl = null,
+            DemandaDiaReal = 0m,
+            SobraPbsUnidades = 3m,
+            SobraMlUnidades = null,
+            SobraPbsValor = 12.5m,
+            SobraMlValor = null,
+            JanelaAlemDoHistorico = false,
         },
     ];
 

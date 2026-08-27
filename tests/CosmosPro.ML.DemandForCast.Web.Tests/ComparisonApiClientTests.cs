@@ -47,6 +47,72 @@ public sealed class ComparisonApiClientTests
 
     // --- Escopo de rede -------------------------------------------------------
 
+    /// <summary>
+    /// A ressalva de demanda zero que acompanha o placar da camada A.
+    ///
+    /// <para>
+    /// <b>Por que ela existe:</b> num par sem venda no período, acertar é prever zero — barato
+    /// para qualquer método. Uma taxa de vitória alta sobre uma população cheia desses pares
+    /// mede facilidade, não qualidade. Quando o loader passou a materializar os dias com
+    /// estoque e sem venda, a população medida saltou de 563 para 2.301 pares e <b>88,5%</b>
+    /// dela passou a ter demanda real zero: sem esta frase encostada no placar, "o ML venceu
+    /// 57,8%" lê-se como triunfo.
+    /// </para>
+    ///
+    /// <para>
+    /// Derivada de <c>Detalhe</c> e não de um campo do resultado, de propósito: assim vale
+    /// para as execuções já gravadas, que é onde a ressalva faltava.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void RessalvaDemandaZero_declara_a_fracao_de_pares_sem_venda()
+    {
+        var camada = CamadaA(reais: [0d, 0d, 0d, 1.5d]);
+
+        camada.ParesSemDemandaReal.Should().Be(3);
+        camada.FracaoSemDemandaReal.Should().BeApproximately(0.75, 1e-9);
+        camada.RessalvaDemandaZero.Should().NotBeNull();
+        camada.RessalvaDemandaZero.Should().Contain("3").And.Contain("4").And.Contain("75,0%");
+    }
+
+    /// <summary>
+    /// Sem par de demanda zero não há ressalva: um aviso sempre presente vira ruído e o
+    /// leitor para de ver os que importam.
+    /// </summary>
+    [Fact]
+    public void RessalvaDemandaZero_e_nula_quando_todos_os_pares_venderam()
+    {
+        CamadaA(reais: [0.4d, 1.5d]).RessalvaDemandaZero.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Execução antiga, gravada sem o detalhe par a par: a conta não tem de onde sair, e o
+    /// componente precisa omitir a frase em vez de afirmar "nenhum par sem venda".
+    /// </summary>
+    [Fact]
+    public void RessalvaDemandaZero_e_nula_quando_o_resultado_nao_traz_detalhe()
+    {
+        var camada = new CamadaAResultado(
+            ParesAvaliados: 10, ParesDescartados: 0, Unidade: "ErroPorParNaJanela",
+            Erp: null, Ml: null, Vitoria: null, VitoriaPorDimensao: null, Detalhe: null);
+
+        camada.ParesSemDemandaReal.Should().Be(0);
+        camada.RessalvaDemandaZero.Should().BeNull();
+    }
+
+    private static CamadaAResultado CamadaA(double[] reais) => new(
+        ParesAvaliados: reais.Length,
+        ParesDescartados: 0,
+        Unidade: "ErroPorParNaJanela",
+        Erp: null,
+        Ml: null,
+        Vitoria: null,
+        VitoriaPorDimensao: null,
+        Detalhe: [.. reais.Select((real, i) => new ParComparadoView(
+            SugestaoId: 1, LojaId: 1, Sku: $"S{i}", DiasAvaliados: 7,
+            DemandaDiaReal: real, DemandaDiaErp: 0, DemandaDiaMl: 0,
+            ErroAbsErp: 0, ErroAbsMl: 0, Resultado: "VitoriaErp"))]);
+
     [Fact]
     public async Task ListAsync_envia_o_escopo_de_rede_resolvido_pelo_IRedeContext()
     {

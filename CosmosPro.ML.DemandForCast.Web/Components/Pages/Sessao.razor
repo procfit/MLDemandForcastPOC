@@ -21,8 +21,13 @@
         @if (_sessao?.DadosEnviados == true)
         {
             <div style="flex: 1"></div>
+            @* Primary, e não Light nem Secondary. Light é feito para fundo escuro: no cabeçalho
+               claro desta página o texto sumia e o botão passava por desabilitado. Medido sobre
+               o fundo real (#f5f5f5): Light reprovava, Secondary dá 4,17 (abaixo do mínimo de
+               4,5 do WCAG AA) e Primary dá 6,64. Base/Dark contrastam mais ainda, mas cinza é
+               o que faz um botão parecer inerte, que era exatamente o defeito. *@
             <RadzenButton Click="@BaixarDados" Icon="folder_zip" Text="Baixar ZIP enviado"
-                          ButtonStyle="ButtonStyle.Light" Variant="Variant.Outlined" Size="ButtonSize.Small"
+                          ButtonStyle="ButtonStyle.Primary" Variant="Variant.Outlined" Size="ButtonSize.Small"
                           data-test="baixar-zip-enviado" />
             <HelpTip Position="TooltipPosition.Bottom" Text="Baixa o arquivo exatamente como foi enviado nesta comparação. Serve para repetir a comparação sobre o mesmo envio: cada importação substitui os dados da rede, então uma extração nova traria outra janela de vendas e os números das duas execuções não seriam comparáveis. Para repetir, crie uma comparação nova e envie este arquivo nela." />
         }
@@ -156,7 +161,7 @@
             }
             else
             {
-                <ManchetesComparacao Resultado="@resultado" />
+                <ManchetesComparacao Resultado="@resultado" ItensSemVendaNoPeriodo="@ItensSemVendaNoPeriodo" />
 
                 @* Bloco fixo, acima das abas: a notícia ruim não pode depender de um clique. *@
                 <OndeOMlFoiPior Analise="@_analise" Resultado="@resultado" />
@@ -260,6 +265,13 @@
     }
 
     private SessaoAnalise? _analise;
+
+    /// <summary>
+    /// Itens sem venda no período, lidos da faixa de giro correspondente do drill-down.
+    /// Nulo enquanto a análise não chegou — a manchete omite a frase em vez de afirmar zero.
+    /// </summary>
+    private int? ItensSemVendaNoPeriodo =>
+        _analise?.PorGiro?.FirstOrDefault(f => f.Chave == "sem venda no período")?.Itens;
 
     private ExtratorVersaoView? _extratorVersao;
 

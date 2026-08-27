@@ -209,6 +209,17 @@
             estarem fora do conjunto de SKUs que o modelo aprendeu — os números abaixo descrevem a parte
             medida, não a sugestão inteira.
         </div>
+        @if (ItensSemVendaNoPeriodo is { } semVenda && semVenda > 0)
+        {
+            @* Sem esta frase, uma taxa de acerto alta parece mérito quando pode ser só a
+               facilidade de acertar zero. O detalhe por giro é onde a diferença aparece. *@
+            <div style="margin-top: 0.35rem">
+                <strong>@semVenda.ToString("N0") desses itens não venderam nada no período.</strong>
+                Neles, acertar significa prever que não venderia — o que é fácil para qualquer método.
+                Use o detalhamento por faixa de giro, na área técnica, para ver o desempenho separado
+                por nível de demanda em vez de somado.
+            </div>
+        }
     </RadzenAlert>
 
     @if (!string.IsNullOrWhiteSpace(Resultado.RessalvaExtrapolacao))
@@ -230,6 +241,14 @@
 
 @code {
     [Parameter, EditorRequired] public SessaoResultadoView Resultado { get; set; } = default!;
+
+    /// <summary>
+    /// Itens da população medida que não venderam nada no período, para a declaração de
+    /// cobertura. Opcional porque a análise é carregada depois das manchetes: nulo apenas
+    /// omite a frase, e nunca a substitui por zero — "não sei ainda" e "todos venderam" são
+    /// afirmações diferentes.
+    /// </summary>
+    [Parameter] public int? ItensSemVendaNoPeriodo { get; set; }
 
     /// <summary>
     /// A frase que ocupa o lugar dos números do ML quando não houve como calculá-los. Ela
