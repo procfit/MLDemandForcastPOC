@@ -15,7 +15,9 @@ internal static class ImportSchemas
         ["estoques_diarios.csv"] = ["Data", "LojaId", "Sku", "QuantidadeEmEstoque"],
         ["compras.csv"] = ["DataPedido", "LojaId", "Sku", "Quantidade"],
         ["promocoes.csv"] = ["DataInicio", "DataFim", "Sku"],
-        ["mercado_iqvia.csv"] = ["Mes", "PrincipioAtivo", "UF", "DemandaMercadoUnidades"],
+        // mercado_iqvia.csv saiu do contrato na F16: o dado de mercado é importado à
+        // parte (XLSX da IQVIA, banco engine). ZIPs antigos que ainda o trazem passam
+        // sem erro — entrada desconhecida no ZIP nunca foi validada nem carregada.
     };
 
     /// <summary>

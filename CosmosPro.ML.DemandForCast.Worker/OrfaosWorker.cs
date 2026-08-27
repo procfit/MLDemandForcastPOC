@@ -119,17 +119,30 @@ internal sealed class OrfaosWorker(
                 .SetProperty(x => x.DataConclusao, agora)
                 .SetProperty(x => x.MensagemErro, SimulacaoInterrompida), ct);
 
-        var total = cargas + treinos + comparacoes + simulacoes;
+        // Carga de mercado (IQVIA, F16) também não pertence a sessão: o remédio é
+        // reenviar o XLSX na própria tela de dados de mercado.
+        var mercado = await db.MercadoCargas
+            .Where(x => x.Status == MercadoCargaStatus.Processando && x.DataInicioProcessamento < corte)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, MercadoCargaStatus.Falha)
+                .SetProperty(x => x.DataConclusao, agora)
+                .SetProperty(x => x.MensagemErro, MercadoInterrompido), ct);
+
+        var total = cargas + treinos + comparacoes + simulacoes + mercado;
         if (total > 0)
         {
             logger.LogWarning(
                 "Jobs órfãos encerrados: {Cargas} carga(s), {Treinos} treino(s), {Comparacoes} comparação(ões), " +
-                "{Simulacoes} simulação(ões). Reclamados antes de {Corte:u} e sem conclusão.",
-                cargas, treinos, comparacoes, simulacoes, corte);
+                "{Simulacoes} simulação(ões), {Mercado} carga(s) de mercado. Reclamados antes de {Corte:u} e sem conclusão.",
+                cargas, treinos, comparacoes, simulacoes, mercado, corte);
         }
     }
 
     private const string SimulacaoInterrompida =
         "O processamento desta simulação foi interrompido antes de terminar e não deu mais sinal de progresso. " +
         "Rode a simulação novamente; se acontecer de novo, procure o suporte.";
+
+    private const string MercadoInterrompido =
+        "A importação deste arquivo foi interrompida antes de terminar e não deu mais sinal de progresso. " +
+        "Envie o arquivo novamente; se acontecer de novo, procure o suporte.";
 }

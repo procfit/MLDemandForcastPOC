@@ -36,6 +36,9 @@ internal static class TableSchemas
             new("DiasOperacaoSemana", typeof(byte), false),
             new("DataAbertura", typeof(DateTime), true),
             new("Ativo", typeof(bool), false),
+            // Anulável e no fim do schema: ZIPs anteriores à F16 não trazem a coluna,
+            // e coluna ausente do header vira NULL no BulkInsert.
+            new("Cnpj", typeof(string), true),
         ],
         ["Produtos"] =
         [
@@ -90,15 +93,6 @@ internal static class TableSchemas
             new("LojaId", typeof(int), true),
             new("Tipo", typeof(string), true),
             new("DescontoPct", typeof(decimal), true),
-        ],
-        ["MercadoIqvia"] =
-        [
-            RedeId,
-            new("Mes", typeof(DateTime), false),
-            new("PrincipioAtivo", typeof(string), false),
-            new("UF", typeof(string), false),
-            new("DemandaMercadoUnidades", typeof(decimal), false),
-            new("MarketShareCategoria", typeof(decimal), true),
         ],
         ["SinaisExternos"] =
         [

@@ -231,7 +231,6 @@ public sealed class SessaoManifestoIntegrationTests(AppHostFixture fixture)
             .WithEstoquesDiarios([new(new DateOnly(2026, 2, 10), LojaId, Sku, 500m)])
             .WithCompras(new CompraFaker([LojaId], [Sku], Inicio, Fim, seed: 930).Generate(2))
             .WithPromocoes(new PromocaoFaker([LojaId], [Sku], Inicio, Fim, seed: 931).Generate(1))
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], Inicio, Fim, seed: 932).Generate(1))
             .ReplaceRaw("sugestoes_compra.csv", SugestaoCsv())
             .ReplaceRaw("sugestoes_compra_itens.csv", SugestaoItensCsv());
 

@@ -801,7 +801,6 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
             ])
             .WithCompras(new CompraFaker([LojaId], [SkuComPrevisao], Inicio, Fim, seed: 950).Generate(2))
             .WithPromocoes(new PromocaoFaker([LojaId], [SkuComPrevisao], Inicio, Fim, seed: 951).Generate(1))
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], Inicio, Fim, seed: 952).Generate(1))
             .ReplaceRaw("sugestoes_compra.csv", SugestaoCsv())
             .ReplaceRaw("sugestoes_compra_itens.csv", SugestaoItensCsv())
             .Build();

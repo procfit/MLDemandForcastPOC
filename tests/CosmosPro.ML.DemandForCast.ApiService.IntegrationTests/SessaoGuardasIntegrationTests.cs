@@ -366,7 +366,6 @@ public sealed class SessaoGuardasIntegrationTests(AppHostFixture fixture)
             .WithEstoquesDiarios([new(inicio, lojaId, sku, 500m)])
             .WithCompras(new CompraFaker([lojaId], [sku], inicio, fim, seed: 940).Generate(1))
             .WithPromocoes(new PromocaoFaker([lojaId], [sku], inicio, fim, seed: 941).Generate(1))
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], inicio, fim, seed: 942).Generate(1))
             .Build();
     }
 

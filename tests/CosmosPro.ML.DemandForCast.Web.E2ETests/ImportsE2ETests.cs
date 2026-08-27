@@ -27,7 +27,6 @@ public sealed class ImportsE2ETests(AppHostFixture fixture)
             .WithEstoquesDiarios(new EstoqueDiarioFaker(lojaIds, skus, start, end, seed: 203).Generate(5))
             .WithCompras(new CompraFaker(lojaIds, skus, start, end, seed: 204).Generate(2))
             .WithPromocoes(new PromocaoFaker(lojaIds, skus, start, end, seed: 205).Generate(1))
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona"], ["SP"], start, end, seed: 206).Generate(2))
             .Build();
 
         var uniqueFileName = $"e2e-{Guid.NewGuid():N}.zip";

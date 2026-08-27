@@ -76,10 +76,18 @@ internal static class MasterData
                     DataAbertura: f.Random.Bool(0.7f)
                         ? DateOnly.FromDateTime(f.Date.Past(15))
                         : null,
-                    Ativo: true);
+                    Ativo: true,
+                    Cnpj: "");
             });
 
-        return [.. Enumerable.Range(1, n).Select(id => faker.Generate() with { LojaId = id })];
+        // CNPJ derivado do id, fora do faker: consumir o RNG global do Bogus aqui
+        // deslocaria a sequência de tudo que é gerado depois com o mesmo seed — foi o
+        // que quebrou o teste de concentração ABC quando o CNPJ nasceu como sorteio.
+        return [.. Enumerable.Range(1, n).Select(id => faker.Generate() with
+        {
+            LojaId = id,
+            Cnpj = $"{7381852 + id:D8}0001{(id * 7) % 100:D2}",
+        })];
     }
 
     public static List<ProdutoRow> BuildProdutos(int n, int seed)

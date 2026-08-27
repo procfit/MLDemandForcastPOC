@@ -205,7 +205,6 @@ public sealed class EscopoDeSkusIntegrationTests(AppHostFixture fixture)
             .WithEstoquesDiarios(estoques)
             .WithPromocoes([])
             .WithCompras(new CompraFaker([LojaId], [SkuAlta, SkuMedia, SkuBaixa], Inicio, Fim, seed: 910).Generate(3))
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], Inicio, Fim, seed: 911).Generate(1))
             .Build();
     }
 }

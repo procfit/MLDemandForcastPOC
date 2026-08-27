@@ -15,6 +15,7 @@
     <Authorized>
         <RadzenPanelMenu>
             <RadzenPanelMenuItem Text="Comparações" Icon="compare_arrows" Path="/" Match="NavLinkMatch.All" />
+            <RadzenPanelMenuItem Text="Dados de mercado" Icon="monitoring" Path="/mercado" />
 
             <AuthorizeView Roles="@Papeis.PowerUser" Context="admin">
                 <Authorized>

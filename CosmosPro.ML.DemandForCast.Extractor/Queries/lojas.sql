@@ -13,8 +13,12 @@ SELECT
     Perfil             = CONVERT(varchar(60), NULL),
     DiasOperacaoSemana = CONVERT(tinyint, 7),
     DataAbertura       = CONVERT(date, NULL),
-    Ativo              = CAST(CASE WHEN E.ATIVO = 'S' THEN 1 ELSE 0 END AS bit)
+    Ativo              = CAST(CASE WHEN E.ATIVO = 'S' THEN 1 ELSE 0 END AS bit),
+    -- Sem máscara: o Stage guarda só dígitos, e é por eles que a loja casa com o
+    -- painel de PDVs do relatório IQVIA (F16).
+    Cnpj               = CONVERT(varchar(14), REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ENT.CGC)), '.', ''), '/', ''), '-', ''))
 FROM dbo.EMPRESAS_USUARIAS E
+LEFT JOIN dbo.ENTIDADES ENT ON ENT.ENTIDADE = E.ENTIDADE
 OUTER APPLY (
     SELECT TOP 1 A.ESTADO, A.CIDADE
     FROM dbo.ENDERECOS A

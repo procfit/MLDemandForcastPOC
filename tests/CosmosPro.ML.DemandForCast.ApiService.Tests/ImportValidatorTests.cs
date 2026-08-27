@@ -22,7 +22,6 @@ public sealed class ImportValidatorTests
             .WithEstoquesDiarios(new EstoqueDiarioFaker(lojaIds, skus, start, end, seed: 4).Generate(5))
             .WithCompras(new CompraFaker(lojaIds, skus, start, end, seed: 5).Generate(2))
             .WithPromocoes(new PromocaoFaker(lojaIds, skus, start, end, seed: 6).Generate(1))
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica", "Paracetamol"], ["SP", "RJ"], start, end, seed: 7).Generate(2))
             .Build();
     }
 
@@ -46,7 +45,6 @@ public sealed class ImportValidatorTests
             .WithEstoquesDiarios([])
             .WithCompras([])
             .WithPromocoes([])
-            .WithMercadoIqvia([])
             .Build();
 
         var result = ImportValidator.Validate(zip);
@@ -65,7 +63,6 @@ public sealed class ImportValidatorTests
             .WithEstoquesDiarios([])
             .WithCompras([])
             .WithPromocoes([])
-            .WithMercadoIqvia([])
             // Sobrescreve vendas.csv com header sem ValorTotal
             .ReplaceRaw("vendas.csv", "Data,LojaId,Sku,Quantidade,PrecoUnitario\n")
             .Build();

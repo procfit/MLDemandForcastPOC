@@ -20,7 +20,7 @@ public sealed class StageBrowser(SqlConnection connection)
         new Dictionary<string, TableInfo>(StringComparer.OrdinalIgnoreCase)
         {
             ["lojas"] = new("lojas", "Lojas", "Lojas", "store",
-                ["LojaId", "Nome", "UF", "Cidade", "Regiao", "Perfil", "DiasOperacaoSemana", "DataAbertura", "Ativo"], "LojaId"),
+                ["LojaId", "Nome", "UF", "Cidade", "Regiao", "Perfil", "DiasOperacaoSemana", "DataAbertura", "Ativo", "Cnpj"], "LojaId"),
             ["produtos"] = new("produtos", "Produtos", "Produtos", "inventory_2",
                 ["Sku", "Nome", "Categoria", "Subcategoria", "Fabricante", "PrincipioAtivo", "Apresentacao", "Ean", "RegistroAnvisa", "ListaControle", "ClasseTerapeutica", "Ativo"], "Sku"),
             ["vendas"] = new("vendas", "Vendas", "Vendas", "point_of_sale",
@@ -31,8 +31,6 @@ public sealed class StageBrowser(SqlConnection connection)
                 ["DataPedido", "DataRecebimento", "LojaId", "Sku", "Quantidade", "Fornecedor"], "DataPedido DESC"),
             ["promocoes"] = new("promocoes", "Promocoes", "Promoções", "sell",
                 ["DataInicio", "DataFim", "Sku", "LojaId", "Tipo", "DescontoPct"], "DataInicio DESC"),
-            ["iqvia"] = new("iqvia", "MercadoIqvia", "Mercado IQVIA", "public",
-                ["Mes", "PrincipioAtivo", "UF", "DemandaMercadoUnidades", "MarketShareCategoria"], "Mes DESC"),
             ["sinais"] = new("sinais", "SinaisExternos", "Sinais externos", "thermostat",
                 ["Data", "Geografia", "Tipo", "Valor"], "Data DESC"),
             ["sugestoes"] = new("sugestoes", "SugestoesCompra", "Sugestões do ERP", "receipt_long",

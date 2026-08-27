@@ -1,6 +1,7 @@
 using CosmosPro.ML.DemandForCast.ApiService.Comparacoes;
 using CosmosPro.ML.DemandForCast.ApiService.Extrator;
 using CosmosPro.ML.DemandForCast.ApiService.Imports;
+using CosmosPro.ML.DemandForCast.ApiService.Mercado;
 using CosmosPro.ML.DemandForCast.ApiService.Purchasing;
 using CosmosPro.ML.DemandForCast.ApiService.Questionarios;
 using CosmosPro.ML.DemandForCast.ApiService.Redes;
@@ -55,6 +56,7 @@ app.MapGet("/", () => "CosmosPro ML DemandForCast — API service.");
 
 app.MapRedesEndpoints();
 app.MapImportsEndpoints();
+app.MapMercadoEndpoints();
 app.MapStageEndpoints();
 app.MapTrainingEndpoints();
 app.MapPurchasingEndpoints();

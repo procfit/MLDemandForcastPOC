@@ -17,6 +17,10 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
     public DbSet<ComparacaoPbs> ComparacoesPbs => Set<ComparacaoPbs>();
     public DbSet<Questionario> Questionarios => Set<Questionario>();
     public DbSet<QuestionarioResposta> QuestionarioRespostas => Set<QuestionarioResposta>();
+    public DbSet<MercadoCarga> MercadoCargas => Set<MercadoCarga>();
+    public DbSet<MercadoObservacao> MercadoObservacoes => Set<MercadoObservacao>();
+    public DbSet<MercadoProduto> MercadoProdutos => Set<MercadoProduto>();
+    public DbSet<MercadoBrickPdv> MercadoBrickPdvs => Set<MercadoBrickPdv>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -263,6 +267,87 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
 
             b.HasOne<Questionario>().WithMany().HasForeignKey(x => x.QuestionarioId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MercadoCarga>(b =>
+        {
+            b.ToTable("MercadoCargas");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Status)
+             .HasConversion<string>()
+             .HasMaxLength(20)
+             .IsRequired();
+
+            b.Property(x => x.DataAgendamento).IsRequired();
+            b.Property(x => x.RedeId).IsRequired();
+            b.Property(x => x.NomeArquivoOriginal).IsRequired().HasMaxLength(260);
+            b.Property(x => x.BlobKey).IsRequired().HasMaxLength(260);
+            b.Property(x => x.MensagemErro).HasMaxLength(2000);
+            b.Property(x => x.UsuarioId).HasMaxLength(100);
+            // ResumoJson: meses × bricks é pequeno, mas a lista de EANs descartados não tem teto.
+            b.Property(x => x.ResumoJson);
+
+            b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            // Mesmo padrão de polling das demais filas — cross-rede, sem RedeId no índice.
+            b.HasIndex(x => new { x.Status, x.DataAgendamento })
+             .HasDatabaseName("IX_MercadoCargas_Status_DataAgendamento");
+            b.HasIndex(x => new { x.RedeId, x.DataAgendamento })
+             .HasDatabaseName("IX_MercadoCargas_Rede_DataAgendamento");
+        });
+
+        modelBuilder.Entity<MercadoObservacao>(b =>
+        {
+            b.ToTable("MercadoObservacoes");
+            b.HasKey(x => new { x.RedeId, x.Mes, x.Brick, x.Bandeira, x.Ean });
+
+            b.Property(x => x.Brick).HasMaxLength(80);
+            b.Property(x => x.Bandeira).HasMaxLength(60);
+            b.Property(x => x.Ean).HasMaxLength(14).IsUnicode(false);
+
+            // Unidades espelha as quantidades do Stage (DECIMAL(15,3)). ValorCpp é valor
+            // agregado do mês em R$ normalizados pela IQVIA — 2 casas bastam (o arquivo
+            // traz artefatos de float tipo 113700.59999999999, arredondados no parse) e
+            // 12 dígitos inteiros cobrem qualquer brick.
+            b.Property(x => x.Unidades).HasPrecision(15, 3);
+            b.Property(x => x.ValorCpp).HasPrecision(14, 2);
+
+            b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
+             .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<MercadoProduto>(b =>
+        {
+            b.ToTable("MercadoProdutos");
+            b.HasKey(x => new { x.RedeId, x.Ean });
+
+            b.Property(x => x.Ean).HasMaxLength(14).IsUnicode(false);
+            b.Property(x => x.DescricaoLonga).IsRequired().HasMaxLength(300);
+            b.Property(x => x.Laboratorio).HasMaxLength(120);
+            // Combinações vêm concatenadas por '|' e não têm teto de componentes.
+            b.Property(x => x.Molecula).HasMaxLength(500);
+            b.Property(x => x.AreaFarmacia).HasMaxLength(40);
+            b.Property(x => x.Nec1).HasMaxLength(80);
+            b.Property(x => x.Forma3).HasMaxLength(80);
+            b.Property(x => x.Classe4).HasMaxLength(80);
+
+            b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
+             .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<MercadoBrickPdv>(b =>
+        {
+            b.ToTable("MercadoBrickPdvs");
+            b.HasKey(x => new { x.RedeId, x.Brick, x.Cnpj });
+
+            b.Property(x => x.Brick).HasMaxLength(80);
+            b.Property(x => x.Cnpj).HasMaxLength(14).IsUnicode(false);
+            b.Property(x => x.Bandeira).IsRequired().HasMaxLength(60);
+
+            b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
+             .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ComparacaoPbs>(b =>

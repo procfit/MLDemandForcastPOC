@@ -26,7 +26,6 @@ public sealed class ImportsIntegrationTests(AppHostFixture fixture)
             .WithEstoquesDiarios(new EstoqueDiarioFaker(lojaIds, skus, start, end, seed: 103).Generate(10))
             .WithCompras(new CompraFaker(lojaIds, skus, start, end, seed: 104).Generate(3))
             .WithPromocoes(new PromocaoFaker(lojaIds, skus, start, end, seed: 105).Generate(2))
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica", "Paracetamol"], ["SP", "RJ"], start, end, seed: 106).Generate(4))
             .Build();
 
         // Act

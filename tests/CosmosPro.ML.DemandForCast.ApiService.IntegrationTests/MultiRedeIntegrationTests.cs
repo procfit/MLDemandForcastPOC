@@ -132,7 +132,6 @@ public sealed class MultiRedeIntegrationTests(AppHostFixture fixture)
             .WithEstoquesDiarios(new EstoqueDiarioFaker(lojaIds, skus, inicio, fim, seed: seed + 3).Generate(8))
             .WithCompras(new CompraFaker(lojaIds, skus, inicio, fim, seed: seed + 4).Generate(2))
             .WithPromocoes(new PromocaoFaker(lojaIds, skus, inicio, fim, seed: seed + 5).Generate(1))
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], inicio, fim, seed: seed + 6).Generate(1))
             .Build();
     }
 }

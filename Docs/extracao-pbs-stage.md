@@ -59,6 +59,52 @@ arquivos. Passo a passo em
 > **Guardrail:** este documento não contém credenciais, hosts nem dados reais — só
 > estrutura, mapeamento e contagens agregadas.
 
+## Objetos PBS que o extrator toca (lista para o DBA)
+
+Todo acesso é **somente leitura** (`SELECT`); o extrator nunca escreve, nunca cria objeto e
+não usa tabela temporária no PBS. Lista derivada de
+[`Extractor/Queries/*.sql`](../CosmosPro.ML.DemandForCast.Extractor/Queries/) — ao mexer em
+qualquer query, **reconferir esta tabela** (é o que o DBA usa para o GRANT):
+
+| Objeto (`dbo.`) | Usado por | Para quê |
+|---|---|---|
+| `EMPRESAS_USUARIAS` | lojas, lojas_disponiveis | mestre de lojas |
+| `ENDERECOS` | lojas | UF/cidade da loja |
+| `ENTIDADES` | lojas, compras | **CNPJ da loja (`CGC`, F16)** e nome do fornecedor |
+| `PRODUTOS` | produtos | mestre de produtos |
+| `PRODUTOS_EAN` | produtos | EAN principal |
+| `SECOES_PRODUTOS` | produtos | categoria |
+| `GRUPOS_PRODUTOS` | produtos | subcategoria |
+| `MARCAS` | produtos | fabricante |
+| `PRODUTOS_DCB` | produtos | princípio ativo (ponte) |
+| `DCB_MEDICAMENTOS` | produtos | princípio ativo (dicionário) |
+| `VENDAS_ANALITICAS` | vendas | fato de vendas (agregado a diário) |
+| `ESTOQUE_LANCAMENTOS` | estoques_movimentos | movimentos de estoque |
+| `ESTOQUE_ATUAL` | estoques_movimentos | âncora do saldo reconstruído |
+| `CENTROS_ESTOQUE` | estoques_movimentos | centro → loja (`TIPO_ESTOQUE=2`) |
+| `PEDIDOS_COMPRAS` | compras | cabeçalho de pedidos |
+| `PEDIDOS_COMPRAS_PRODUTOS` | compras | itens de pedidos |
+| `PROMOCOES_FLEXIVEIS` (+ `_EMPRESAS`, `_LEVE`, `_GANHE`) | promocoes | campanhas |
+| `TIPOS_PROMOCOES_FLEXIVEIS` | promocoes | tipo da campanha |
+| `SUGESTOES_COMPRAS` | catalogo_sugestoes, sugestao_por_id, sugestoes_compra | cabeçalho da sugestão (F12/F14) |
+| `SUGESTOES_COMPRAS_RESULTADO` | catalogo_sugestoes_contagens, escopo_sugestao, lojas_da_sugestao, sugestoes_compra_itens, sugestoes_compra_diagnostico | itens da sugestão + escopo de lojas/SKUs (F12/F14) |
+
+**23 objetos**, todos tabela. `TIPOS_CALCULO_SUGESTAO` aparece só em **comentário** no
+`sugestoes_compra.sql` (o `TipoCalculo` é copiado como número) — não é consultada e **não
+entra no GRANT**; um `grep` ingênuo por `dbo.` a inclui por engano. Mesmo caso de
+`PROMOCOES`, `ABC_FARMA_EDI_PRODUTOS`, `INDICACOES_TERAPEUTICAS`, `REGIONAIS` e
+`TIPOS_REDES`, citadas neste documento mas nunca lidas.
+
+Fora do PBS (não entram no GRANT): dados de mercado **IQVIA**, que desde a **F16** chegam
+por XLSX na tela `/mercado` e vivem no banco `engine` — o extrator não os toca mais (o
+antigo `mercado_iqvia.csv` vazio foi removido do ZIP); e **SinaisExternos** (clima/gripe),
+ainda sem fonte.
+
+> **A versão desta lista que vai para o cliente é outra:**
+> [extrator-objetos-banco.md](extrator-objetos-banco.md). Este documento aqui é **interno**
+> — cita instâncias de outros clientes, volumes e ferramental nosso, e **não pode ser
+> enviado ao DBA da rede**. Ao mexer nas queries, atualizar os dois.
+
 ## Contrato CSV (reader do Worker)
 
 Ver [CsvWriter.cs](../CosmosPro.ML.DemandForCast.SyntheticData/Generation/CsvWriter.cs)
@@ -91,7 +137,9 @@ e [TableSchemas.cs](../CosmosPro.ML.DemandForCast.Worker/TableSchemas.cs). Regra
 | EstoquesDiarios | `ESTOQUE_LANCAMENTOS` + `ESTOQUE_ATUAL` (âncora) + `CENTROS_ESTOQUE` | ✅ extraído com carry-forward; histórico só ~10 meses |
 | Compras | `PEDIDOS_COMPRAS` + `_PRODUTOS` | ✅ mapeado e validado |
 | Promocoes | `PROMOCOES_FLEXIVEIS` (+ `_EMPRESAS`, `_LEVE`, `_GANHE`) | ✅ mapeado e validado |
-| MercadoIqvia | *(fonte externa IQVIA — fora do PBS)* | ⏭️ CSV sai só com header |
+| SugestoesCompra | `SUGESTOES_COMPRAS` (+ `TIPOS_CALCULO_SUGESTAO`) | ✅ mapeado e validado (F12/F14) |
+| SugestoesCompraItens | `SUGESTOES_COMPRAS_RESULTADO` | ✅ mapeado e validado (F12/F14); também deriva o escopo de lojas/SKUs do envio |
+| ~~MercadoIqvia~~ | *(fonte externa IQVIA)* | **Removida do ZIP na F16** — o XLSX da IQVIA entra pela tela `/mercado` direto no `engine`; o extrator não gera mais o CSV vazio |
 | SinaisExternos | *(fonte externa: clima/gripe — fora do PBS)* | ⏳ |
 
 ## Tabelas de referência PBS já inspecionadas (metadados)
@@ -199,7 +247,8 @@ OUTER APPLY (                              -- princípio ativo (concatena combos
 
 **Origem:** `dbo.EMPRESAS_USUARIAS` (PK `EMPRESA_USUARIA`, 90 filiais) + joins.
 Endereço não está na `EMPRESAS_USUARIAS` **nem** em `ENTIDADES` → vem de `ENDERECOS`,
-que já traz `CIDADE` e `ESTADO` direto (dispensa `MUNICIPIOS`).
+que já traz `CIDADE` e `ESTADO` direto (dispensa `MUNICIPIOS`). Desde a **F16** a query
+também junta `ENTIDADES` (via `E.ENTIDADE`) para extrair o **CNPJ** da loja.
 
 | # | Campo Stage | Tipo | Null | Origem PBS | Transformação | Status | Obs |
 |---|---|---|:--:|---|---|:--:|---|
@@ -212,32 +261,18 @@ que já traz `CIDADE` e `ESTADO` direto (dispensa `MUNICIPIOS`).
 | 7 | `DiasOperacaoSemana` | byte | N | — | default provisório (7) | ⏭️ | ❓ **DÚVIDA:** **sem fonte** no PBS e campo é NOT NULL — precisa default ou outra tabela |
 | 8 | `DataAbertura` | date | S | — | NULL | ⏭️ | ❓ **DÚVIDA:** sem fonte óbvia; revisitar |
 | 9 | `Ativo` | bool | N | `EMPRESAS_USUARIAS.ATIVO='S'` | `CAST … bit` | ✅ | há também `ATIVO_COMERCIAL` |
+| 10 | `Cnpj` | string | S | `ENTIDADES.CGC` (via `E.ENTIDADE`) | `REPLACE` de `.`/`/`/`-` → só dígitos | 🟡 | **F16** — ponte com o painel de PDVs da IQVIA (`engine.MercadoBrickPdvs`). ❓ **DÚVIDA:** nome `CGC` assumido pela convenção Procfit; **confirmar na Retiro/NatusFarma** antes do primeiro ZIP real |
 
-**SELECT atual (rascunho — pendente validação de shape):**
-
-```sql
-SELECT
-    LojaId             = CONVERT(int, E.EMPRESA_USUARIA),
-    Nome               = LEFT(COALESCE(NULLIF(LTRIM(RTRIM(E.NOME_FANTASIA)),''), E.NOME), 200),
-    UF                 = ADR.ESTADO,
-    Cidade             = ADR.CIDADE,
-    Regiao             = CONVERT(varchar(60), NULL),  -- REGIONAIS nao existe na Retiro
-    Perfil             = CONVERT(varchar(60), NULL),  -- TIPOS_REDES nao existe na Retiro
-    DiasOperacaoSemana = CONVERT(tinyint, 7),         -- SEM FONTE no PBS (default provisório)
-    DataAbertura       = CONVERT(date, NULL),         -- SEM FONTE ainda
-    Ativo              = CAST(CASE WHEN E.ATIVO = 'S' THEN 1 ELSE 0 END AS bit)
-FROM dbo.EMPRESAS_USUARIAS E
-OUTER APPLY (                                        -- 1 endereço da loja
-    SELECT TOP 1 A.ESTADO, A.CIDADE
-    FROM dbo.ENDERECOS A
-    WHERE A.ENTIDADE = E.ENTIDADE
-    ORDER BY A.ENDERECOS
-) ADR
-WHERE E.ATIVO = 'S';   -- opcional: só lojas ativas
-```
+**Query:** implementada em
+[`Queries/lojas.sql`](../CosmosPro.ML.DemandForCast.Extractor/Queries/lojas.sql) — a versão
+embarcada é a fonte de verdade (o rascunho que vivia aqui envelheceu: hoje a query filtra
+pelas lojas da sugestão via `{{LOJAS}}`, e desde a F16 junta `ENTIDADES` para o `Cnpj`).
 
 **Pendências Lojas:**
 - [x] Chave da loja = `EMPRESA_USUARIA` (confirmado: `VENDAS_ANALITICAS.EMPRESA`).
+- [ ] `Cnpj`: confirmar que a coluna em `ENTIDADES` se chama `CGC` (assumido pela
+      convenção Procfit; MCPs do PBS fora do ar quando a F16 foi implementada) e o
+      formato do conteúdo (com ou sem máscara).
 - [ ] `Nome`: fantasia vs. razão social.
 - [ ] Endereço: critério quando há múltiplos (`ATIVO` indisponível na Retiro; avaliar `TIPO_ENDERECO`).
 - [ ] `Regiao`: derivar macro-região do `UF` (IBGE) ou deixar NULL?
@@ -415,18 +450,15 @@ Query implementada em `CosmosPro.ML.DemandForCast.Extractor/Queries/promocoes.sq
 
 ---
 
-## MercadoIqvia ⏳
+## MercadoIqvia — removida do escopo do extrator (F16)
 
-Fonte externa **IQVIA** (dados de mercado). Provavelmente **não vem do PBS** — revisitar
-origem quando chegarmos aqui.
-
-| # | Campo Stage | Tipo | Null |
-|---|---|---|:--:|
-| 1 | `Mes` | date | N |
-| 2 | `PrincipioAtivo` | string | N |
-| 3 | `UF` | string | N |
-| 4 | `DemandaMercadoUnidades` | decimal | N |
-| 5 | `MarketShareCategoria` | decimal | S |
+Resolvido fora do PBS: o dado de mercado é o **relatório mensal XLSX da IQVIA**
+(cross-tab EAN × brick × bandeira × mês), enviado pelo comprador na tela `/mercado` e
+gravado no banco `engine` (`MercadoObservacoes` etc. — ver CLAUDE.md §4). O extrator não
+gera mais o `mercado_iqvia.csv` (que sempre saiu vazio, por não ter fonte no ERP) e a
+tabela `Stage.dbo.MercadoIqvia` foi removida. A única relação com o PBS que restou é o
+**CNPJ** em `Lojas`, extraído de `ENTIDADES` (ver seção Lojas), que faz a ponte entre as
+lojas da rede e o painel de PDVs do relatório.
 
 ---
 
@@ -511,6 +543,7 @@ Fonte externa (clima/gripe). **Fora do PBS.**
   | mercado_iqvia.csv | 0 (só header, por design) |
 
   **Quatro defeitos só apareceram com dado real** (nenhum seria pego por metadados):
+  *(nota F16: a linha `mercado_iqvia.csv` acima é histórica — o arquivo saiu do ZIP)*
   1. **Logon trigger** — o PBS recusa conexão por `APP_NAME()`. Um `ApplicationName`
      próprio na connection string era barrado ("falha devido à execução do acionador").
      Agora é configurável em `extrator.config.json` (vazio = default do provider), com
@@ -518,3 +551,11 @@ Fonte externa (clima/gripe). **Fora do PBS.**
   2. **`ESTOQUE_SALDO` 100% NULL** → saldo reconstruído a partir de `ESTOQUE_ATUAL`.
   3. **Filtro de bonificação invertido** → zerava as vendas.
   4. **Faixas de promoção duplicando linhas** → colapsadas no maior desconto.
+- **2026-08-27 (F16):** Documento posto em dia com o extrator real e com a F16:
+  (1) nova seção **"Objetos PBS que o extrator toca"** — lista consolidada para o GRANT do
+  DBA, derivada de `Queries/*.sql`; ela **não existia** e as tabelas de sugestão
+  (`SUGESTOES_COMPRAS`, `SUGESTOES_COMPRAS_RESULTADO`, `TIPOS_CALCULO_SUGESTAO`, F12/F14)
+  eram lidas sem constar aqui. (2) `Lojas.Cnpj` novo, via `ENTIDADES.CGC` — nome da coluna
+  **assumido**, confirmar na Retiro/NatusFarma. (3) `MercadoIqvia` saiu do escopo do
+  extrator: o dado de mercado agora é o XLSX da IQVIA enviado em `/mercado`, gravado no
+  `engine`; `Stage.dbo.MercadoIqvia` foi removida.

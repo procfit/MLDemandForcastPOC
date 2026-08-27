@@ -13,7 +13,8 @@ internal sealed record LojaRow(
     string Perfil,
     byte DiasOperacaoSemana,
     DateOnly? DataAbertura,
-    bool Ativo);
+    bool Ativo,
+    string Cnpj);
 
 internal sealed record ProdutoRow(
     string Sku,
@@ -58,10 +59,3 @@ internal sealed record PromocaoRow(
     int? LojaId,
     string Tipo,
     decimal DescontoPct);
-
-internal sealed record MercadoIqviaRow(
-    DateOnly Mes,
-    string PrincipioAtivo,
-    string UF,
-    decimal DemandaMercadoUnidades,
-    decimal? MarketShareCategoria);

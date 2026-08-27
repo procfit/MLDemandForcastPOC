@@ -85,14 +85,6 @@ erDiagram
         decimal DescontoPct
     }
 
-    MercadoIqvia {
-        date Mes PK
-        nvarchar PrincipioAtivo PK
-        char UF PK
-        decimal DemandaMercadoUnidades
-        decimal MarketShareCategoria
-    }
-
     Lojas ||--o{ Vendas : "tem"
     Lojas ||--o{ EstoquesDiarios : "tem"
     Lojas ||--o{ Compras : "tem"
@@ -104,7 +96,7 @@ erDiagram
     Produtos ||--o{ Promocoes : "em promoção"
 ```
 
-`MercadoIqvia` não tem FK explícita — relaciona-se com `Produtos.PrincipioAtivo` por valor (denormalização proposital para o sinal de mercado mensal).
+Os dados de mercado da IQVIA **não vivem neste banco** desde a F16: o ciclo de vida deles é o oposto do Stage (sobrevivem aos imports e são reaproveitados por várias comparações), então moram no `engine` (`MercadoCargas`, `MercadoObservacoes`, `MercadoProdutos`, `MercadoBrickPdvs`) — ver CLAUDE.md §4. A antiga `dbo.MercadoIqvia` foi removida.
 
 ---
 
@@ -125,6 +117,7 @@ Mestre de pontos de venda da rede.
 | `DiasOperacaoSemana` | TINYINT | NOT NULL | Default 7. Quantos dias por semana a loja opera. |
 | `DataAbertura` | DATE | NULL | Data de inauguração. Útil para distinguir lojas novas (cold-start). |
 | `Ativo` | BIT | NOT NULL | Default 1. Lojas fechadas ficam com `0` mas o histórico permanece. |
+| `Cnpj` | CHAR(14) | NULL | Só dígitos, sem máscara (F16). Ponte com o painel de PDVs da IQVIA (`engine.MercadoBrickPdvs`). NULL em ZIPs antigos; loja sem CNPJ importa normalmente e fica fora do sinal de mercado. |
 
 Sem índices secundários (PK é suficiente para o volume de lojas: dezenas a centenas).
 
@@ -141,7 +134,7 @@ Mestre de SKUs.
 | `Categoria` | NVARCHAR(80) | NULL | Ex.: "Medicamentos", "Higiene Pessoal". |
 | `Subcategoria` | NVARCHAR(80) | NULL | Ex.: "Antitérmicos", "Antialérgicos". |
 | `Fabricante` | NVARCHAR(120) | NULL | Indústria farmacêutica. |
-| `PrincipioAtivo` | NVARCHAR(200) | NULL | Ex.: "Dipirona Sódica 500mg". Usado para join com `MercadoIqvia`. |
+| `PrincipioAtivo` | NVARCHAR(200) | NULL | Ex.: "Dipirona Sódica 500mg". Entra como feature de hierarquia no modelo. |
 | `Apresentacao` | NVARCHAR(120) | NULL | Ex.: "20cp 500mg", "Frasco 100ml". |
 | `Ean` | VARCHAR(14) | NULL | Código de barras (até 14 dígitos GTIN-14). |
 | `RegistroAnvisa` | VARCHAR(20) | NULL | Número de registro ANVISA. |
@@ -150,7 +143,7 @@ Mestre de SKUs.
 | `Ativo` | BIT | NOT NULL | Default 1. |
 
 **Índices:**
-- `IX_Produtos_PrincipioAtivo` (filtered: `WHERE PrincipioAtivo IS NOT NULL`) — acelera join com `MercadoIqvia`.
+- `IX_Produtos_PrincipioAtivo` (filtered: `WHERE PrincipioAtivo IS NOT NULL`) — acelera agrupamentos por princípio ativo.
 - `IX_Produtos_Categoria` (filtered: `WHERE Categoria IS NOT NULL`) — acelera filtragem por hierarquia.
 
 ---
@@ -234,26 +227,6 @@ Intervalos de promoção por SKU + opcionalmente loja. Feature crítica para o M
 **Índices:**
 - PK clustered em PromocaoId.
 - `IX_Promocoes_Sku_DataInicio` (Sku, DataInicio, DataFim) INCLUDE (LojaId, DescontoPct) — acelera "promoção vigente em data X para SKU Y".
-
----
-
-### `dbo.MercadoIqvia`
-
-Sinal exógeno de mercado farma. Granularidade **mensal** por princípio ativo × UF. Para POC sem licença IQVIA real, o schema é compatível com geração sintética calibrada.
-
-| Coluna | Tipo | Null | Descrição |
-|---|---|---|---|
-| `Mes` | DATE | NOT NULL | **PK**. Primeiro dia do mês de referência (`yyyy-MM-01`). |
-| `PrincipioAtivo` | NVARCHAR(200) | NOT NULL | **PK**. Junta com `Produtos.PrincipioAtivo` por valor. |
-| `UF` | CHAR(2) | NOT NULL | **PK**. |
-| `DemandaMercadoUnidades` | DECIMAL(18,3) | NOT NULL | Total estimado de unidades no mercado no mês × princípio ativo × UF. |
-| `MarketShareCategoria` | DECIMAL(6,4) | NULL | 0 a 1. Fração da categoria representada pelo princípio ativo na UF. |
-
-**Constraints:**
-- `CK_MercadoIqvia_MarketShare` — `NULL OR (>= 0 AND <= 1)`.
-- `CK_MercadoIqvia_DiaUm` — `DAY(Mes) = 1` (força semântica de "mês como primeiro dia").
-
-**Sem FK** para `Produtos` — IQVIA é dimensão de mercado, não de catálogo da rede. Princípios ativos podem aparecer no IQVIA sem que a rede venda, e vice-versa.
 
 ---
 

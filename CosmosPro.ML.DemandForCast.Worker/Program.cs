@@ -1,6 +1,7 @@
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Worker;
 using CosmosPro.ML.DemandForCast.Worker.Comparison;
+using CosmosPro.ML.DemandForCast.Worker.Mercado;
 using CosmosPro.ML.DemandForCast.Worker.Purchasing;
 using CosmosPro.ML.DemandForCast.Worker.Sessoes;
 using CosmosPro.ML.DemandForCast.Worker.Training;
@@ -21,6 +22,12 @@ builder.AddMinioClient("minio");
 
 builder.Services.AddSingleton<CargaProcessor>();
 builder.Services.AddHostedService<ImportWorker>();
+
+// Dados de mercado da IQVIA (F16): fila própria sobre engine.MercadoCargas. Fila
+// separada do import de vendas porque o ciclo de vida é outro — o dado é da rede e
+// sobrevive aos imports do Stage, reaproveitado por várias comparações.
+builder.Services.AddScoped<MercadoProcessor>();
+builder.Services.AddHostedService<MercadoWorker>();
 
 // Treino do engine de previsão: processador + loop de polling próprio (corre em
 // paralelo ao ImportWorker, mesma fila-pattern sobre engine.TreinoJobs).

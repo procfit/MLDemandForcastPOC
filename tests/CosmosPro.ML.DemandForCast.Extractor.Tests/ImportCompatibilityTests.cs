@@ -43,10 +43,34 @@ public sealed class ImportCompatibilityTests
     [Fact]
     public void Zip_com_arquivos_apenas_header_tambem_e_aceito()
     {
-        // É o caso do mercado_iqvia.csv, que sai sempre vazio por não ter fonte no ERP.
+        // Um recorte sem movimento (loja nova, período curto) produz CSVs só com header.
         using var zip = GerarZip(comLinhas: false);
 
         var resultado = ImportValidator.Validate(zip);
+
+        resultado.Errors.Should().BeEmpty();
+        resultado.IsValid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Zip_anterior_a_F16_com_mercado_iqvia_ainda_e_aceito()
+    {
+        // O arquivo saiu do contrato (o dado de mercado é importado à parte desde a
+        // F16), mas todo ZIP gerado antes disso o traz — entrada desconhecida é
+        // ignorada, não recusada, senão nenhum envio antigo poderia ser reexecutado.
+        var buffer = new MemoryStream();
+        using (var zip = new CsvZipWriter(buffer))
+        {
+            foreach (var arquivo in StageContract.WriteOrder)
+            {
+                using var entry = zip.CreateEntry(arquivo, StageContract.Headers[arquivo]);
+            }
+            using (zip.CreateEntry("mercado_iqvia.csv",
+                ["Mes", "PrincipioAtivo", "UF", "DemandaMercadoUnidades", "MarketShareCategoria"])) { }
+        }
+
+        using var antigo = new MemoryStream(buffer.ToArray());
+        var resultado = ImportValidator.Validate(antigo);
 
         resultado.Errors.Should().BeEmpty();
         resultado.IsValid.Should().BeTrue();

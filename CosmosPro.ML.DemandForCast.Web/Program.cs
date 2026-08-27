@@ -117,6 +117,14 @@ builder.Services.AddHttpClient<ImportsApiClient>(client =>
     client.Timeout = TimeSpan.FromMinutes(10);
 }).RemoveAllResilienceHandlers();
 
+// Sem resiliência pelo mesmo motivo do ImportsApiClient (ver comentário acima): este
+// cliente sobe o XLSX da IQVIA, e retry de POST de upload reenviaria um stream já consumido.
+builder.Services.AddHttpClient<MercadoApiClient>(client =>
+{
+    client.BaseAddress = new("https+http://apiservice");
+    client.Timeout = TimeSpan.FromMinutes(10);
+}).RemoveAllResilienceHandlers();
+
 builder.Services.AddHttpClient<StageApiClient>(client =>
 {
     client.BaseAddress = new("https+http://apiservice");

@@ -188,7 +188,6 @@ public sealed class SimulacaoRedeIntegrationTests(AppHostFixture fixture)
             .WithEstoquesDiarios(estoques)
             .WithCompras(new CompraFaker([lojaId], [SkuA, SkuB], Inicio, Fim, seed: 910).Generate(2))
             .WithPromocoes([])
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], Inicio, Fim, seed: 911).Generate(1))
             .Build();
     }
 }

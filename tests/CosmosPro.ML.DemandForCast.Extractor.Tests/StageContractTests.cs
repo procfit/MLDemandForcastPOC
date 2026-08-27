@@ -19,7 +19,6 @@ public sealed class StageContractTests
         (StageContract.EstoquesDiarios, "EstoquesDiarios"),
         (StageContract.Compras, "Compras"),
         (StageContract.Promocoes, "Promocoes"),
-        (StageContract.MercadoIqvia, "MercadoIqvia"),
         (StageContract.SugestoesCompra, "SugestoesCompra"),
         (StageContract.SugestoesCompraItens, "SugestoesCompraItens"),
     ];

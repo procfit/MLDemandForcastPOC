@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\CosmosPro.ML.DemandForCast.Worker\CosmosPro.ML.DemandForCast.Worker.csproj" />
+    <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Tests.Shared\CosmosPro.ML.DemandForCast.Tests.Shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>

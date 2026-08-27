@@ -76,16 +76,10 @@ internal sealed class ExtractionService
                 rows[StageContract.Compras] = CopyQuery(connection, "compras.sql", StageContract.Compras, zip, lojaIds, request.DataInicial, request.DataFinal, 5, total, progress, ct, skusCsv: skusCsv);
                 rows[StageContract.Promocoes] = CopyQuery(connection, "promocoes.sql", StageContract.Promocoes, zip, lojaIds, request.DataInicial, request.DataFinal, 6, total, progress, ct, skusCsv: skusCsv);
 
-                // Sem fonte no ERP: o IQVIA é dado de mercado externo. O arquivo
-                // precisa existir porque o validador do import exige os sete CSVs.
-                using (zip.CreateEntry(StageContract.MercadoIqvia, StageContract.Headers[StageContract.MercadoIqvia])) { }
-                rows[StageContract.MercadoIqvia] = 0;
-                progress.Report(new ExtractionProgress(StageContract.MercadoIqvia, 7, total, 0));
-
-                var cabecalho = CopySugestaoHeader(connection, zip, request.SugestaoId, 8, total, progress, ct)
+                var cabecalho = CopySugestaoHeader(connection, zip, request.SugestaoId, 7, total, progress, ct)
                     ?? throw new FalhaDeDominioException(new SugestaoNaoEncontradaErro(request.SugestaoId));
                 rows[StageContract.SugestoesCompra] = 1;
-                rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, lojaIds, 9, total, progress, ct);
+                rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, lojaIds, 8, total, progress, ct);
 
                 zip.WriteText(ZipManifest.EntryName, ZipManifest.Escrever(new ZipManifest(
                     request.SugestaoId,

@@ -30,7 +30,6 @@ internal sealed class CargaProcessor(
         "EstoquesDiarios",
         "Compras",
         "Promocoes",
-        "MercadoIqvia",
         "SinaisExternos",
         "Produtos",
         "Lojas",
@@ -45,7 +44,8 @@ internal sealed class CargaProcessor(
         ("estoques_diarios.csv", "EstoquesDiarios"),
         ("compras.csv", "Compras"),
         ("promocoes.csv", "Promocoes"),
-        ("mercado_iqvia.csv", "MercadoIqvia"),
+        // ZIPs anteriores à F16 trazem mercado_iqvia.csv; ele é simplesmente ignorado —
+        // o dado de mercado deixou de ser tabela do Stage (vive no engine, por rede).
         // Opcional (sem FK): ZIPs antigos podem não trazer — BulkInsert pula se ausente.
         ("sinais_externos.csv", "SinaisExternos"),
         // Opcionais: só quem extrai do PBS traz sugestão. Cabeçalho antes dos itens

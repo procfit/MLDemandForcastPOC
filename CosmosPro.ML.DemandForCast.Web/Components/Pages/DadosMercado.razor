@@ -1,0 +1,278 @@
+@page "/mercado"
+@using System.Text.Json
+@using CosmosPro.ML.DemandForCast.Engine.Mercado
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject MercadoApiClient MercadoApi
+@inject NotificationService Notifications
+@inject TooltipService TooltipService
+@implements IAsyncDisposable
+
+<PageTitle>Dados de mercado</PageTitle>
+
+<RadzenStack Orientation="Orientation.Vertical" Gap="1.5rem">
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Dados de mercado (IQVIA)</RadzenText>
+        <HelpTip Position="TooltipPosition.Bottom" Text="Envie aqui o relatório mensal da IQVIA (.xlsx). O dado é da sua rede, fica guardado entre os envios e é reaproveitado pelas comparações — não precisa reenviar a cada comparação. Cada arquivo traz o mês e o mesmo mês do ano anterior; reenviar um mês substitui só aquele mês." />
+        <div style="flex: 1"></div>
+        <InputFile id="hidden-xlsx-input" OnChange="OnFileSelected" accept=".xlsx" style="display: none" disabled="@_uploading" />
+        <RadzenButton Click="@TriggerFilePicker"
+                      Icon="@(_uploading ? "hourglass_empty" : "upload_file")"
+                      Text="@(_uploading ? "Enviando…" : "Enviar relatório")"
+                      ButtonStyle="ButtonStyle.Primary"
+                      Disabled="@_uploading"
+                      data-test="mercado-upload-button"
+                      MouseEnter="@(a => ShowTip(a, "Sobe o .xlsx da IQVIA. O arquivo é conferido (formato + aba de dados) antes de entrar na fila de processamento."))" />
+        <RadzenButton Click="@RefreshAsync" Icon="refresh" Variant="Variant.Text" Disabled="@_loading"
+                      MouseEnter="@(a => ShowTip(a, "Atualiza agora. A tela também atualiza sozinha a cada 3 segundos."))" />
+    </RadzenStack>
+
+    @if (_erro is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter"
+                     AllowClose="false" data-test="mercado-erro">@_erro</RadzenAlert>
+    }
+
+    <RadzenCard Variant="Variant.Outlined">
+        <RadzenStack Orientation="Orientation.Vertical" Gap="1rem">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">O que está carregado</RadzenText>
+                <HelpTip Text="Uma linha por mês × brick (micro-região da IQVIA). É a cobertura real do banco: mês que não aparece aqui nunca foi enviado. Dentro de um mês carregado, produto sem linha significa venda zero." Size="0.9rem" />
+            </RadzenStack>
+            <RadzenDataGrid TItem="MercadoCoberturaView"
+                            Data="@_cobertura"
+                            AllowPaging="true"
+                            PageSize="12"
+                            AllowSorting="true"
+                            Density="Density.Compact"
+                            EmptyText="Nenhum dado de mercado carregado ainda. Envie o primeiro relatório da IQVIA."
+                            IsLoading="@(_loading && _cobertura.Count == 0)">
+                <Columns>
+                    <RadzenDataGridColumn TItem="MercadoCoberturaView" Property="Mes" Title="Mês" Width="120px">
+                        <Template Context="c">@c.Mes.ToString("MM/yyyy")</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="MercadoCoberturaView" Property="Brick" Title="Brick" />
+                    <RadzenDataGridColumn TItem="MercadoCoberturaView" Property="Observacoes" Title="Observações" Width="140px" TextAlign="TextAlign.Right">
+                        <Template Context="c">@c.Observacoes.ToString("N0")</Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="MercadoCoberturaView" Property="Unidades" Title="Unidades no mês" Width="160px" TextAlign="TextAlign.Right">
+                        <Template Context="c">@c.Unidades.ToString("N0")</Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenStack>
+    </RadzenCard>
+
+    <RadzenCard Variant="Variant.Outlined">
+        <RadzenStack Orientation="Orientation.Vertical" Gap="1rem">
+            <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Envios recentes</RadzenText>
+            <RadzenDataGrid TItem="MercadoCargaView"
+                            Data="@_cargas"
+                            AllowPaging="true"
+                            PageSize="10"
+                            AllowSorting="true"
+                            Density="Density.Compact"
+                            EmptyText="Nenhum envio registrado ainda."
+                            IsLoading="@(_loading && _cargas.Count == 0)">
+                <Columns>
+                    <RadzenDataGridColumn TItem="MercadoCargaView" Property="Status" Title="Status" Width="140px">
+                        <Template Context="c">
+                            <RadzenBadge Text="@c.Status" BadgeStyle="@BadgeStyleFor(c.Status)" Shade="Shade.Lighter" />
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="MercadoCargaView" Property="NomeArquivoOriginal" Title="Arquivo" />
+                    <RadzenDataGridColumn TItem="MercadoCargaView" Property="DataAgendamento" Title="Enviado" Width="160px">
+                        <Template Context="c">
+                            <small>@c.DataAgendamento.ToLocalTime().ToString("dd/MM HH:mm:ss")</small>
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="MercadoCargaView" Title="Cobertura" Sortable="false">
+                        <HeaderTemplate>
+                            <span>Cobertura</span>
+                            <HelpTip Text="O que o arquivo declarou ao ser processado: meses e bricks presentes nas colunas. Linhas sem código de barras são descartadas e contadas aqui." Size="0.85rem" />
+                        </HeaderTemplate>
+                        <Template Context="c">
+                            <small>@DescreverResumo(c)</small>
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="MercadoCargaView" Property="LinhasImportadas" Title="Observações" Width="130px" TextAlign="TextAlign.Right">
+                        <Template Context="c">
+                            @(c.LinhasImportadas?.ToString("N0") ?? "—")
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="MercadoCargaView" Property="MensagemErro" Title="Erro">
+                        <Template Context="c">
+                            <small style="color: #c62828">@c.MensagemErro</small>
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenStack>
+    </RadzenCard>
+</RadzenStack>
+
+@code {
+    private const long MaxBytes = 100L * 1024 * 1024;
+
+    private List<MercadoCargaView> _cargas = [];
+    private List<MercadoCoberturaView> _cobertura = [];
+    private string? _erro;
+    private bool _loading;
+    private bool _uploading;
+    private Timer? _timer;
+    private readonly CancellationTokenSource _cts = new();
+
+    [Inject] private IJSRuntime JS { get; set; } = null!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        _timer = new Timer(async _ =>
+        {
+            try
+            {
+                await InvokeAsync(RefreshAsync);
+            }
+            catch
+            {
+                // Tick pode disparar durante/depois do teardown do circuito — nunca
+                // deixe escapar pro thread pool como async void não tratado.
+            }
+        }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+    }
+
+    /// <summary>
+    /// As duas consultas são independentes de propósito. Agrupá-las num try só, com as
+    /// atribuições depois dos dois awaits, faz a que falha apagar também a seção da que
+    /// funcionou — e como o polling engolia a exceção, a tela ficava inteiramente vazia
+    /// enquanto o banco tinha 175 mil linhas. Falha de uma seção agora aparece.
+    /// </summary>
+    private async Task RefreshAsync()
+    {
+        if (_loading) return;
+        _loading = true;
+        var falhas = new List<string>();
+        try
+        {
+            try { _cargas = [.. await MercadoApi.ListAsync(50, _cts.Token)]; }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { falhas.Add($"envios ({ex.Message})"); }
+
+            try { _cobertura = [.. await MercadoApi.CoberturaAsync(_cts.Token)]; }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { falhas.Add($"cobertura ({ex.Message})"); }
+
+            _erro = falhas.Count == 0 ? null : $"Não foi possível carregar: {string.Join(" e ", falhas)}.";
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ShowTip(ElementReference element, string text) =>
+        TooltipService.Open(element, text, new TooltipOptions
+        {
+            Position = TooltipPosition.Bottom,
+            Duration = 6000,
+            Style = "max-width: 320px;",
+        });
+
+    private async Task TriggerFilePicker()
+    {
+        await JS.InvokeVoidAsync("clickElementById", "hidden-xlsx-input");
+    }
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        if (e.FileCount == 0) return;
+        var file = e.File;
+        if (file is null) return;
+
+        _uploading = true;
+        StateHasChanged();
+        try
+        {
+            await using var stream = file.OpenReadStream(MaxBytes);
+            var result = await MercadoApi.UploadAsync(stream, file.Name, file.Size, _cts.Token);
+
+            if (result.Success)
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Relatório enfileirado",
+                    Detail = "O arquivo entrou na fila de processamento; a cobertura aparece aqui quando concluir.",
+                    Duration = 5000,
+                });
+                await RefreshAsync();
+            }
+            else
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Error,
+                    Summary = "Falha na validação",
+                    Detail = string.Join(" · ", result.Errors ?? []),
+                    Duration = 8000,
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Erro inesperado",
+                Detail = ex.Message,
+                Duration = 8000,
+            });
+        }
+        finally
+        {
+            _uploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string DescreverResumo(MercadoCargaView c)
+    {
+        if (c.ResumoJson is null) return "—";
+        MercadoCargaResumo? r;
+        try
+        {
+            r = JsonSerializer.Deserialize<MercadoCargaResumo>(c.ResumoJson, JsonSerializerOptions.Web);
+        }
+        catch (JsonException)
+        {
+            return "—";
+        }
+        if (r is null) return "—";
+
+        var meses = string.Join(", ", r.Meses.Select(m => m.ToString("MM/yyyy")));
+        var texto = $"{meses} · {r.Bricks.Count} brick(s)";
+        if (r.LinhasSemEan > 0) texto += $" · {r.LinhasSemEan} linha(s) sem EAN descartada(s)";
+        return texto;
+    }
+
+    private static BadgeStyle BadgeStyleFor(string status) => status switch
+    {
+        "Pendente" => BadgeStyle.Secondary,
+        "Processando" => BadgeStyle.Info,
+        "Concluida" => BadgeStyle.Success,
+        "Falha" => BadgeStyle.Danger,
+        _ => BadgeStyle.Light,
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_timer is not null)
+        {
+            await _timer.DisposeAsync();
+        }
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

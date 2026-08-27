@@ -6,7 +6,7 @@ using CosmosPro.ML.DemandForCast.Tests.Shared.Fakers;
 namespace CosmosPro.ML.DemandForCast.Tests.Shared.Csv;
 
 /// <summary>
-/// Constrói um ZIP em memória com os 7 CSVs esperados pelo endpoint de import.
+/// Constrói um ZIP em memória com os 6 CSVs esperados pelo endpoint de import.
 /// Compõe rows tipadas (geradas por fakers) em arquivos CSV com separador `,`,
 /// formato ISO de data, ponto decimal — o que o validator e o worker esperam.
 /// </summary>
@@ -15,8 +15,8 @@ public sealed class CsvZipBuilder
     private readonly Dictionary<string, string> _files = new(StringComparer.OrdinalIgnoreCase);
 
     public CsvZipBuilder WithLojas(IReadOnlyList<LojaRow> rows) => Add("lojas.csv", Build(rows,
-        ["LojaId", "Nome", "UF", "Cidade", "Regiao", "Perfil", "DiasOperacaoSemana", "DataAbertura", "Ativo"],
-        r => [r.LojaId, r.Nome, r.UF, r.Cidade, r.Regiao, r.Perfil, r.DiasOperacaoSemana, r.DataAbertura, r.Ativo ? 1 : 0]));
+        ["LojaId", "Nome", "UF", "Cidade", "Regiao", "Perfil", "DiasOperacaoSemana", "DataAbertura", "Ativo", "Cnpj"],
+        r => [r.LojaId, r.Nome, r.UF, r.Cidade, r.Regiao, r.Perfil, r.DiasOperacaoSemana, r.DataAbertura, r.Ativo ? 1 : 0, r.Cnpj]));
 
     public CsvZipBuilder WithProdutos(IReadOnlyList<ProdutoRow> rows) => Add("produtos.csv", Build(rows,
         ["Sku", "Nome", "Categoria", "Subcategoria", "Fabricante", "PrincipioAtivo", "Apresentacao", "Ean", "RegistroAnvisa", "ListaControle", "ClasseTerapeutica", "Ativo"],
@@ -37,10 +37,6 @@ public sealed class CsvZipBuilder
     public CsvZipBuilder WithPromocoes(IReadOnlyList<PromocaoRow> rows) => Add("promocoes.csv", Build(rows,
         ["DataInicio", "DataFim", "Sku", "LojaId", "Tipo", "DescontoPct"],
         r => [r.DataInicio, r.DataFim, r.Sku, r.LojaId, r.Tipo, r.DescontoPct]));
-
-    public CsvZipBuilder WithMercadoIqvia(IReadOnlyList<MercadoIqviaRow> rows) => Add("mercado_iqvia.csv", Build(rows,
-        ["Mes", "PrincipioAtivo", "UF", "DemandaMercadoUnidades", "MarketShareCategoria"],
-        r => [r.Mes, r.PrincipioAtivo, r.UF, r.DemandaMercadoUnidades, r.MarketShareCategoria]));
 
     /// <summary>Substitui o conteúdo bruto de um arquivo já adicionado (para casos de teste de validação).</summary>
     public CsvZipBuilder ReplaceRaw(string fileName, string content)

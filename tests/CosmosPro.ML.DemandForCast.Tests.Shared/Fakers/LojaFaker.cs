@@ -11,7 +11,8 @@ public sealed record LojaRow(
     string? Perfil,
     byte DiasOperacaoSemana,
     DateOnly? DataAbertura,
-    bool Ativo);
+    bool Ativo,
+    string? Cnpj = null);
 
 public sealed class LojaFaker : Faker<LojaRow>
 {
@@ -35,7 +36,10 @@ public sealed class LojaFaker : Faker<LojaRow>
                 DataAbertura: f.Random.Bool(0.9f)
                     ? DateOnly.FromDateTime(f.Date.Past(10, DateTime.UtcNow))
                     : null,
-                Ativo: f.Random.Bool(0.95f));
+                Ativo: f.Random.Bool(0.95f),
+                // Derivado do índice, sem consumir o RNG: sorteio aqui deslocaria a
+                // sequência de todos os fakers seedados que rodam depois deste.
+                Cnpj: $"{7381852 + f.IndexFaker + 1:D8}0001{(f.IndexFaker * 7) % 100:D2}");
         });
     }
 }

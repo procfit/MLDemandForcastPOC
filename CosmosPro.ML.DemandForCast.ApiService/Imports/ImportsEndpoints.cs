@@ -78,9 +78,9 @@ internal static class ImportsEndpoints
         var result = await Task.Run(() => SyntheticDatasetGenerator.Generate(options), ct);
 
         logger.LogInformation(
-            "Dataset gerado em {Duracao}: vendas={V} estoques={E} compras={C} promos={P} iqvia={I} sinais={S} bytes={B}",
+            "Dataset gerado em {Duracao}: vendas={V} estoques={E} compras={C} promos={P} sinais={S} bytes={B}",
             result.Stats.Duration, result.Stats.Vendas, result.Stats.Estoques, result.Stats.Compras,
-            result.Stats.Promocoes, result.Stats.Iqvia, result.Stats.SinaisExternos, result.ZipBytes.Length);
+            result.Stats.Promocoes, result.Stats.SinaisExternos, result.ZipBytes.Length);
 
         var carga = new CargaStage
         {

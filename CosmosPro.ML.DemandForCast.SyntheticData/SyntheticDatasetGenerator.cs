@@ -7,9 +7,9 @@ namespace CosmosPro.ML.DemandForCast.SyntheticData;
 
 /// <summary>
 /// Gera um dataset farma sintético com regras de domínio realistas (ABC,
-/// sazonalidade, promoções, ruptura, IQVIA simulada) e empacota em um ZIP
-/// no formato esperado pelo pipeline de import. Roda em memória; consumidor
-/// pode pegar os bytes e mandar pro fluxo normal de upload.
+/// sazonalidade, promoções, ruptura) e empacota em um ZIP no formato esperado
+/// pelo pipeline de import. Roda em memória; consumidor pode pegar os bytes e
+/// mandar pro fluxo normal de upload.
 /// </summary>
 public static class SyntheticDatasetGenerator
 {
@@ -25,7 +25,6 @@ public static class SyntheticDatasetGenerator
         long Estoques,
         long Compras,
         int Promocoes,
-        int Iqvia,
         int SinaisExternos,
         TimeSpan Duration);
 
@@ -44,7 +43,7 @@ public static class SyntheticDatasetGenerator
 
         var output = new MemoryStream();
         long vendasCount, estoquesCount, comprasCount;
-        int promosCount, iqviaCount, sinaisCount;
+        int promosCount, sinaisCount;
         using (var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
         {
             WriteLojas(zip, lojas);
@@ -52,14 +51,13 @@ public static class SyntheticDatasetGenerator
             (vendasCount, estoquesCount) = WriteVendasEEstoques(zip, lojas, produtos, demand, rng);
             comprasCount = WriteCompras(zip, lojas, produtos, demand, rng);
             promosCount = WritePromocoes(zip, produtos, demand);
-            iqviaCount = WriteMercadoIqvia(zip, lojas, produtos, demand, rng);
             sinaisCount = WriteSinaisExternos(zip, demand, ufs);
             // ZipArchive.Dispose escreve o central directory — ToArray PRECISA vir depois.
         }
         sw.Stop();
         return new Result(
             output.ToArray(),
-            new GenerationStats(lojas.Count, produtos.Count, vendasCount, estoquesCount, comprasCount, promosCount, iqviaCount, sinaisCount, sw.Elapsed));
+            new GenerationStats(lojas.Count, produtos.Count, vendasCount, estoquesCount, comprasCount, promosCount, sinaisCount, sw.Elapsed));
     }
 
     private static StreamWriter OpenCsv(ZipArchive zip, string name)
@@ -72,13 +70,13 @@ public static class SyntheticDatasetGenerator
     private static void WriteLojas(ZipArchive zip, List<LojaRow> lojas)
     {
         using var w = OpenCsv(zip, "lojas.csv");
-        w.WriteLine("LojaId,Nome,UF,Cidade,Regiao,Perfil,DiasOperacaoSemana,DataAbertura,Ativo");
+        w.WriteLine("LojaId,Nome,UF,Cidade,Regiao,Perfil,DiasOperacaoSemana,DataAbertura,Ativo,Cnpj");
         foreach (var l in lojas)
         {
             w.WriteLine(new CsvRowBuilder()
                 .Add(l.LojaId).Add(l.Nome).Add(l.UF).Add(l.Cidade)
                 .Add(l.Regiao).Add(l.Perfil).Add(l.DiasOperacaoSemana)
-                .Add(l.DataAbertura).Add(l.Ativo).Build());
+                .Add(l.DataAbertura).Add(l.Ativo).Add(l.Cnpj).Build());
         }
     }
 
@@ -238,66 +236,6 @@ public static class SyntheticDatasetGenerator
                 .Add((int?)null).Add("Desconto").Add((decimal)promo.Value.Desconto)
                 .Build());
             count++;
-        }
-        return count;
-    }
-
-    private static int WriteMercadoIqvia(
-        ZipArchive zip, List<LojaRow> lojas, List<ProdutoRow> produtos, DemandModel demand, Random rng)
-    {
-        using var w = OpenCsv(zip, "mercado_iqvia.csv");
-        w.WriteLine("Mes,PrincipioAtivo,UF,DemandaMercadoUnidades,MarketShareCategoria");
-
-        // IQVIA agrega por (Mês × PrincípioAtivo × UF). Geramos UM número por mês:
-        // soma de vendas do horizonte para esse princípio × escala (representando
-        // mercado total) + ruído.
-        var ufs = lojas.Select(l => l.UF).Distinct().ToList();
-        var principios = produtos.Select(p => p.PrincipioAtivo).Distinct().ToList();
-
-        var meses = new List<DateOnly>();
-        var cur = new DateOnly(demand.Inicio.Year, demand.Inicio.Month, 1);
-        while (cur <= demand.Fim) { meses.Add(cur); cur = cur.AddMonths(1); }
-
-        // Princípio → subcategoria (pra saber sensibilidade a gripe e correlacionar a IQVIA).
-        var subcatPorPrincipio = produtos
-            .GroupBy(p => p.PrincipioAtivo)
-            .ToDictionary(g => g.Key, g => g.First().Subcategoria, StringComparer.OrdinalIgnoreCase);
-
-        int count = 0;
-        foreach (var m in meses)
-        {
-            // Gripe média do mês por UF (proxy de mercado: a IQVIA "enxerga" o surto).
-            var diasMes = Enumerable.Range(0, DateTime.DaysInMonth(m.Year, m.Month))
-                .Select(d => m.AddDays(d))
-                .Where(d => d >= demand.Inicio && d <= demand.Fim)
-                .ToList();
-
-            foreach (var pa in principios)
-            {
-                var subcat = subcatPorPrincipio.GetValueOrDefault(pa);
-                var (sensG, _) = DemandModel.Sensibilidades(subcat);
-
-                foreach (var uf in ufs)
-                {
-                    // Mercado total base: 5k a 50k unidades/UF/mês com ruído.
-                    var unidades = 5000m + (decimal)(rng.NextDouble() * 45000);
-
-                    // Princípios sensíveis à gripe têm o mercado puxado pelo surto do
-                    // mês — torna a IQVIA um proxy ANTECIPADO (mensal) do sinal de gripe.
-                    if (sensG > 0 && diasMes.Count > 0)
-                    {
-                        var gripeMes = diasMes.Average(d => demand.GripeIndice(uf, d)) / 100.0; // ~0..1.2
-                        unidades *= (decimal)(1.0 + 0.6 * sensG * gripeMes);
-                    }
-
-                    // Share da categoria onde nossa rede atua: 5 a 25%.
-                    var share = 0.05m + (decimal)(rng.NextDouble() * 0.20);
-                    w.WriteLine(new CsvRowBuilder()
-                        .Add(m).Add(pa).Add(uf).Add(Math.Round(unidades, 3)).Add(share)
-                        .Build());
-                    count++;
-                }
-            }
         }
         return count;
     }

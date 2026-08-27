@@ -276,6 +276,166 @@ namespace CosmosPro.ML.DemandForCast.Engine.Migrations
                     b.ToTable("ComparacaoSessaoItens", (string)null);
                 });
 
+            modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.MercadoBrickPdv", b =>
+                {
+                    b.Property<int>("RedeId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Brick")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("Cnpj")
+                        .HasMaxLength(14)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(14)");
+
+                    b.Property<string>("Bandeira")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
+                    b.HasKey("RedeId", "Brick", "Cnpj");
+
+                    b.ToTable("MercadoBrickPdvs", (string)null);
+                });
+
+            modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.MercadoCarga", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("BlobKey")
+                        .IsRequired()
+                        .HasMaxLength(260)
+                        .HasColumnType("nvarchar(260)");
+
+                    b.Property<DateTimeOffset>("DataAgendamento")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("DataConclusao")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("DataInicioProcessamento")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<long?>("LinhasImportadas")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("MensagemErro")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("NomeArquivoOriginal")
+                        .IsRequired()
+                        .HasMaxLength(260)
+                        .HasColumnType("nvarchar(260)");
+
+                    b.Property<int>("RedeId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ResumoJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("UsuarioId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RedeId", "DataAgendamento")
+                        .HasDatabaseName("IX_MercadoCargas_Rede_DataAgendamento");
+
+                    b.HasIndex("Status", "DataAgendamento")
+                        .HasDatabaseName("IX_MercadoCargas_Status_DataAgendamento");
+
+                    b.ToTable("MercadoCargas", (string)null);
+                });
+
+            modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.MercadoObservacao", b =>
+                {
+                    b.Property<int>("RedeId")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("Mes")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Brick")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("Bandeira")
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
+                    b.Property<string>("Ean")
+                        .HasMaxLength(14)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(14)");
+
+                    b.Property<decimal>("Unidades")
+                        .HasPrecision(15, 3)
+                        .HasColumnType("decimal(15,3)");
+
+                    b.Property<decimal>("ValorCpp")
+                        .HasPrecision(14, 2)
+                        .HasColumnType("decimal(14,2)");
+
+                    b.HasKey("RedeId", "Mes", "Brick", "Bandeira", "Ean");
+
+                    b.ToTable("MercadoObservacoes", (string)null);
+                });
+
+            modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.MercadoProduto", b =>
+                {
+                    b.Property<int>("RedeId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Ean")
+                        .HasMaxLength(14)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(14)");
+
+                    b.Property<string>("AreaFarmacia")
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<string>("Classe4")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("DescricaoLonga")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("Forma3")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("Laboratorio")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<string>("Molecula")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("Nec1")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.HasKey("RedeId", "Ean");
+
+                    b.ToTable("MercadoProdutos", (string)null);
+                });
+
             modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.Questionario", b =>
                 {
                     b.Property<Guid>("Id")
@@ -773,6 +933,42 @@ namespace CosmosPro.ML.DemandForCast.Engine.Migrations
                         .WithMany()
                         .HasForeignKey("SessaoId")
                         .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.MercadoBrickPdv", b =>
+                {
+                    b.HasOne("CosmosPro.ML.DemandForCast.Engine.Entities.Rede", null)
+                        .WithMany()
+                        .HasForeignKey("RedeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.MercadoCarga", b =>
+                {
+                    b.HasOne("CosmosPro.ML.DemandForCast.Engine.Entities.Rede", null)
+                        .WithMany()
+                        .HasForeignKey("RedeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.MercadoObservacao", b =>
+                {
+                    b.HasOne("CosmosPro.ML.DemandForCast.Engine.Entities.Rede", null)
+                        .WithMany()
+                        .HasForeignKey("RedeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("CosmosPro.ML.DemandForCast.Engine.Entities.MercadoProduto", b =>
+                {
+                    b.HasOne("CosmosPro.ML.DemandForCast.Engine.Entities.Rede", null)
+                        .WithMany()
+                        .HasForeignKey("RedeId")
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
 

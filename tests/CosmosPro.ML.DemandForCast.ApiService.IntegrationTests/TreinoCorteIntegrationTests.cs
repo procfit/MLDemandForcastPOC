@@ -238,7 +238,6 @@ public sealed class TreinoCorteIntegrationTests(AppHostFixture fixture)
             .WithEstoquesDiarios(estoques)
             .WithCompras(new CompraFaker([LojaId], [SkuA, SkuB], Inicio, Fim, seed: 900).Generate(2))
             .WithPromocoes(promocoes)
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], Inicio, Fim, seed: 901).Generate(1))
             .Build();
     }
 }

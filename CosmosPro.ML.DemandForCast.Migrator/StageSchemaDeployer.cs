@@ -43,7 +43,11 @@ internal sealed class StageSchemaDeployer(ILogger<StageSchemaDeployer> logger)
         var servicos = new DacServices(alvo.ConnectionString);
         servicos.Message += (_, e) => logger.LogInformation("Stage/DacFx: {Mensagem}", e.Message);
 
-        servicos.Deploy(pacote, nomeBanco, upgradeExisting: true, options: null, cancellationToken: ct);
+        // O Stage é 100% declarado no .sqlproj, então tabela que sai do source deve
+        // sair do banco também — sem isto, dbo.MercadoIqvia (removida na F16) ficaria
+        // órfã em todo banco já provisionado, com schema que ninguém mais mantém.
+        var opcoes = new DacDeployOptions { DropObjectsNotInSource = true };
+        servicos.Deploy(pacote, nomeBanco, upgradeExisting: true, options: opcoes, cancellationToken: ct);
 
         logger.LogInformation("Stage: schema publicado.");
     }

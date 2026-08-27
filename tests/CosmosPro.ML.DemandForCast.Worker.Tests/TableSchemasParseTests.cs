@@ -115,9 +115,9 @@ public sealed class TableSchemasBuildEmptyTests
     }
 
     [Fact]
-    public void Todas_as_7_tabelas_estao_definidas()
+    public void Todas_as_tabelas_do_zip_estao_definidas()
     {
-        var expectedTables = new[] { "Lojas", "Produtos", "Vendas", "EstoquesDiarios", "Compras", "Promocoes", "MercadoIqvia" };
+        var expectedTables = new[] { "Lojas", "Produtos", "Vendas", "EstoquesDiarios", "Compras", "Promocoes" };
         foreach (var t in expectedTables)
         {
             TableSchemas.ByTable.Should().ContainKey(t);

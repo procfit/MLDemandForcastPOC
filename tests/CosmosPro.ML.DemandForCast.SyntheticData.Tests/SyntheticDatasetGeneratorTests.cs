@@ -26,7 +26,7 @@ public sealed class SyntheticDatasetGeneratorTests
         var names = zip.Entries.Select(e => e.Name).ToList();
         names.Should().BeEquivalentTo([
             "lojas.csv", "produtos.csv", "vendas.csv", "estoques_diarios.csv",
-            "compras.csv", "promocoes.csv", "mercado_iqvia.csv", "sinais_externos.csv"]);
+            "compras.csv", "promocoes.csv", "sinais_externos.csv"]);
     }
 
     [Fact]
@@ -35,13 +35,12 @@ public sealed class SyntheticDatasetGeneratorTests
         var result = SyntheticDatasetGenerator.Generate(SmallOptions);
         var headers = ReadFirstLineOfEachCsv(result.ZipBytes);
 
-        headers["lojas.csv"].Should().Be("LojaId,Nome,UF,Cidade,Regiao,Perfil,DiasOperacaoSemana,DataAbertura,Ativo");
+        headers["lojas.csv"].Should().Be("LojaId,Nome,UF,Cidade,Regiao,Perfil,DiasOperacaoSemana,DataAbertura,Ativo,Cnpj");
         headers["produtos.csv"].Should().Be("Sku,Nome,Categoria,Subcategoria,Fabricante,PrincipioAtivo,Apresentacao,Ean,RegistroAnvisa,ListaControle,ClasseTerapeutica,Ativo");
         headers["vendas.csv"].Should().Be("Data,LojaId,Sku,Quantidade,PrecoUnitario,ValorTotal");
         headers["estoques_diarios.csv"].Should().Be("Data,LojaId,Sku,QuantidadeEmEstoque");
         headers["compras.csv"].Should().Be("DataPedido,DataRecebimento,LojaId,Sku,Quantidade,Fornecedor");
         headers["promocoes.csv"].Should().Be("DataInicio,DataFim,Sku,LojaId,Tipo,DescontoPct");
-        headers["mercado_iqvia.csv"].Should().Be("Mes,PrincipioAtivo,UF,DemandaMercadoUnidades,MarketShareCategoria");
         headers["sinais_externos.csv"].Should().Be("Data,Geografia,Tipo,Valor");
     }
 
@@ -118,7 +117,6 @@ public sealed class SyntheticDatasetGeneratorTests
         result.Stats.Produtos.Should().Be(5);
         result.Stats.Vendas.Should().BeGreaterThan(0);
         result.Stats.Estoques.Should().BeGreaterThan(0);
-        result.Stats.Iqvia.Should().BeGreaterThan(0);
         result.Stats.SinaisExternos.Should().BeGreaterThan(0);
     }
 

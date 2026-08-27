@@ -207,7 +207,6 @@ public sealed class ObservacoesDeEstoqueIntegrationTests(AppHostFixture fixture)
             .WithEstoquesDiarios(estoques)
             .WithCompras(new CompraFaker([LojaId], [SkuComVenda], DiaComVenda, DiaEmRuptura, seed: 950).Generate(1))
             .WithPromocoes([])
-            .WithMercadoIqvia(new MercadoIqviaFaker(["Dipirona Sódica"], ["SP"], DiaComVenda, DiaEmRuptura, seed: 951).Generate(1))
             .Build();
     }
 }
