@@ -18,15 +18,29 @@ namespace CosmosPro.ML.DemandForCast.Worker.Training;
 /// </para>
 ///
 /// <para>
-/// <b>Sem teto, o conjunto de observações fica MAIOR que o orçamento ABC, e isso é
-/// deliberado.</b> O orçamento sai de <c>Vendas</c> (SKU que vendeu antes do corte), mas
-/// <see cref="MarkRupturasAsync"/> sem filtro alcança todo SKU de <c>EstoquesDiarios</c> —
-/// inclusive os que nunca venderam. Os dias de ruptura desses SKUs saem do treino
-/// (<c>IsValidTarget = !EmRuptura</c>), mas os dias densificados entre eles entram como
-/// <b>zero legítimo</b>. Na Retiro isso somou 3,3% de linhas (810.797 → 837.466) e é a
-/// explicação mais provável da única melhora observada ao remover o teto (MAE 0,47 → 0,44):
-/// exemplo de demanda zero é justamente o que faltava ao modelo. Não "conserte" isso
-/// escopando a ruptura ao orçamento sem medir antes — pode ser a pista, não o defeito.
+/// <b>Dia com estoque e sem venda É observação, e é o ponto mais importante desta classe.</b>
+/// <see cref="ReadEstoquesAsync"/> materializa toda linha de <c>EstoquesDiarios</c>, não só
+/// as de ruptura: com estoque positivo e nenhuma venda, a demanda observada é <b>zero de
+/// verdade</b> — a única leitura em que "vendeu 0" significa "ninguém quis", que é o
+/// contrário do anti-pattern de tratar ruptura como demanda zero.
+/// </para>
+///
+/// <para>
+/// Sem isso o modelo era ajustado quase só onde houve movimento e cobrado justamente onde
+/// não há: um par (SKU, loja) só entrava na série se aparecesse em <c>Vendas</c> ou num dia
+/// de ruptura, então "tinha na prateleira e não saiu" — a situação da maior parte do
+/// sortimento farma — nunca era exemplo de treino. Medido na sugestão 125595 da Retiro, foi
+/// a resposta ao viés que a comparação expôs: previsão média 0,54 un./dia contra demanda
+/// real 0,069, acima do real em 562 de 563 itens, com piso de 0,347 — um modelo sem folha
+/// que preveja perto de zero.
+/// </para>
+///
+/// <para>
+/// O conjunto de observações fica <b>maior que o orçamento ABC</b> em consequência: o
+/// orçamento sai de <c>Vendas</c>, e aqui entram SKUs que só têm estoque. Eles ganham
+/// <c>ClasseAbc = "C"</c> pelo default — o que é a classificação correta de quem não vendeu
+/// — e não alcançam o serviço, porque <see cref="LoadOrcamentoAbcAsync"/> devolve apenas
+/// quem vendeu.
 /// </para>
 ///
 /// <para>
@@ -82,7 +96,7 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         var acc = new Dictionary<(string Sku, int Loja, DateOnly Data), Mutable>();
 
         await ReadVendasAsync(conn, redeId, escopo, treinoAte, acc, ct);
-        await MarkRupturasAsync(conn, redeId, escopo, treinoAte, acc, ct);
+        await ReadEstoquesAsync(conn, redeId, escopo, treinoAte, acc, ct);
 
         // Materializa as observações, aplicando promoção e atributos estáticos.
         var result = new List<DailyObservation>(acc.Count);
@@ -233,24 +247,39 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         }
     }
 
+    /// <summary>
+    /// Materializa a posição de estoque: todo dia com snapshot vira observação, e a
+    /// quantidade em estoque decide apenas se aquele dia é ruptura.
+    /// </summary>
     /// <remarks>
-    /// Datada e materializante: uma ruptura sem venda correspondente <b>cria</b> a
-    /// observação. Sem o corte, um dia posterior a ele entraria na série mesmo com
-    /// Vendas já filtrada.
+    /// <b>Duas observações opostas saem daqui, e confundi-las inverte o sinal:</b> estoque
+    /// <c>&lt;= 0</c> sem venda é ruptura (<c>EmRuptura = true</c>, excluída do alvo de treino
+    /// porque a venda não mediu a demanda); estoque <c>&gt; 0</c> sem venda é <b>demanda zero
+    /// genuína</b> (<c>EmRuptura = false</c>, alvo válido). É a segunda que faltava ao modelo,
+    /// e é ela que justifica varrer a tabela inteira em vez de só as rupturas.
+    ///
+    /// <para>
+    /// Materializante: cria a observação quando não existe linha de venda no dia. Nunca
+    /// sobrescreve <c>Quantidade</c> de um dia que vendeu — só o rótulo de ruptura, e a PK de
+    /// <c>EstoquesDiarios</c> garante um snapshot por dia, então não há dois valores
+    /// disputando o mesmo dia.
+    /// </para>
+    ///
+    /// <para>
+    /// Datada: sem o corte, um dia posterior a ele entraria na série mesmo com <c>Vendas</c>
+    /// já filtrada — o snapshot de estoque é a porta por onde o vazamento voltaria.
+    /// </para>
     /// </remarks>
-    private static async Task MarkRupturasAsync(
+    private static async Task ReadEstoquesAsync(
         SqlConnection conn, int redeId, EscopoDeSkus escopo, DateOnly? treinoAte,
         Dictionary<(string, int, DateOnly), Mutable> acc, CancellationToken ct)
     {
-        // Dias com estoque <= 0 são ruptura. Podem não ter linha em Vendas (não
-        // houve venda justamente por falta) — criamos a observação com qty 0 e
-        // EmRuptura=true para o backtest NÃO contá-la como demanda zero genuína.
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $@"
-            SELECT e.Data, e.LojaId, e.Sku
+            SELECT e.Data, e.LojaId, e.Sku, e.QuantidadeEmEstoque
             FROM dbo.EstoquesDiarios e
             {escopo.Join("e")}
-            WHERE e.RedeId = @redeId AND e.QuantidadeEmEstoque <= 0
+            WHERE e.RedeId = @redeId
               {CorteData("e.Data", treinoAte, cmd)}";
         cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.CommandTimeout = 600;
@@ -259,7 +288,7 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         {
             var key = (r.GetString(2), r.GetInt32(1), DateOnly.FromDateTime(r.GetDateTime(0)));
             if (!acc.TryGetValue(key, out var m)) { m = new Mutable(); acc[key] = m; }
-            m.EmRuptura = true;
+            m.EmRuptura = (r.IsDBNull(3) ? 0m : r.GetDecimal(3)) <= 0;
         }
     }
 
