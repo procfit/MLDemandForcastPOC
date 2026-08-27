@@ -16,7 +16,7 @@ public class TrainingApiClient(HttpClient httpClient, IRedeContext redeContext)
     /// Nulo treina sobre todo o histórico, que é o comportamento histórico da tela.
     /// </param>
     public async Task<TreinoJobView?> EnqueueAsync(
-        int maxSkus, DateOnly? treinoAte = null, CancellationToken ct = default)
+        int? maxSkus, DateOnly? treinoAte = null, CancellationToken ct = default)
     {
         var redeId = await redeContext.GetRedeIdAtualAsync();
         var resp = await httpClient.PostAsJsonAsync(
@@ -56,7 +56,7 @@ public sealed record TreinoJobView(
     DateTimeOffset DataAgendamento,
     DateTimeOffset? DataInicioProcessamento,
     DateTimeOffset? DataConclusao,
-    int MaxSkus,
+    int? MaxSkus,
     DateOnly? TreinoAte,
     long? FeaturesGeradas,
     string? ModeloBlobKey,

@@ -38,9 +38,11 @@ internal static class TrainingEndpoints
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
 
-        var maxSkus = req?.MaxSkus ?? 80;
-        if (maxSkus is < 1 or > 5000)
-            return Results.BadRequest(new ValidationErrorResponse(["MaxSkus deve estar entre 1 e 5000."]));
+        // Ausente = catálogo inteiro, o default. Um valor só recorta, e o piso é 1 porque
+        // zero não treinaria nada; não há teto superior — ver TreinoJob.MaxSkus.
+        var maxSkus = req?.MaxSkus;
+        if (maxSkus is < 1)
+            return Results.BadRequest(new ValidationErrorResponse(["MaxSkus, quando informado, deve ser >= 1."]));
 
         var job = new TreinoJob
         {
@@ -56,7 +58,7 @@ internal static class TrainingEndpoints
 
         logger.LogInformation(
             "Treino {Id} enfileirado (maxSkus={MaxSkus}, treinoAte={TreinoAte}).",
-            job.Id, maxSkus, job.TreinoAte?.ToString("yyyy-MM-dd") ?? "sem corte");
+            job.Id, maxSkus?.ToString() ?? "todos", job.TreinoAte?.ToString("yyyy-MM-dd") ?? "sem corte");
         return Results.Accepted($"/api/training/{job.Id}", ToView(job));
     }
 
@@ -101,7 +103,7 @@ internal sealed record TreinoJobView(
     DateTimeOffset DataAgendamento,
     DateTimeOffset? DataInicioProcessamento,
     DateTimeOffset? DataConclusao,
-    int MaxSkus,
+    int? MaxSkus,
     DateOnly? TreinoAte,
     long? FeaturesGeradas,
     string? ModeloBlobKey,

@@ -506,7 +506,7 @@
             var jobs = await TrainingApi.ListAsync(50, _cts.Token);
             _treinosConcluidos = jobs
                 .Where(j => j.Status == "Concluido")
-                .Select(j => new TreinoOpt(j.Id, $"{j.DataAgendamento.ToLocalTime():dd/MM HH:mm} · {j.MaxSkus} SKUs · {j.Id.ToString()[..8]}"))
+                .Select(j => new TreinoOpt(j.Id, $"{j.DataAgendamento.ToLocalTime():dd/MM HH:mm} · {(j.MaxSkus?.ToString() ?? "todos os")} SKUs · {j.Id.ToString()[..8]}"))
                 .ToList();
             if (_treinoJobId == Guid.Empty && _treinosConcluidos.Count > 0)
                 _treinoJobId = _treinosConcluidos[0].Id;

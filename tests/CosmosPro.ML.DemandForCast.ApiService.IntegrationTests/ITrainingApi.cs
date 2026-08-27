@@ -31,7 +31,7 @@ public sealed record TreinoJobView(
     DateTimeOffset DataAgendamento,
     DateTimeOffset? DataInicioProcessamento,
     DateTimeOffset? DataConclusao,
-    int MaxSkus,
+    int? MaxSkus,
     DateOnly? TreinoAte,
     long? FeaturesGeradas,
     string? ModeloBlobKey,

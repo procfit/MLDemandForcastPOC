@@ -48,7 +48,9 @@ internal sealed class TreinoWorker(
         var claimed = await ClaimNextAsync(ct);
         if (claimed is null) return false;
 
-        logger.LogInformation("Treinando job {Id} (maxSkus={MaxSkus}).", claimed.Id, claimed.MaxSkus);
+        logger.LogInformation(
+            "Treinando job {Id} (maxSkus={MaxSkus}).",
+            claimed.Id, claimed.MaxSkus?.ToString() ?? "todos");
         try
         {
             var outcome = await processor.ProcessAsync(claimed, ct);
@@ -104,7 +106,7 @@ internal sealed class TreinoWorker(
         return new TreinoJob
         {
             Id = reader.GetGuid(0),
-            MaxSkus = reader.GetInt32(1),
+            MaxSkus = reader.IsDBNull(1) ? null : reader.GetInt32(1),
             // RedeId e TreinoAte não vinham no OUTPUT: o processor recebia RedeId 0 e
             // treinava sobre o Stage de rede nenhuma. Tudo que o TreinoProcessor lê do
             // job precisa estar aqui — o claim é a única leitura da linha.

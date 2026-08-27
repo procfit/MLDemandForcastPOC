@@ -85,7 +85,10 @@ internal sealed class TreinoProcessor(
 
         var result = new TrainingResult(
             GeradoEm: DateTimeOffset.UtcNow,
-            SkusUsados: job.MaxSkus,
+            // O orçamento pedido, não; o número que de fato entrou no ajuste. Com
+            // MaxSkus nulo o pedido não é um número, e mesmo com teto o Stage pode ter
+            // menos SKUs do que ele.
+            SkusUsados: observations.Select(o => o.Sku).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
             TotalObservacoes: observations.Count,
             TotalFeatures: features.Count,
             Folds: Backtest.NumberOfFolds,

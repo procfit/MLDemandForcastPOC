@@ -23,7 +23,20 @@ public sealed class TreinoJob
     /// Limite de SKUs (top por volume de vendas) usados no treino. Mantém o tempo
     /// de treino do POC sob controle — o backtest retreina o LightGBM a cada fold.
     /// </summary>
-    public int MaxSkus { get; set; }
+    /// <summary>
+    /// Orçamento de SKUs do treino, ou <c>null</c> para o <b>catálogo inteiro</b> — o
+    /// default e o único valor usado pelo fluxo da sessão.
+    ///
+    /// <para>
+    /// Nulo significa "sem teto", nunca "não sei" nem "zero SKUs". Um número existe para
+    /// experimento e para teste: recortar pelos SKUs de maior volume treina o modelo numa
+    /// população mais densa do que a que ele vai atender, e o efeito medido disso foi um
+    /// modelo que nunca prevê perto de zero. Não havia limite de modelagem por trás do
+    /// teto de mil que vigorou até aqui — havia os 2100 parâmetros por comando do SQL
+    /// Server, hoje contornados por <c>EscopoDeSkus</c>.
+    /// </para>
+    /// </summary>
+    public int? MaxSkus { get; set; }
 
     /// <summary>
     /// Corte de informação do treino: nenhuma observação com data igual ou posterior

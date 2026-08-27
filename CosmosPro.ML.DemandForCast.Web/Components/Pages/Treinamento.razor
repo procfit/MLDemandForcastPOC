@@ -12,9 +12,10 @@
         <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Treinamento do modelo</RadzenText>
         <HelpTip Position="TooltipPosition.Bottom" Text="Treina os previsores de demanda sobre os dados já importados no Stage e compara, via backtest walk-forward, o LightGBM contra os baselines (naïve sazonal e média móvel). O melhor modelo é salvo para gerar sugestões de compra (F8)." />
         <div style="flex: 1"></div>
-        <RadzenFormField Text="Top SKUs" Variant="Variant.Outlined" Style="width: 120px">
-            <RadzenNumeric @bind-Value="_maxSkus" Min="1" Max="5000" />
+        <RadzenFormField Text="Top SKUs" Variant="Variant.Outlined" Style="width: 130px">
+            <RadzenNumeric @bind-Value="_maxSkus" Min="1" Placeholder="todos" />
         </RadzenFormField>
+        <HelpTip Position="TooltipPosition.Bottom" Text="Deixe vazio (o default) para treinar sobre o catálogo inteiro. Um número recorta os SKUs de MAIOR VOLUME da rede, o que serve para experimento rápido: o modelo passa a aprender numa população mais densa do que a que vai atender, e o efeito medido disso foi um modelo que nunca prevê perto de zero — ele compra demais em item de giro baixo." />
         <RadzenFormField Text="Treinar até (corte)" Variant="Variant.Outlined" Style="width: 190px">
             <RadzenDatePicker @bind-Value="_treinoAte" DateFormat="dd/MM/yyyy" ShowTime="false"
                               AllowClear="true" Placeholder="sem corte" />
@@ -48,7 +49,9 @@
                     <RadzenDataGridColumn TItem="TreinoJobView" Property="DataConclusao" Title="Concluído" Width="120px">
                         <Template Context="j"><small>@(j.DataConclusao?.ToLocalTime().ToString("HH:mm:ss") ?? "—")</small></Template>
                     </RadzenDataGridColumn>
-                    <RadzenDataGridColumn TItem="TreinoJobView" Property="MaxSkus" Title="SKUs" Width="80px" TextAlign="TextAlign.Right" />
+                    <RadzenDataGridColumn TItem="TreinoJobView" Property="MaxSkus" Title="SKUs" Width="80px" TextAlign="TextAlign.Right">
+                        <Template Context="j"><small>@(j.MaxSkus?.ToString() ?? "todos")</small></Template>
+                    </RadzenDataGridColumn>
                     <RadzenDataGridColumn TItem="TreinoJobView" Property="FeaturesGeradas" Title="Features" Width="120px" TextAlign="TextAlign.Right">
                         <HeaderTemplate>
                             <span>Features</span>
@@ -311,7 +314,9 @@
         return rows.OrderByDescending(r => r.N).ThenBy(r => r.Chave, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private int _maxSkus = 80;
+    // Nulo = sem teto, o default: o treino carrega o catálogo inteiro. Um número recorta
+    // pelos SKUs de maior volume — ver o HelpTip do campo e TreinoJob.MaxSkus.
+    private int? _maxSkus;
 
     // Nulo = sem corte, que é o default histórico da tela. A tela de comparativo recusa
     // treino sem corte (aprenderia com o gabarito), e antes deste campo ela mandava
@@ -371,7 +376,7 @@
                 {
                     Severity = NotificationSeverity.Success,
                     Summary = "Treino enfileirado",
-                    Detail = $"O Worker vai processar em background ({_maxSkus} SKUs, " +
+                    Detail = $"O Worker vai processar em background ({(_maxSkus?.ToString() ?? "todos os")} SKUs, " +
                              $"{(corte is null ? "sem corte" : $"corte em {corte:dd/MM/yyyy}")}).",
                     Duration = 5000,
                 });

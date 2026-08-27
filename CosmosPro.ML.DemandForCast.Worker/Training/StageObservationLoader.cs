@@ -10,8 +10,12 @@ namespace CosmosPro.ML.DemandForCast.Worker.Training;
 /// classe ABC do volume de vendas (não vem nos mestres).
 ///
 /// <para>
-/// Limita aos <c>maxSkus</c> SKUs de maior volume — o backtest retreina o LightGBM
-/// a cada fold, então o número de SKUs domina o tempo de treino. Decisão de POC.
+/// <b>Sem teto por default.</b> <c>maxSkus</c> nulo carrega o catálogo inteiro da rede;
+/// um valor restringe aos SKUs de <b>maior volume</b>, o que serve para experimento e
+/// para teste, não para produção. O recorte por volume não é neutro: treinar só nos
+/// densos e servir os esparsos é skew de treino/serviço, e foi o que produziu um modelo
+/// incapaz de prever perto de zero — ver <see cref="EscopoDeSkus"/> para o limite de
+/// implementação que fazia esse teto parecer obrigatório.
 /// </para>
 ///
 /// <para>
@@ -33,21 +37,31 @@ namespace CosmosPro.ML.DemandForCast.Worker.Training;
 /// </summary>
 internal sealed class StageObservationLoader(string connectionString, ILogger logger)
 {
+    /// <param name="maxSkus">
+    /// Orçamento de SKUs, ou <c>null</c> para o catálogo inteiro — ver a nota de classe.
+    /// </param>
     public async Task<IReadOnlyList<DailyObservation>> LoadAsync(
-        int redeId, int maxSkus, DateOnly? treinoAte, CancellationToken ct)
+        int redeId, int? maxSkus, DateOnly? treinoAte, CancellationToken ct)
     {
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(ct);
 
         var (selectedSkus, abcBySku) = await SelectTopSkusAndAbcAsync(conn, redeId, maxSkus, treinoAte, ct);
-        if (selectedSkus.Count == 0)
+        if (abcBySku.Count == 0)
         {
             logger.LogWarning("Stage da rede {RedeId} não tem vendas — nada a treinar.", redeId);
             return [];
         }
+
+        var escopo = selectedSkus is null
+            ? EscopoDeSkus.Todos
+            : await EscopoDeSkus.MaterializarAsync(conn, selectedSkus, ct);
+
         logger.LogInformation(
-            "Treino da rede {RedeId} sobre {N} SKUs (top por volume), corte {Corte}.",
-            redeId, selectedSkus.Count, treinoAte?.ToString("yyyy-MM-dd") ?? "nenhum");
+            "Treino da rede {RedeId} sobre {N} SKU(s) ({Escopo}), corte {Corte}.",
+            redeId, selectedSkus?.Count ?? abcBySku.Count,
+            selectedSkus is null ? "catálogo inteiro" : $"top {maxSkus} por volume",
+            treinoAte?.ToString("yyyy-MM-dd") ?? "nenhum");
 
         var produtos = await LoadProdutosAsync(conn, redeId, ct);
         var lojas = await LoadLojasAsync(conn, redeId, ct);
@@ -56,8 +70,8 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         // Acumulador mutável por (Sku, LojaId, Data).
         var acc = new Dictionary<(string Sku, int Loja, DateOnly Data), Mutable>();
 
-        await ReadVendasAsync(conn, redeId, selectedSkus, treinoAte, acc, ct);
-        await MarkRupturasAsync(conn, redeId, selectedSkus, treinoAte, acc, ct);
+        await ReadVendasAsync(conn, redeId, escopo, treinoAte, acc, ct);
+        await MarkRupturasAsync(conn, redeId, escopo, treinoAte, acc, ct);
 
         // Materializa as observações, aplicando promoção e atributos estáticos.
         var result = new List<DailyObservation>(acc.Count);
@@ -90,22 +104,29 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     }
 
     /// <summary>
-    /// Só o orçamento top-<paramref name="maxSkus"/> e a classe ABC de cada SKU dele, no
-    /// corte pedido. Mesma seleção e mesma regra de classificação de
-    /// <see cref="LoadAsync"/> — é a mesma consulta —, sem montar a série: quem precisa
-    /// apenas do rótulo ABC não deveria pagar a varredura de <c>Vendas</c> linha a linha,
-    /// a de <c>EstoquesDiarios</c> e a materialização de todas as observações.
+    /// Só o orçamento de SKUs e a classe ABC de cada um deles, no corte pedido. Mesma
+    /// seleção e mesma regra de classificação de <see cref="LoadAsync"/> — é a mesma
+    /// consulta —, sem montar a série: quem precisa apenas do rótulo ABC não deveria pagar
+    /// a varredura de <c>Vendas</c> linha a linha, a de <c>EstoquesDiarios</c> e a
+    /// materialização de todas as observações.
+    ///
+    /// <para>
+    /// Com <paramref name="maxSkus"/> nulo o orçamento é todo SKU com venda antes do
+    /// corte. Não é "todo SKU do cadastro": quem nunca vendeu não tem série, não tem
+    /// classe ABC e continua fora — por falta de histórico, agora, e não por teto.
+    /// </para>
     /// </summary>
     public async Task<IReadOnlyDictionary<string, string>> LoadOrcamentoAbcAsync(
-        int redeId, int maxSkus, DateOnly? treinoAte, CancellationToken ct)
+        int redeId, int? maxSkus, DateOnly? treinoAte, CancellationToken ct)
     {
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(ct);
 
         var (selectedSkus, abcBySku) = await SelectTopSkusAndAbcAsync(conn, redeId, maxSkus, treinoAte, ct);
 
-        var result = new Dictionary<string, string>(selectedSkus.Count, StringComparer.OrdinalIgnoreCase);
-        foreach (var sku in selectedSkus)
+        var orcamento = selectedSkus ?? (IEnumerable<string>)abcBySku.Keys;
+        var result = new Dictionary<string, string>(abcBySku.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var sku in orcamento)
             result[sku] = abcBySku.GetValueOrDefault(sku, "C");
 
         logger.LogInformation(
@@ -123,7 +144,9 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
 
     /// <remarks>
     /// O ranking é <b>por rede</b>. Sem o filtro, a rede maior monopolizaria o corte
-    /// de <c>maxSkus</c> e a menor treinaria com quase nada.
+    /// de <c>maxSkus</c> e a menor treinaria com quase nada. Vale também sem teto: a classe
+    /// ABC é cumulativa sobre o volume da rede, então misturar redes recategorizaria os
+    /// itens de todas elas.
     ///
     /// <para>
     /// Respeita <paramref name="treinoAte"/>: tanto a seleção dos SKUs quanto a classe
@@ -132,8 +155,14 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     /// que entra como feature, carregaria o volume de depois do corte.
     /// </para>
     /// </remarks>
-    private static async Task<(HashSet<string> Skus, Dictionary<string, string> Abc)> SelectTopSkusAndAbcAsync(
-        SqlConnection conn, int redeId, int maxSkus, DateOnly? treinoAte, CancellationToken ct)
+    /// <returns>
+    /// <c>Skus</c> é o recorte pedido, ou <b><c>null</c> quando não há teto</b> — ausência
+    /// de filtro, que não é a mesma coisa que um conjunto com todos os SKUs (ver
+    /// <see cref="EscopoDeSkus.Todos"/>). <c>Abc</c> sempre traz a rede inteira, porque a
+    /// classificação é cumulativa e não pode ser calculada sobre o recorte.
+    /// </returns>
+    private static async Task<(HashSet<string>? Skus, Dictionary<string, string> Abc)> SelectTopSkusAndAbcAsync(
+        SqlConnection conn, int redeId, int? maxSkus, DateOnly? treinoAte, CancellationToken ct)
     {
         var totals = new List<(string Sku, decimal Vol)>();
         await using (var cmd = conn.CreateCommand())
@@ -161,20 +190,23 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
             abc[sku] = ratio <= 0.8m ? "A" : ratio <= 0.95m ? "B" : "C";
         }
 
-        var selected = totals.Take(maxSkus).Select(t => t.Sku).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var selected = maxSkus is { } teto
+            ? totals.Take(teto).Select(t => t.Sku).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
         return (selected, abc);
     }
 
     /// <remarks>A variável-alvo. É o vazamento que o corte existe para impedir.</remarks>
     private static async Task ReadVendasAsync(
-        SqlConnection conn, int redeId, HashSet<string> skus, DateOnly? treinoAte,
+        SqlConnection conn, int redeId, EscopoDeSkus escopo, DateOnly? treinoAte,
         Dictionary<(string, int, DateOnly), Mutable> acc, CancellationToken ct)
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $@"
-            SELECT Data, LojaId, Sku, Quantidade, PrecoUnitario
-            FROM dbo.Vendas
-            WHERE RedeId = @redeId AND Sku IN ({InClause(skus, cmd)}) {CorteData("Data", treinoAte, cmd)}";
+            SELECT v.Data, v.LojaId, v.Sku, v.Quantidade, v.PrecoUnitario
+            FROM dbo.Vendas v
+            {escopo.Join("v")}
+            WHERE v.RedeId = @redeId {CorteData("v.Data", treinoAte, cmd)}";
         cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.CommandTimeout = 600;
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -196,7 +228,7 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
     /// Vendas já filtrada.
     /// </remarks>
     private static async Task MarkRupturasAsync(
-        SqlConnection conn, int redeId, HashSet<string> skus, DateOnly? treinoAte,
+        SqlConnection conn, int redeId, EscopoDeSkus escopo, DateOnly? treinoAte,
         Dictionary<(string, int, DateOnly), Mutable> acc, CancellationToken ct)
     {
         // Dias com estoque <= 0 são ruptura. Podem não ter linha em Vendas (não
@@ -204,10 +236,11 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         // EmRuptura=true para o backtest NÃO contá-la como demanda zero genuína.
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $@"
-            SELECT Data, LojaId, Sku
-            FROM dbo.EstoquesDiarios
-            WHERE RedeId = @redeId AND QuantidadeEmEstoque <= 0
-              AND Sku IN ({InClause(skus, cmd)}) {CorteData("Data", treinoAte, cmd)}";
+            SELECT e.Data, e.LojaId, e.Sku
+            FROM dbo.EstoquesDiarios e
+            {escopo.Join("e")}
+            WHERE e.RedeId = @redeId AND e.QuantidadeEmEstoque <= 0
+              {CorteData("e.Data", treinoAte, cmd)}";
         cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.CommandTimeout = 600;
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -322,17 +355,4 @@ internal sealed class StageObservationLoader(string connectionString, ILogger lo
         return $"AND {coluna} < {p}";
     }
 
-    /// <summary>Monta um IN (@s0, @s1, ...) parametrizado e adiciona os parâmetros ao comando.</summary>
-    private static string InClause(HashSet<string> skus, SqlCommand cmd)
-    {
-        var names = new List<string>(skus.Count);
-        int i = 0;
-        foreach (var sku in skus)
-        {
-            var p = $"@s{i++}";
-            names.Add(p);
-            cmd.Parameters.AddWithValue(p, sku);
-        }
-        return string.Join(", ", names);
-    }
 }

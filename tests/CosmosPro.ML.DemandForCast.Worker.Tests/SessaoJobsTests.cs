@@ -89,53 +89,35 @@ public sealed class SessaoJobsTests
         job.Status.Should().Be(TreinoStatus.Pendente);
         job.DataAgendamento.Should().Be(Agora);
         job.Id.Should().NotBeEmpty();
-        job.MaxSkus.Should().BeGreaterThan(0, "o TreinoProcessor usa MaxSkus como orçamento de SKUs; zero não treina nada");
+        job.MaxSkus.Should().BeNull("o treino da sessão carrega o catálogo inteiro — ver o teste do orçamento");
     }
 
     /// <summary>
-    /// O orçamento sai do tamanho da sugestão, não de uma constante. Com número fixo pequeno,
-    /// uma sugestão real do PBS (milhares de SKUs) perderia quase toda a população para
-    /// <c>ItensForaOrcamentoSkus</c> e a comparação sairia vazia por um motivo que não tem nada
-    /// a ver com o método sob teste.
-    /// </summary>
-    [Fact]
-    public void Orcamento_do_treino_acompanha_os_skus_da_sugestao()
-    {
-        var (job, _) = SessaoJobs.Treino(Sessao(), new SugestaoNoStage(1, SkusDistintos: 640), Agora);
-
-        job!.MaxSkus.Should().Be(640,
-            "todo SKU que o ERP avaliou precisa ter chance de entrar no orçamento top-N do treino");
-    }
-
-    /// <summary>
-    /// Teto: o <c>StageObservationLoader</c> manda um parâmetro por SKU num único
-    /// <c>IN (…)</c>, e o SQL Server para em 2100 parâmetros por comando — passar disso não
-    /// deixa o treino lento, quebra o treino. O tempo de ajuste também cresce com o número de
-    /// SKUs, e ninguém mediu isso em dado real ainda.
-    /// </summary>
-    [Fact]
-    public void Orcamento_do_treino_para_no_teto_mesmo_com_sugestao_gigante()
-    {
-        var (job, _) = SessaoJobs.Treino(Sessao(), new SugestaoNoStage(1, SkusDistintos: 45_000), Agora);
-
-        job!.MaxSkus.Should().Be(SessaoJobs.TetoDeSkusDoTreino);
-        job.MaxSkus.Should().BeLessThan(2_000,
-            "acima de ~2000 SKUs o IN (@s0…@sN) do loader estoura o limite de parâmetros do SQL Server");
-    }
-
-    /// <summary>
-    /// Piso: o orçamento escolhe os SKUs de maior volume <b>da rede</b>, não os da sugestão.
-    /// Pedir exatamente 2 porque a sugestão tem 2 itens selecionaria os 2 mais vendidos do
-    /// catálogo — que podem não ser os da sugestão — e a comparação sairia vazia por orçamento.
+    /// <b>O treino da sessão não tem orçamento de SKUs, qualquer que seja o tamanho da
+    /// sugestão.</b> Nulo aqui é "sem teto", não "não sei": o <c>StageObservationLoader</c> lê
+    /// o catálogo inteiro da rede.
+    ///
+    /// <para>
+    /// Antes havia piso (80) e teto (1000), e o teto existia por um limite de implementação —
+    /// o <c>Sku IN (@s0…@sN)</c> gastava um parâmetro por SKU contra os 2100 que o SQL Server
+    /// aceita. O join com tabela temporária (<c>EscopoDeSkus</c>) tirou o limite, e o teto
+    /// tinha custo alto: na primeira sugestão real (Retiro) descartou 54% dos itens para
+    /// <c>ItensForaOrcamentoSkus</c> — por um motivo que não tem nada a ver com o método sob
+    /// teste — e treinou o modelo só na fatia densa do catálogo, que é skew de treino/serviço.
+    /// Um teto de volta aqui reabre os dois problemas de uma vez.
+    /// </para>
     /// </summary>
     [Theory]
     [InlineData(0)]
     [InlineData(2)]
-    public void Orcamento_do_treino_nao_desce_abaixo_do_piso(int skusDaSugestao)
+    [InlineData(640)]
+    [InlineData(45_000)]
+    public void Treino_da_sessao_nao_tem_orcamento_de_skus(int skusDaSugestao)
     {
         var (job, _) = SessaoJobs.Treino(Sessao(), new SugestaoNoStage(1, skusDaSugestao), Agora);
 
-        job!.MaxSkus.Should().Be(SessaoJobs.PisoDeSkusDoTreino);
+        job!.MaxSkus.Should().BeNull(
+            "todo SKU que o ERP avaliou precisa ter chance de entrar na população da comparação");
     }
 
     /// <summary>

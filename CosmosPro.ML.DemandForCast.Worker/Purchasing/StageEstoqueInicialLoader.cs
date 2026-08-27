@@ -1,3 +1,4 @@
+using CosmosPro.ML.DemandForCast.Worker.Training;
 using Microsoft.Data.SqlClient;
 
 namespace CosmosPro.ML.DemandForCast.Worker.Purchasing;
@@ -28,18 +29,22 @@ internal sealed class StageEstoqueInicialLoader(string connectionString, ILogger
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(ct);
 
+        // Join com tabela temporária, e nao Sku IN (@s0, ...): a lista vem dos itens da
+        // simulacao e pode passar dos 2100 parametros que o SQL Server aceita por comando.
+        var escopo = await EscopoDeSkus.MaterializarAsync(conn, skus, ct);
+
         await using var cmd = conn.CreateCommand();
-        var inClause = BuildInClause(skus, cmd);
         cmd.Parameters.AddWithValue("@cutoff", primeiroDiaSimulacao.ToDateTime(TimeOnly.MinValue));
         cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.CommandTimeout = 300;
         cmd.CommandText = $@"
             SELECT Sku, LojaId, QuantidadeEmEstoque
             FROM (
-                SELECT Sku, LojaId, QuantidadeEmEstoque,
-                       ROW_NUMBER() OVER (PARTITION BY Sku, LojaId ORDER BY Data DESC) AS rn
-                FROM dbo.EstoquesDiarios
-                WHERE RedeId = @redeId AND Data < @cutoff AND Sku IN ({inClause})
+                SELECT e.Sku, e.LojaId, e.QuantidadeEmEstoque,
+                       ROW_NUMBER() OVER (PARTITION BY e.Sku, e.LojaId ORDER BY e.Data DESC) AS rn
+                FROM dbo.EstoquesDiarios e
+                {escopo.Join("e")}
+                WHERE e.RedeId = @redeId AND e.Data < @cutoff
             ) t WHERE rn = 1";
 
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -54,16 +59,4 @@ internal sealed class StageEstoqueInicialLoader(string connectionString, ILogger
         return result;
     }
 
-    private static string BuildInClause(IReadOnlyCollection<string> skus, SqlCommand cmd)
-    {
-        var names = new List<string>(skus.Count);
-        int i = 0;
-        foreach (var sku in skus)
-        {
-            var p = $"@s{i++}";
-            names.Add(p);
-            cmd.Parameters.AddWithValue(p, sku);
-        }
-        return string.Join(", ", names);
-    }
 }

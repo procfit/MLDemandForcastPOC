@@ -45,43 +45,6 @@ internal readonly record struct SugestaoNoStage(int Cabecalhos, int SkusDistinto
 internal static class SessaoJobs
 {
     /// <summary>
-    /// Piso do orçamento de SKUs do treino — o default histórico de <c>/api/training/run</c>.
-    ///
-    /// <para>
-    /// Não é redundante com uma sugestão pequena: o orçamento seleciona os SKUs de
-    /// <b>maior volume da rede</b> (<c>StageObservationLoader</c>), não os SKUs da sugestão.
-    /// Pedir exatamente 3 porque a sugestão tem 3 itens escolheria os 3 mais vendidos do
-    /// catálogo, que podem não ser os da sugestão — e a comparação sairia vazia por orçamento.
-    /// O piso mantém a vizinhança em volta deles.
-    /// </para>
-    /// </summary>
-    public const int PisoDeSkusDoTreino = 80;
-
-    /// <summary>
-    /// Teto do orçamento de SKUs do treino.
-    ///
-    /// <para>
-    /// <b>Limite técnico duro primeiro:</b> <c>StageObservationLoader</c> monta
-    /// <c>Sku IN (@s0, …, @sN)</c> com um parâmetro por SKU, e o SQL Server aceita no máximo
-    /// 2100 parâmetros por comando. Passar de ~2000 não degrada, <b>quebra</b> — e quebraria no
-    /// treino, longe de quem escolheu o número. Mil deixa o comando na metade do limite,
-    /// com espaço para o corte de data e para uma coluna nova no futuro.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Trade-off, dito por inteiro:</b> o tempo de treino cresce com SKUs × lojas × dias, e
-    /// o backtest walk-forward reajusta três engines a cada um dos 4 folds. Mil é 12× o piso e
-    /// não foi medido em dado real (Retiro) — o que impede o pior caso de virar espera infinita
-    /// é <see cref="ComparacaoSessao.LimiteDeFaseSemProgresso"/>, não este número. Numa sugestão
-    /// com mais de mil SKUs distintos a comparação passa a medir a <b>fatia de maior volume</b>
-    /// da sugestão, e o resto sai contado em <c>ComparacaoOutput.ItensForaOrcamentoSkus</c>:
-    /// número honesto e visível, não silêncio. Subir o teto exige medir o treino com dado real
-    /// primeiro.
-    /// </para>
-    /// </summary>
-    public const int TetoDeSkusDoTreino = 1000;
-
-    /// <summary>
     /// Job de treino da sessão, com o corte anti-vazamento derivado da sugestão.
     ///
     /// <para>
@@ -100,12 +63,18 @@ internal static class SessaoJobs
     /// Stage é diário, não horário, então não existe recorte fino a fazer.
     /// </para>
     /// </summary>
+/// <remarks>
+    /// <b>O treino da sessão não tem orçamento de SKUs</b> (<c>MaxSkus = null</c>): carrega o
+    /// catálogo inteiro da rede. Qualquer teto aqui deixaria parte da sugestão fora da
+    /// população da comparação — contada em <c>ComparacaoOutput.ItensForaOrcamentoSkus</c> —
+    /// por um motivo que não tem nada a ver com o método sob teste; foi o que aconteceu com o
+    /// teto de mil, que descartou 54% dos itens da primeira sugestão real (Retiro) e, de
+    /// quebra, treinou o modelo só na fatia densa do catálogo. O que impede o pior caso de
+    /// tempo de treino virar espera infinita é
+    /// <see cref="ComparacaoSessao.LimiteDeFaseSemProgresso"/>, não um teto de SKUs.
+    /// </remarks>
     /// <param name="stage">
-    /// Retrato da sugestão no Stage. <c>SkusDistintos</c> dimensiona o orçamento do treino: um
-    /// número fixo pequeno deixa quase toda a sugestão real fora da população da comparação
-    /// (<c>ComparacaoOutput.ItensForaOrcamentoSkus</c>) por um motivo que não tem nada a ver com
-    /// o método sob teste — ver <see cref="PisoDeSkusDoTreino"/> e
-    /// <see cref="TetoDeSkusDoTreino"/>. <c>Cabecalhos</c> é a invariante de "<b>exatamente</b>
+    /// Retrato da sugestão no Stage. <c>Cabecalhos</c> é a invariante de "<b>exatamente</b>
     /// uma sugestão por sessão", checada aqui e não na comparação, nas duas pontas: ver
     /// <see cref="SugestaoAusenteNoEnvio"/> e <see cref="MaisDeUmaSugestao"/>.
     /// </param>
@@ -122,7 +91,7 @@ internal static class SessaoJobs
             RedeId = sessao.RedeId,
             Status = TreinoStatus.Pendente,
             DataAgendamento = agora,
-            MaxSkus = Math.Clamp(stage.SkusDistintos, PisoDeSkusDoTreino, TetoDeSkusDoTreino),
+            MaxSkus = null,
             TreinoAte = DateOnly.FromDateTime(sessao.SugestaoDataHora!.Value),
         }, null);
     }

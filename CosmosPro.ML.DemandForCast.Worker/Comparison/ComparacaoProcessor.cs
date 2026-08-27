@@ -46,8 +46,8 @@ namespace CosmosPro.ML.DemandForCast.Worker.Comparison;
 /// encolhe, mas por motivos que não podem se misturar num balde só: item sem série
 /// no Stage, ou de <c>TipoCalculo</c> 1 sem <c>EstoqueMaximo</c>, sai contado em
 /// <see cref="ComparacaoOutput.ItensForaCamadaA"/> / <see cref="ComparacaoOutput.ItensForaCamadaB"/>;
-/// item cujo SKU não coube no orçamento top-<c>MaxSkus</c> recalculado com o corte
-/// da sugestão sai em <see cref="ComparacaoOutput.ItensForaOrcamentoSkus"/>; item cuja
+/// item cujo SKU não entrou no orçamento de SKUs recalculado com o corte da sugestão
+/// sai em <see cref="ComparacaoOutput.ItensForaOrcamentoSkus"/>; item cuja
 /// janela avança para além do fim do histórico importado sai em
 /// <see cref="ComparacaoOutput.ItensForaCamadaAAlemDoHistorico"/> /
 /// <see cref="ComparacaoOutput.ItensForaCamadaBAlemDoHistorico"/>. Nenhum par que o
@@ -314,11 +314,10 @@ internal sealed class ComparacaoProcessor(
                     });
 
                     // Motivo próprio, checado antes de A/B: um SKU fora do orçamento
-                    // top-MaxSkus recalculado com o corte (ver PreverJanela) não
-                    // tem classe ABC nem feature nenhuma, então cairia nos dois
-                    // balde de A/B ao mesmo tempo por um motivo que não é falta de
-                    // dado nem de horizonte — sai contado à parte e não disputa
-                    // nenhuma camada.
+                    // recalculado com o corte (ver PreverJanela) não tem classe ABC
+                    // nem feature nenhuma, então cairia nos dois baldes de A/B ao
+                    // mesmo tempo por um motivo que não é falta de dado nem de
+                    // horizonte — sai contado à parte e não disputa nenhuma camada.
                     if (!skusNoOrcamento.Contains(item.Sku))
                     {
                         foraOrcamentoSkus++;
@@ -458,7 +457,7 @@ internal sealed class ComparacaoProcessor(
     /// <b>Skew de treino/serviço, não vazamento:</b> este corte é o da SUGESTÃO, não o
     /// <c>TreinoJob.TreinoAte</c> que o modelo de fato usou. Quando o treino termina antes
     /// da sugestão — o caso normal, contrato 1 exige isso —, tanto a ClasseAbc quanto o
-    /// orçamento top-<c>maxSkus</c> vêm de uma janela mais longa do que a que o modelo
+    /// orçamento de SKUs vêm de uma janela mais longa do que a que o modelo
     /// observou no ajuste. Documentado ao lado do skew de preço em
     /// <see cref="ComparacaoOutput.RessalvaPadraoTreinoServe"/>.
     /// </para>
@@ -471,7 +470,7 @@ internal sealed class ComparacaoProcessor(
         IReadOnlyList<DailyObservation> observacoes,
         LightGbmForecastModel modelo)
     {
-        // As chaves de `abc` SÃO o orçamento top-maxSkus recalculado com o corte da
+        // As chaves de `abc` SÃO o orçamento de SKUs recalculado com o corte da
         // sugestão: quem não está aqui não ganhou ClasseAbc nem feature nenhuma, e
         // precisa sair contado à parte em ItensForaOrcamentoSkus — o motivo é
         // orçamento, não falta de série nem de horizonte.
@@ -566,11 +565,16 @@ internal sealed class ComparacaoProcessor(
 /// nota em <see cref="ComparacaoPbs.JanelaFim"/>.
 /// </param>
 /// <param name="ItensForaOrcamentoSkus">
-/// Itens cujo SKU ficou fora do orçamento top-<c>MaxSkus</c> recalculado com o corte da
-/// sugestão (ver <see cref="ComparacaoProcessor.PreverJanela"/>). Distinto de falta
-/// de dado: o SKU pode ter série completa e mesmo assim não caber no orçamento —
-/// sobretudo com <c>MaxSkus</c> pequeno perto de um catálogo grande, ou quando o volume
-/// do SKU só cresce depois do corte de treino.
+/// Itens cujo SKU ficou fora do orçamento de SKUs recalculado com o corte da sugestão
+/// (ver <see cref="ComparacaoProcessor.PreverJanela"/>).
+/// <para>
+/// <b>O significado depende de <c>TreinoJob.MaxSkus</c>, e a diferença é grande.</b> Sem
+/// teto — o default —, cair aqui quer dizer <b>nenhuma venda antes do corte</b>: item que o
+/// ERP avaliou mas cujo SKU não tem série nenhuma para prever, o que é uma constatação
+/// sobre o dado. Com teto, quer dizer que o SKU tem série e mesmo assim não caber no
+/// recorte por volume — uma escolha nossa, não um limite do dado, e a razão pela qual o
+/// teto de mil que vigorou até aqui esvaziava metade da população.
+/// </para>
 /// </param>
 /// <param name="RessalvaTreinoServe">
 /// Ressalva metodológica que precisa acompanhar os números — ver
@@ -627,7 +631,7 @@ internal sealed record ComparacaoOutput(
     ///
     /// <para>
     /// <b>Segundo skew, mesma direção do efeito:</b> a ClasseAbc e o próprio orçamento
-    /// top-<c>MaxSkus</c> servidos por <see cref="ComparacaoProcessor.PreverJanela"/> são
+    /// de SKUs servidos por <see cref="ComparacaoProcessor.PreverJanela"/> são
     /// recalculados com o corte da SUGESTÃO, não com <c>TreinoJob.TreinoAte</c> — o corte que o modelo de fato usou no
     /// ajuste. Quando o treino termina antes da sugestão (o caso normal; o contrato 1
     /// exige isso), o rótulo de ClasseAbc servido ao modelo e a própria composição do

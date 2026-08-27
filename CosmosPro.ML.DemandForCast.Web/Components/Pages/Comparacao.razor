@@ -903,7 +903,7 @@
                 .Where(j => j.Status == "Concluido")
                 .Select(j => new TreinoOpt(
                     j.Id,
-                    $"{j.DataAgendamento.ToLocalTime():dd/MM HH:mm} · {j.MaxSkus} SKUs · corte {(j.TreinoAte?.ToString("dd/MM/yyyy") ?? "nenhum")} · {j.Id.ToString()[..8]}",
+                    $"{j.DataAgendamento.ToLocalTime():dd/MM HH:mm} · {(j.MaxSkus?.ToString() ?? "todos os")} SKUs · corte {(j.TreinoAte?.ToString("dd/MM/yyyy") ?? "nenhum")} · {j.Id.ToString()[..8]}",
                     j.TreinoAte))
                 .ToList();
             if (_treinoJobId == Guid.Empty && _treinos.Count > 0) _treinoJobId = _treinos[0].Id;
