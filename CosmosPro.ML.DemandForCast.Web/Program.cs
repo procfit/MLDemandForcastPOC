@@ -192,6 +192,7 @@ app.MapStaticAssets();
 app.MapLoginEndpoints();
 app.MapExtratorEndpoints();
 app.MapComparacoesDownloadEndpoints();
+app.MapComparacaoItensExcelEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

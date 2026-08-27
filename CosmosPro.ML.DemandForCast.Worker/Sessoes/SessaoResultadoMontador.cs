@@ -31,6 +31,7 @@ namespace CosmosPro.ML.DemandForCast.Worker.Sessoes;
 internal sealed record ItemDoStage(
     SugestaoItemStage Item,
     string? NomeProduto,
+    string? Categoria,
     decimal VendidoNaJanela,
     int DiasSemEstoque,
     int DiasComSnapshot,
@@ -255,6 +256,7 @@ internal static class SessaoResultadoMontador
                 LojaId = item.LojaId,
                 Sku = item.Sku,
                 NomeProduto = linha.NomeProduto,
+                Categoria = linha.Categoria,
                 Curva = string.IsNullOrWhiteSpace(item.Curva) ? null : item.Curva,
                 CompraSugeridaPbs = item.CompraSugerida,
                 CompraSugeridaMl = ml?.Compra,

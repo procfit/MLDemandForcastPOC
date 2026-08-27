@@ -182,6 +182,7 @@ internal sealed class SessaoResultadoMaterializador(
                 populacao.Add(new ItemDoStage(
                     Item: item,
                     NomeProduto: venda.Nome,
+                    Categoria: venda.Categoria,
                     VendidoNaJanela: venda.Unidades,
                     DiasSemEstoque: estoque.DiasSemEstoque,
                     DiasComSnapshot: estoque.DiasComSnapshot,
@@ -193,7 +194,7 @@ internal sealed class SessaoResultadoMaterializador(
         return populacao;
     }
 
-    private readonly record struct VendaDoItem(string? Nome, decimal Unidades);
+    private readonly record struct VendaDoItem(string? Nome, string? Categoria, decimal Unidades);
 
     /// <summary>
     /// Venda de cada item na própria cobertura dele, agregada no servidor.
@@ -218,7 +219,7 @@ internal sealed class SessaoResultadoMaterializador(
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT i.LojaId, i.Sku, p.Nome, ISNULL(SUM(v.Quantidade), 0) AS Vendido
+            SELECT i.LojaId, i.Sku, p.Nome, p.Categoria, ISNULL(SUM(v.Quantidade), 0) AS Vendido
             FROM dbo.SugestoesCompraItens i
             INNER JOIN dbo.SugestoesCompra s
                 ON s.RedeId = i.RedeId AND s.SugestaoId = i.SugestaoId
@@ -230,7 +231,7 @@ internal sealed class SessaoResultadoMaterializador(
                 AND v.Data < DATEADD(day, i.DiasEstoque, CAST(s.DataHora AS date))
             WHERE i.RedeId = @redeId AND s.TipoCalculo = @tipo
               AND s.DataHora >= @inicio AND s.DataHora < @fim
-            GROUP BY i.LojaId, i.Sku, p.Nome
+            GROUP BY i.LojaId, i.Sku, p.Nome, p.Categoria
             """;
         cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.Parameters.AddWithValue("@tipo", tipoCalculo);
@@ -243,7 +244,9 @@ internal sealed class SessaoResultadoMaterializador(
         while (await r.ReadAsync(ct))
         {
             resultado[(r.GetInt32(0), r.GetString(1))] = new VendaDoItem(
-                r.IsDBNull(2) ? null : r.GetString(2), r.GetDecimal(3));
+                r.IsDBNull(2) ? null : r.GetString(2),
+                r.IsDBNull(3) ? null : r.GetString(3),
+                r.GetDecimal(4));
         }
         return resultado;
     }
@@ -421,6 +424,7 @@ internal sealed class SessaoResultadoMaterializador(
         tabela.Columns.Add("LojaId", typeof(int));
         tabela.Columns.Add("Sku", typeof(string));
         tabela.Columns.Add("NomeProduto", typeof(string));
+        tabela.Columns.Add("Categoria", typeof(string));
         tabela.Columns.Add("Curva", typeof(string));
         tabela.Columns.Add("CompraSugeridaPbs", typeof(decimal));
         tabela.Columns.Add("CompraSugeridaMl", typeof(decimal));
@@ -441,6 +445,7 @@ internal sealed class SessaoResultadoMaterializador(
                 item.LojaId,
                 item.Sku,
                 item.NomeProduto ?? (object)DBNull.Value,
+                item.Categoria ?? (object)DBNull.Value,
                 item.Curva ?? (object)DBNull.Value,
                 item.CompraSugeridaPbs,
                 item.CompraSugeridaMl ?? (object)DBNull.Value,

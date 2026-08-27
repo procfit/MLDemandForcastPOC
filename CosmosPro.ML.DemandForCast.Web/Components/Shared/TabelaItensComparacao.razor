@@ -4,14 +4,96 @@
    Nenhuma célula do braço de ML pode virar traço ou zero quando o valor é nulo: nulo é
    "não foi possível calcular" e zero é "o ML mandaria não comprar nada". *@
 @inject ComparacoesApiClient ComparacoesApi
+@inject NavigationManager Nav
 @inject ILogger<TabelaItensComparacao> Logger
 
 <RadzenStack Gap="0.75rem">
     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
         <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">Item por item</RadzenText>
-        <RadzenBadge Text="@($"{_total:N0} itens")" BadgeStyle="BadgeStyle.Light" IsPill="true" />
+        <RadzenBadge Text="@ContagemDoRecorte" BadgeStyle="@(_filtro.Algum ? BadgeStyle.Info : BadgeStyle.Light)" IsPill="true" />
         <HelpTip Text="Cada página é buscada no servidor sob demanda, e clicar num cabeçalho refaz a consulta ordenada no banco. Ordene por 'Sobrou' para achar o que mais encalhou." />
+        <div style="flex: 1"></div>
+        <RadzenButton Click="@ExportarExcel" Icon="table_view" Text="Exportar para Excel"
+                      ButtonStyle="ButtonStyle.Primary" Variant="Variant.Outlined" Size="ButtonSize.Small"
+                      Disabled="@(_total == 0)" data-test="exportar-itens-excel" />
+        <HelpTip Text="Baixa uma planilha .xlsx com EXATAMENTE os itens que os filtros acima selecionaram — não a sugestão inteira. O arquivo traz uma aba de capa dizendo quais filtros estavam aplicados e sobre quantos itens cada total foi apurado, para duas exportações diferentes não ficarem indistinguíveis no seu computador. Onde o ML não pôde ser calculado a célula traz um texto, nunca zero: o Excel se recusa a somá-lo, que é o comportamento correto." />
     </RadzenStack>
+
+    @* --- Filtros combináveis ------------------------------------------------------- *@
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+        <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Filtros</RadzenText>
+        <HelpTip Text="Os filtros são combináveis: escolher Loja 18 e Curva A mostra só os itens que atendem às duas condições ao mesmo tempo. Servem para descobrir onde as diferenças entre PBS e ML se concentram. Departamento não está disponível porque o ERP não exporta esse campo hoje — a extração traz Categoria, e inventar departamento a partir dela seria dado fabricado numa tela de decisão de compra." />
+
+        <RadzenFormField Text="Loja" Variant="Variant.Outlined" Style="width: 140px">
+            <RadzenDropDown TValue="int?" Value="@_filtro.LojaId" Data="@_lojas" AllowClear="true"
+                            Placeholder="todas" Change="@(v => AplicarAsync(_filtro with { LojaId = (int?)v }))" />
+        </RadzenFormField>
+
+        @if (_categoriasDisponiveis.Count > 0)
+        {
+            <RadzenFormField Text="Categoria" Variant="Variant.Outlined" Style="width: 230px">
+                <RadzenDropDown TValue="string" Value="@_filtro.Categoria" Data="@_categoriasDisponiveis"
+                                TextProperty="Rotulo" ValueProperty="Valor" AllowClear="true"
+                                Placeholder="todas" Change="@(v => AplicarAsync(_filtro with { Categoria = (string?)v }))" />
+            </RadzenFormField>
+        }
+
+        @if (_curvasDisponiveis.Count > 0)
+        {
+            <RadzenFormField Text="Curva do ERP" Variant="Variant.Outlined" Style="width: 160px">
+                <RadzenDropDown TValue="string" Value="@_filtro.Curva" Data="@_curvasDisponiveis"
+                                TextProperty="Rotulo" ValueProperty="Valor" AllowClear="true"
+                                Placeholder="todas" Change="@(v => AplicarAsync(_filtro with { Curva = (string?)v }))" />
+            </RadzenFormField>
+        }
+
+        @if (_filtro.Algum)
+        {
+            <RadzenButton Click="@(() => AplicarAsync(FiltroDeItens.Nenhum))" Icon="filter_alt_off"
+                          Text="Limpar filtros" ButtonStyle="ButtonStyle.Base" Variant="Variant.Text"
+                          Size="ButtonSize.Small" data-test="limpar-filtros-itens" />
+        }
+    </RadzenStack>
+
+    @if (_semCategoriaNenhuma)
+    {
+        @* Categoria é gravada na materialização (o Stage é apagado no import seguinte), então
+           comparação executada antes dessa coluna existir não tem o dado. Dizer isso é
+           diferente de exibir um filtro vazio, que passaria por defeito. *@
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+            <strong>Esta comparação não tem categoria nos itens.</strong>
+            <div style="margin-top: 0.35rem">
+                A categoria é gravada quando a comparação é processada, e esta rodou antes de o campo
+                existir. Rode uma comparação nova, com o mesmo arquivo, para poder filtrar por categoria.
+            </div>
+        </RadzenAlert>
+    }
+
+    @* --- Totalizadores do recorte -------------------------------------------------- *@
+    @if (_totais is { } t)
+    {
+        <RadzenCard Variant="Variant.Filled" data-test="totalizadores-itens">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+                <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Totais do recorte</RadzenText>
+                <HelpTip Text="Somam apenas os itens que os filtros selecionaram, e são recalculados no servidor a cada mudança de filtro. As somas do lado do ML falam só dos itens em que ele pôde ser calculado — o número aparece abaixo de cada uma. Onde o ML não tem cálculo o total aparece como 'sem cálculo do ML' e nunca como zero: zero afirmaria que o ML mandaria não comprar nada, que é o contrário de não haver conta." />
+            </RadzenStack>
+
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap" class="rz-mt-2">
+                <Totalizador Rotulo="Itens analisados" Valor="@($"{t.Itens:N0}")" />
+                <Totalizador Rotulo="Compra PBS (un.)" Valor="@Unidades(t.CompraPbsUnidades)" />
+                <Totalizador Rotulo="Compra ML (un.)" Valor="@UnidadesOuSemMl(t.CompraMlUnidades)"
+                             Nota="@ApuradoSobre(t.ItensComCompraMl)" />
+                <Totalizador Rotulo="Sobra PBS (un.)" Valor="@Unidades(t.SobraPbsUnidades)" />
+                <Totalizador Rotulo="Sobra ML (un.)" Valor="@UnidadesOuSemMl(t.SobraMlUnidades)"
+                             Nota="@ApuradoSobre(t.ItensComSobraMl)" />
+                <Totalizador Rotulo="Diferença de sobra (un.)" Valor="@DiferencaUnidades(t.DiferencaSobraUnidades)" />
+                <Totalizador Rotulo="R$ parado PBS" Valor="@Dinheiro(t.SobraPbsValor)"
+                             Nota="@ApuradoSobrePreco(t.ItensComValorPbs, t.Itens)" />
+                <Totalizador Rotulo="R$ parado ML" Valor="@Dinheiro(t.SobraMlValor)"
+                             Nota="@ApuradoSobrePreco(t.ItensComValorMl, t.Itens)" />
+            </RadzenStack>
+        </RadzenCard>
+    }
 
     <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
         "Sobrou" é o que restou na prateleira no fim do período que a compra deveria cobrir: o que foi
@@ -53,6 +135,22 @@
             <RadzenDataGridColumn TItem="SessaoItem" Property="LojaId" Title="Loja" Width="90px" TextAlign="TextAlign.Right" />
             <RadzenDataGridColumn TItem="SessaoItem" Property="Curva" Title="Curva" Width="90px">
                 <Template Context="i">@(string.IsNullOrWhiteSpace(i.Curva) ? "sem curva" : i.Curva)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="Categoria" Title="Categoria" Width="150px" Sortable="false">
+                <HeaderTemplate>
+                    <span>Categoria</span>
+                    <HelpTip Text="Categoria do produto no cadastro do PBS, copiada quando a comparação foi processada. Comparações antigas não têm o dado. Departamento não aparece porque o ERP não exporta esse campo." Size="0.85rem" />
+                </HeaderTemplate>
+                <Template Context="i">
+                    @if (string.IsNullOrWhiteSpace(i.Categoria))
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">sem categoria</span>
+                    }
+                    else
+                    {
+                        @i.Categoria
+                    }
+                </Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="CompraSugeridaPbs" Title="Comprado (PBS)" Width="140px" TextAlign="TextAlign.Right">
                 <Template Context="i">@Unidades(i.CompraSugeridaPbs)</Template>
@@ -157,8 +255,90 @@
     private RadzenDataGrid<SessaoItem> _grid = null!;
     private IReadOnlyList<SessaoItem> _itens = [];
     private int _total;
+    private int _totalSemFiltro;
     private bool _loading;
     private string? _erro;
+
+    private FiltroDeItens _filtro = FiltroDeItens.Nenhum;
+    private TotaisDosItens? _totais;
+    private IReadOnlyList<int> _lojas = [];
+    private IReadOnlyList<OpcaoDeFiltro> _categoriasDisponiveis = [];
+    private IReadOnlyList<OpcaoDeFiltro> _curvasDisponiveis = [];
+    private bool _semCategoriaNenhuma;
+
+    /// <summary>
+    /// Uma opção de dropdown. <c>Valor</c> pode ser o sentinela de ausência, e é por isso que
+    /// rótulo e valor são campos separados: "sem categoria" precisa aparecer legível na tela e
+    /// viajar como <c>FiltroDeItens.Ausente</c> na consulta.
+    /// </summary>
+    private sealed record OpcaoDeFiltro(string Valor, string Rotulo);
+
+    /// <summary>
+    /// "12 de 20.153 itens" quando há filtro; só o total quando não há. O denominador é o que
+    /// diz ao comprador se ele está olhando um recorte ou a sugestão inteira.
+    /// </summary>
+    private string ContagemDoRecorte => _filtro.Algum
+        ? $"{_total:N0} de {_totalSemFiltro:N0} itens"
+        : $"{_total:N0} itens";
+
+    private async Task AplicarAsync(FiltroDeItens novo)
+    {
+        _filtro = novo;
+        // Volta para a primeira página: manter a página 7 depois de filtrar para 12 itens
+        // renderizaria uma tabela vazia com paginador dizendo que há dados.
+        if (_grid is not null)
+        {
+            await _grid.FirstPage(true);
+        }
+    }
+
+    private void ExportarExcel()
+    {
+        // forceLoad: é um endpoint HTTP comum, não rota Blazor. Sem isso o router tentaria
+        // resolvê-la no circuito e cairia em "página não encontrada".
+        Nav.NavigateTo($"/comparacoes/{SessaoId}/itens/excel{QueryDoFiltro()}", forceLoad: true);
+    }
+
+    private string QueryDoFiltro()
+    {
+        var q = new List<string>();
+        if (_filtro.LojaId is { } loja) q.Add($"lojaId={loja}");
+        if (!string.IsNullOrWhiteSpace(_filtro.Categoria)) q.Add($"categoria={Uri.EscapeDataString(_filtro.Categoria)}");
+        if (!string.IsNullOrWhiteSpace(_filtro.Curva)) q.Add($"curva={Uri.EscapeDataString(_filtro.Curva)}");
+        return q.Count == 0 ? "" : "?" + string.Join("&", q);
+    }
+
+    private async Task CarregarFiltrosAsync()
+    {
+        try
+        {
+            var d = await ComparacoesApi.GetFiltrosDeItensAsync(SessaoId);
+            if (d is null) return;
+
+            _lojas = d.Lojas;
+            _categoriasDisponiveis =
+            [
+                .. d.Categorias.Select(c => new OpcaoDeFiltro(c, c)),
+                .. d.TemItemSemCategoria && d.Categorias.Count > 0
+                    ? new[] { new OpcaoDeFiltro(FiltroDeItens.Ausente, "sem categoria") }
+                    : [],
+            ];
+            _curvasDisponiveis =
+            [
+                .. d.Curvas.Select(c => new OpcaoDeFiltro(c, c)),
+                .. d.TemItemSemCurva && d.Curvas.Count > 0
+                    ? new[] { new OpcaoDeFiltro(FiltroDeItens.Ausente, "sem curva") }
+                    : [],
+            ];
+            _semCategoriaNenhuma = d.TemItemSemCategoria && d.Categorias.Count == 0;
+        }
+        catch (Exception ex)
+        {
+            // Falha aqui não pode derrubar a tabela: sem as opções o comprador perde os
+            // filtros, não os itens.
+            Logger.LogError(ex, "Falha ao buscar filtros da sessao {SessaoId}", SessaoId);
+        }
+    }
 
     /// <summary>
     /// Dispara a primeira página à mão. A grade só chama <c>LoadData</c> sozinha quando
@@ -176,6 +356,7 @@
     {
         if (firstRender && _grid is not null)
         {
+            await CarregarFiltrosAsync();
             await _grid.Reload();
         }
     }
@@ -197,10 +378,12 @@
             }
 
             var pagina = await ComparacoesApi.GetItensAsync(
-                SessaoId, args.Skip ?? 0, args.Top ?? 25, orderBy, desc);
+                SessaoId, args.Skip ?? 0, args.Top ?? 25, orderBy, desc, _filtro);
 
             _itens = pagina.Itens;
             _total = pagina.Total;
+            _totalSemFiltro = pagina.TotalSemFiltro;
+            _totais = pagina.Totais;
             _erro = null;
         }
         catch (Exception ex)
@@ -216,4 +399,28 @@
     }
 
     private static string Unidades(decimal valor) => valor.ToString("N0");
+
+    private static string UnidadesOuSemMl(decimal? valor) =>
+        valor is { } v ? Unidades(v) : SemCalculoDoMl;
+
+    private static string Dinheiro(decimal? valor) =>
+        valor is { } v ? v.ToString("C2") : SemCalculoDoMl;
+
+    /// <summary>
+    /// Diferença com sinal explícito: "+294" e "−12" dizem qual braço encalhou mais sem exigir
+    /// que o leitor compare as duas colunas de cabeça.
+    /// </summary>
+    private static string DiferencaUnidades(decimal? valor) =>
+        valor is { } v ? (v > 0 ? "+" : "") + Unidades(v) : SemCalculoDoMl;
+
+    private static string ApuradoSobre(int itens) => $"sobre {itens:N0} item(ns) com cálculo do ML";
+
+    /// <summary>
+    /// Nota das colunas em reais. Só aparece quando <b>falta</b> preço em algum item: o valor
+    /// sai por menos do que a realidade, e omitir isso deixaria o comprador comparar um total
+    /// incompleto com um completo. Quando todos têm preço não há ressalva a fazer, e um aviso
+    /// permanente viraria ruído.
+    /// </summary>
+    private static string? ApuradoSobrePreco(int comPreco, int itens) =>
+        comPreco >= itens ? null : $"{itens - comPreco:N0} item(ns) sem preço de compra ficaram fora";
 }

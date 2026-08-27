@@ -208,6 +208,31 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
     }
 
     /// <summary>
+    /// A camada analítica da tabela de itens: filtros combináveis, totalizadores do recorte e
+    /// exportação. É o pedido do item 9 do documento do Julio, e o que transforma a tela de uma
+    /// listagem de milhares de SKUs em ferramenta de análise.
+    ///
+    /// <para>
+    /// Asserção por <b>texto</b> e não por <c>data-test</c> porque este caso lê o corpo em
+    /// cache junto dos demais (<see cref="CorpoNormalizadoAsync"/> devolve texto, onde atributo
+    /// nenhum aparece) — e o texto só existe se os componentes renderizaram, que é o que se
+    /// quer provar. O comportamento dos filtros e dos totais é afirmado com números em
+    /// <c>FiltrosDosItensIntegrationTests</c>, contra SQL Server de verdade.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Tabela_de_itens_traz_filtros_totalizadores_e_exportacao()
+    {
+        var corpo = await ResultadoRenderizadoAsync();
+
+        corpo.Should().Contain("Filtros");
+        corpo.Should().Contain("Totais do recorte");
+        corpo.Should().Contain("Itens analisados");
+        corpo.Should().Contain("Exportar para Excel");
+        corpo.Should().Contain("Categoria", "a coluna de classificação do produto entrou na tabela");
+    }
+
+    /// <summary>
     /// A declaração de que parte da população não vendeu nada, na tela do <b>comprador</b>.
     /// Ele lê a comparação sem ver o placar técnico, mas lê as sobras — e se a maior parte dos
     /// itens medidos não teve venda, o resultado descreve sobretudo a facilidade de acertar

@@ -113,6 +113,65 @@ public sealed class ComparisonApiClientTests
             DemandaDiaReal: real, DemandaDiaErp: 0, DemandaDiaMl: 0,
             ErroAbsErp: 0, ErroAbsMl: 0, Resultado: "VitoriaErp"))]);
 
+    /// <summary>
+    /// O sentinela de ausência tem de ser <b>o mesmo literal</b> que a apiservice reconhece
+    /// (<c>ComparacoesEndpoints.FiltroAusente</c>). São dois processos e nenhum compartilha
+    /// constante: um valor divergente aqui filtraria por uma categoria literalmente chamada
+    /// assim, devolvendo tela vazia sem erro nenhum. Este teste e o de integração fixam o mesmo
+    /// literal dos dois lados, então mudar um sem o outro quebra a suíte.
+    /// </summary>
+    [Fact]
+    public void Sentinela_de_ausencia_e_o_mesmo_literal_da_apiservice()
+    {
+        FiltroDeItens.Ausente.Should().Be("__sem__");
+    }
+
+    /// <summary>
+    /// A query string do filtro. Campo nulo é "não filtrar por isto" e não pode virar parâmetro
+    /// vazio, que o servidor leria como filtro por string vazia.
+    /// </summary>
+    [Fact]
+    public void Filtro_monta_query_string_apenas_do_que_foi_escolhido()
+    {
+        FiltroDeItens.Nenhum.ParaQueryString().Should().BeEmpty();
+        FiltroDeItens.Nenhum.Algum.Should().BeFalse();
+
+        new FiltroDeItens(LojaId: 18).ParaQueryString().Should().Be("&lojaId=18");
+
+        var completo = new FiltroDeItens(18, "MPX ETICO", "A");
+        completo.Algum.Should().BeTrue();
+        completo.ParaQueryString().Should().Be("&lojaId=18&categoria=MPX%20ETICO&curva=A");
+    }
+
+    /// <summary>
+    /// <b>Diferença de sobra é nula, não zero, quando o ML não foi apurado.</b> Zero afirmaria
+    /// que os dois métodos empataram — o contrário de "não há como comparar".
+    /// </summary>
+    [Fact]
+    public void Diferenca_de_sobra_e_nula_quando_o_ml_nao_foi_apurado()
+    {
+        Totais(sobraMl: null, valorMl: null).DiferencaSobraUnidades.Should().BeNull();
+        Totais(sobraMl: null, valorMl: null).DiferencaSobraValor.Should().BeNull();
+
+        var comMl = Totais(sobraMl: 294m, valorMl: 45_012.95m);
+        comMl.DiferencaSobraUnidades.Should().Be(294m - 280m);
+        comMl.DiferencaSobraValor.Should().Be(45_012.95m - 54_584.18m);
+    }
+
+    private static TotaisDosItens Totais(decimal? sobraMl, decimal? valorMl) => new(
+        Itens: 2031,
+        CompraPbsUnidades: 34m,
+        CompraMlUnidades: sobraMl is null ? null : 2m,
+        ItensComCompraMl: sobraMl is null ? 0 : 398,
+        VendidoNaJanela: 177m,
+        SobraPbsUnidades: 280m,
+        SobraMlUnidades: sobraMl,
+        ItensComSobraMl: sobraMl is null ? 0 : 398,
+        SobraPbsValor: 54_584.18m,
+        ItensComValorPbs: 2031,
+        SobraMlValor: valorMl,
+        ItensComValorMl: valorMl is null ? 0 : 398);
+
     [Fact]
     public async Task ListAsync_envia_o_escopo_de_rede_resolvido_pelo_IRedeContext()
     {

@@ -44,6 +44,22 @@ public interface IComparacoesApi
         [Query] int take = 25,
         [Query] string? orderBy = null,
         [Query] bool desc = true,
+        [Query] int? lojaId = null,
+        [Query] string? categoria = null,
+        [Query] string? curva = null,
+        CancellationToken ct = default);
+
+    [Get("/api/comparacoes/{id}/itens/filtros")]
+    Task<IApiResponse<FiltrosDisponiveis>> FiltrosDosItensAsync(
+        Guid id, [Query] int redeId, CancellationToken ct = default);
+
+    [Get("/api/comparacoes/{id}/itens/exportacao")]
+    Task<IApiResponse<List<SessaoItemResposta>>> ExportarItensAsync(
+        Guid id,
+        [Query] int redeId,
+        [Query] int? lojaId = null,
+        [Query] string? categoria = null,
+        [Query] string? curva = null,
         CancellationToken ct = default);
 
     [Get("/api/comparacoes/{id}/analise")]
@@ -75,7 +91,30 @@ public sealed record SessaoItensPage(
     int Total,
     string OrderBy,
     bool Desc,
-    List<SessaoItemResposta> Itens);
+    List<SessaoItemResposta> Itens,
+    int TotalSemFiltro = 0,
+    TotaisDosItens? Totais = null);
+
+public sealed record TotaisDosItens(
+    int Itens,
+    decimal CompraPbsUnidades,
+    decimal? CompraMlUnidades,
+    int ItensComCompraMl,
+    decimal VendidoNaJanela,
+    decimal SobraPbsUnidades,
+    decimal? SobraMlUnidades,
+    int ItensComSobraMl,
+    decimal? SobraPbsValor,
+    int ItensComValorPbs,
+    decimal? SobraMlValor,
+    int ItensComValorMl);
+
+public sealed record FiltrosDisponiveis(
+    List<int> Lojas,
+    List<string> Categorias,
+    bool TemItemSemCategoria,
+    List<string> Curvas,
+    bool TemItemSemCurva);
 
 public sealed record SessaoItemResposta(
     int LojaId,
@@ -88,7 +127,9 @@ public sealed record SessaoItemResposta(
     decimal SobraPbsUnidades,
     decimal? SobraMlUnidades,
     decimal? SobraPbsValor,
-    bool JanelaAlemDoHistorico);
+    bool JanelaAlemDoHistorico,
+    string? Categoria = null,
+    decimal? SobraMlValor = null);
 
 public sealed record SessaoAnaliseResposta(
     int Itens,

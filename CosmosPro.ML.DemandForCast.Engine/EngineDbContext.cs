@@ -182,8 +182,10 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
 
             // Mesmo NVARCHAR(30) do Sku no Stage (código de ERP, colide entre redes).
             b.Property(x => x.Sku).IsRequired().HasMaxLength(30);
-            // Espelham Produtos.Nome NVARCHAR(200) e SugestoesCompraItens.Curva CHAR(1) no Stage.
+            // Espelham Produtos.Nome NVARCHAR(200), Produtos.Categoria NVARCHAR(80) e
+            // SugestoesCompraItens.Curva CHAR(1) no Stage.
             b.Property(x => x.NomeProduto).HasMaxLength(200);
+            b.Property(x => x.Categoria).HasMaxLength(80);
             b.Property(x => x.Curva).HasMaxLength(1);
 
             // Precisão declarada porque o default do EF é decimal(18,2), que truncaria em

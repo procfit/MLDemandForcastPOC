@@ -1,0 +1,34 @@
+@* Um número do quadro-resumo: rótulo pequeno em cima, valor em destaque, e uma nota abaixo
+   quando o valor não fala da população inteira.
+
+   A Nota não é decoração. Uma soma do braço de ML apurada sobre 147 de 20.153 itens, exibida
+   sem dizer isso, é lida como se falasse de todos — e é assim que se conclui que o ML compraria
+   36 unidades para a rede quando ele só opinou sobre 147 itens. Diferente de KpiCard, que é
+   card de dashboard com ícone e aceita só inteiro: aqui o valor é texto porque pode ser
+   "sem cálculo do ML", que é justamente o caso que não pode virar zero. *@
+
+<RadzenStack Orientation="Orientation.Vertical" Gap="0" Style="min-width: 9rem">
+    <RadzenText TextStyle="TextStyle.Overline" Style="margin: 0; color: var(--rz-text-secondary-color)">
+        @Rotulo
+    </RadzenText>
+    <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">@Valor</RadzenText>
+    @if (!string.IsNullOrWhiteSpace(Nota))
+    {
+        <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-tertiary-color)">
+            @Nota
+        </RadzenText>
+    }
+</RadzenStack>
+
+@code {
+    [Parameter, EditorRequired] public string Rotulo { get; set; } = "";
+
+    /// <summary>
+    /// Texto, e não número: precisa poder ser "sem cálculo do ML". Formatar aqui obrigaria o
+    /// componente a decidir o que fazer com nulo, e essa decisão é do chamador.
+    /// </summary>
+    [Parameter, EditorRequired] public string Valor { get; set; } = "";
+
+    /// <summary>Sobre quantos itens o valor foi apurado, quando não é a população inteira.</summary>
+    [Parameter] public string? Nota { get; set; }
+}

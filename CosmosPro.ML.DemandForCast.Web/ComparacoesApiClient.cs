@@ -85,7 +85,8 @@ public class ComparacoesApiClient(HttpClient httpClient, IRedeContext redeContex
     /// no cabeçalho.
     /// </summary>
     public async Task<SessaoItensPage> GetItensAsync(
-        Guid id, int skip, int take, string? orderBy, bool desc, CancellationToken ct = default)
+        Guid id, int skip, int take, string? orderBy, bool desc,
+        FiltroDeItens? filtro = null, CancellationToken ct = default)
     {
         var redeId = await redeContext.GetRedeIdAtualAsync();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -97,9 +98,50 @@ public class ComparacoesApiClient(HttpClient httpClient, IRedeContext redeContex
         {
             url += $"&orderBy={Uri.EscapeDataString(orderBy)}";
         }
+        url += (filtro ?? FiltroDeItens.Nenhum).ParaQueryString();
 
         var page = await httpClient.GetFromJsonAsync<SessaoItensPage>(url, cts.Token);
         return page ?? new SessaoItensPage(0, "", desc, []);
+    }
+
+    /// <summary>
+    /// Valores presentes nesta sessão para alimentar os filtros. Devolve <c>null</c> num 404 —
+    /// sessão de outra rede, ou que não existe.
+    /// </summary>
+    public async Task<FiltrosDisponiveis?> GetFiltrosDeItensAsync(Guid id, CancellationToken ct = default)
+    {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(LeituraTimeout);
+
+        var resp = await httpClient.GetAsync($"/api/comparacoes/{id}/itens/filtros?redeId={redeId}", cts.Token);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadFromJsonAsync<FiltrosDisponiveis>(cancellationToken: cts.Token);
+    }
+
+    /// <summary>
+    /// Todos os itens do recorte, sem paginar, para montar a planilha.
+    /// </summary>
+    /// <remarks>
+    /// Sem <see cref="LeituraTimeout"/>: são até dezenas de milhares de linhas, e este é o
+    /// único GET deste client que não está atrás do poll de 3s — vale o teto de 10 minutos do
+    /// próprio client, o mesmo que o upload usa.
+    /// </remarks>
+    public async Task<IReadOnlyList<SessaoItem>> GetItensParaExportacaoAsync(
+        Guid id, string? orderBy, bool desc, FiltroDeItens? filtro = null, CancellationToken ct = default)
+    {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+
+        var url = $"/api/comparacoes/{id}/itens/exportacao?redeId={redeId}" +
+                  $"&desc={desc.ToString().ToLowerInvariant()}";
+        if (!string.IsNullOrWhiteSpace(orderBy))
+        {
+            url += $"&orderBy={Uri.EscapeDataString(orderBy)}";
+        }
+        url += (filtro ?? FiltroDeItens.Nenhum).ParaQueryString();
+
+        return await httpClient.GetFromJsonAsync<List<SessaoItem>>(url, ct) ?? [];
     }
 
     /// <summary>
@@ -364,11 +406,89 @@ public sealed record RupturaObservadaView(
 
 // --- Detalhe por item e análise (endpoints da apiservice) -----------------------------
 
+/// <param name="Total">Itens do recorte filtrado — o denominador da paginação exibida.</param>
+/// <param name="TotalSemFiltro">
+/// População inteira da sessão, para a tela poder dizer "12 de 20.153". Sem isto um recorte
+/// de 12 itens pareceria a sugestão completa.
+/// </param>
 public sealed record SessaoItensPage(
     int Total,
     string OrderBy,
     bool Desc,
-    IReadOnlyList<SessaoItem> Itens);
+    IReadOnlyList<SessaoItem> Itens,
+    int TotalSemFiltro = 0,
+    TotaisDosItens? Totais = null);
+
+/// <summary>
+/// Filtros combináveis da tela de itens. <c>null</c> em cada campo é "não filtrar por isto";
+/// <see cref="Ausente"/> é o recorte "sem categoria"/"sem curva", que é coisa diferente.
+/// </summary>
+public sealed record FiltroDeItens(int? LojaId = null, string? Categoria = null, string? Curva = null)
+{
+    /// <summary>
+    /// Sentinela que casa ausência do atributo. Precisa ser <b>o mesmo</b> string que a
+    /// apiservice reconhece (<c>ComparacoesEndpoints.FiltroAusente</c>) — são dois processos,
+    /// e um rótulo divergente aqui filtraria por uma categoria literalmente chamada "__sem__",
+    /// devolvendo tela vazia sem erro nenhum.
+    /// </summary>
+    public const string Ausente = "__sem__";
+
+    public static FiltroDeItens Nenhum { get; } = new();
+
+    public bool Algum => LojaId is not null
+        || !string.IsNullOrWhiteSpace(Categoria)
+        || !string.IsNullOrWhiteSpace(Curva);
+
+    public string ParaQueryString()
+    {
+        var q = "";
+        if (LojaId is { } loja) q += $"&lojaId={loja}";
+        if (!string.IsNullOrWhiteSpace(Categoria)) q += $"&categoria={Uri.EscapeDataString(Categoria)}";
+        if (!string.IsNullOrWhiteSpace(Curva)) q += $"&curva={Uri.EscapeDataString(Curva)}";
+        return q;
+    }
+}
+
+/// <param name="ItensComCompraMl">
+/// Sobre quantos itens do recorte <paramref name="CompraMlUnidades"/> foi apurada. A soma do
+/// ML sem este número parece falar de todos os itens filtrados.
+/// </param>
+public sealed record TotaisDosItens(
+    int Itens,
+    decimal CompraPbsUnidades,
+    decimal? CompraMlUnidades,
+    int ItensComCompraMl,
+    decimal VendidoNaJanela,
+    decimal SobraPbsUnidades,
+    decimal? SobraMlUnidades,
+    int ItensComSobraMl,
+    decimal? SobraPbsValor,
+    int ItensComValorPbs = 0,
+    decimal? SobraMlValor = null,
+    int ItensComValorMl = 0)
+{
+    /// <summary>
+    /// Diferença de sobra entre os braços, ou <c>null</c> quando o ML não foi apurado em
+    /// nenhum item do recorte. Zero aqui afirmaria "os dois métodos empataram", que é o
+    /// contrário de "não há como comparar".
+    /// </summary>
+    public decimal? DiferencaSobraUnidades =>
+        SobraMlUnidades is { } ml ? ml - SobraPbsUnidades : null;
+
+    public decimal? DiferencaSobraValor =>
+        SobraMlValor is { } ml && SobraPbsValor is { } pbs ? ml - pbs : null;
+}
+
+/// <param name="TemItemSemCategoria">
+/// Se existe item sem categoria. A tela usa isto para oferecer o recorte "sem categoria" —
+/// que numa sessão materializada antes da coluna existir é o recorte de <b>todos</b> os itens.
+/// </param>
+public sealed record FiltrosDisponiveis(
+    IReadOnlyList<int> Lojas,
+    IReadOnlyList<string> Categorias,
+    bool TemItemSemCategoria,
+    IReadOnlyList<string> Curvas,
+    bool TemItemSemCurva);
 
 public sealed record SessaoItem(
     int LojaId,
@@ -381,7 +501,9 @@ public sealed record SessaoItem(
     decimal SobraPbsUnidades,
     decimal? SobraMlUnidades,
     decimal? SobraPbsValor,
-    bool JanelaAlemDoHistorico)
+    bool JanelaAlemDoHistorico,
+    string? Categoria = null,
+    decimal? SobraMlValor = null)
 {
     /// <summary>
     /// Quem chegou mais perto do que a loja realmente vendeu, nesta linha: menor sobra.

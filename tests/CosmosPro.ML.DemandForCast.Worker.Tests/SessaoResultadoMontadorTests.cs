@@ -393,6 +393,7 @@ public sealed class SessaoResultadoMontadorTests
                 FatorEmbalagem: null,
                 Falteiro: false),
             NomeProduto: $"Produto {sku}",
+            Categoria: "Analgesico",
             VendidoNaJanela: vendido,
             DiasSemEstoque: diasSemEstoque,
             DiasComSnapshot: diasComSnapshot,

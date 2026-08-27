@@ -424,7 +424,7 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
 
         var pagina = await fixture.ComparacoesApi.ItensAsync(
             cenario.SessaoId, cenario.RedeId,
-            skip: 0, take: 25, orderBy: "SobraPbsUnidades", desc: true, ct);
+            skip: 0, take: 25, orderBy: "SobraPbsUnidades", desc: true, ct: ct);
 
         pagina.IsSuccessStatusCode.Should().BeTrue();
         pagina.Content!.Total.Should().Be(2);
@@ -454,7 +454,7 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
 
         var segundaPagina = await fixture.ComparacoesApi.ItensAsync(
             cenario.SessaoId, cenario.RedeId,
-            skip: 1, take: 1, orderBy: "Sku", desc: false, ct);
+            skip: 1, take: 1, orderBy: "Sku", desc: false, ct: ct);
 
         segundaPagina.Content!.Total.Should().Be(2, "o total é da população, não da página");
         segundaPagina.Content.Itens.Should().HaveCount(1);
@@ -474,7 +474,7 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
 
         var pagina = await fixture.ComparacoesApi.ItensAsync(
             cenario.SessaoId, cenario.RedeId,
-            skip: 0, take: 25, orderBy: "SobraPbsValor; DROP TABLE dbo.ComparacaoSessaoItens", desc: true, ct);
+            skip: 0, take: 25, orderBy: "SobraPbsValor; DROP TABLE dbo.ComparacaoSessaoItens", desc: true, ct: ct);
 
         pagina.IsSuccessStatusCode.Should().BeTrue("nome de coluna inválido não pode virar erro 500");
         pagina.Content!.OrderBy.Should().Be("SobraPbsUnidades");

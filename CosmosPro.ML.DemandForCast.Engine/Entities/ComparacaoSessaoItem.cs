@@ -26,6 +26,27 @@ public sealed class ComparacaoSessaoItem
     public string? NomeProduto { get; set; }
     public string? Curva { get; set; }
 
+    /// <summary>
+    /// Categoria do produto, copiada de <c>Produtos.Categoria</c> na materialização — pelo
+    /// mesmo motivo de <see cref="NomeProduto"/>: o Stage da rede é apagado no import
+    /// seguinte, então resolver a categoria consultando o Stage na hora de filtrar devolveria
+    /// a categoria do envio seguinte, ou nada.
+    ///
+    /// <para>
+    /// Nulo significa <b>"o cadastro do PBS não tem categoria para este SKU"</b> — nunca "sem
+    /// filtro" e nunca "todas". Sessões materializadas antes desta coluna existir também têm
+    /// nulo, e a tela precisa dizer isso em vez de exibir uma lista de categorias vazia como
+    /// se a sessão não tivesse itens.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Não existe coluna de departamento</b>, pedida junto com esta: o contrato de
+    /// extração do PBS não traz o campo, nem <c>Stage.Produtos</c> o tem. Inventá-lo a partir
+    /// da categoria seria dado fabricado numa tela de decisão de compra.
+    /// </para>
+    /// </summary>
+    public string? Categoria { get; set; }
+
     public decimal CompraSugeridaPbs { get; set; }
 
     /// <summary>

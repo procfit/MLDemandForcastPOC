@@ -48,6 +48,16 @@ internal static class ComparacoesEndpoints
              .Produces<SessaoItensPage>()
              .Produces(StatusCodes.Status404NotFound);
 
+        group.MapGet("/{id:guid}/itens/filtros", FiltrosDosItensAsync)
+             .WithName("ListComparacaoSessaoFiltros")
+             .Produces<FiltrosDisponiveis>()
+             .Produces(StatusCodes.Status404NotFound);
+
+        group.MapGet("/{id:guid}/itens/exportacao", ExportarItensAsync)
+             .WithName("ExportarComparacaoSessaoItens")
+             .Produces<IReadOnlyList<SessaoItemView>>()
+             .Produces(StatusCodes.Status404NotFound);
+
         group.MapGet("/{id:guid}/analise", AnaliseAsync)
              .WithName("GetComparacaoSessaoAnalise")
              .Produces<SessaoAnaliseView>()
@@ -381,6 +391,18 @@ internal static class ComparacoesEndpoints
     /// Detalhe por item, paginado e ordenado no servidor. É a tabela que o comprador
     /// confere item a item contra a memória dele, e ela tem dezenas de milhares de linhas.
     /// </summary>
+    /// <remarks>
+    /// <b>Os filtros são do servidor, não da tela.</b> A população é a da sugestão inteira do
+    /// ERP (20 mil itens na Retiro): filtrar no navegador exigiria mandar tudo pelo circuito
+    /// Blazor, e os totalizadores deixariam de bater com a página exibida. Aqui a mesma
+    /// cláusula alimenta página, contagem, totais e exportação — ver <see cref="AplicarFiltros"/>.
+    ///
+    /// <para>
+    /// <c>TotalSemFiltro</c> viaja junto porque "12 de 20.153" é a informação que diz ao
+    /// comprador se ele está olhando um recorte ou o conjunto; só o total filtrado deixaria
+    /// uma seleção de 12 itens parecendo a sugestão inteira.
+    /// </para>
+    /// </remarks>
     private static async Task<IResult> ListItensAsync(
         Guid id,
         EngineDbContext db,
@@ -389,24 +411,97 @@ internal static class ComparacoesEndpoints
         [FromQuery] int skip = 0,
         [FromQuery] int take = 25,
         [FromQuery] string? orderBy = null,
-        [FromQuery] bool desc = true)
+        [FromQuery] bool desc = true,
+        [FromQuery] int? lojaId = null,
+        [FromQuery] string? categoria = null,
+        [FromQuery] string? curva = null)
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
 
-        if (await TotalDeItensAsync(db, id, redeId, ct) is not { } total) return Results.NotFound();
+        if (await TotalDeItensAsync(db, id, redeId, ct) is not { } totalSemFiltro) return Results.NotFound();
 
         var coluna = OrdemItensSessao.Resolver(orderBy);
         take = Math.Clamp(take, 1, 200);
         skip = Math.Max(0, skip);
 
+        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva);
+
+        var totais = await TotalizarAsync(filtrados, ct);
+
         var itens = await OrdemItensSessao
-            .Aplicar(ItensDaSessao(db, id, redeId), coluna, desc)
+            .Aplicar(filtrados, coluna, desc)
             .Skip(skip)
             .Take(take)
             .Select(ProjectItemToView)
             .ToListAsync(ct);
 
-        return Results.Ok(new SessaoItensPage(total, coluna, desc, itens));
+        return Results.Ok(new SessaoItensPage(totais.Itens, coluna, desc, itens, totalSemFiltro, totais));
+    }
+
+    /// <summary>
+    /// Valores presentes <b>nesta</b> sessão para alimentar os filtros — não o cadastro
+    /// inteiro da rede. Oferecer uma categoria que nenhum item da sessão tem produziria
+    /// filtro que devolve tela vazia e parece defeito.
+    /// </summary>
+    private static async Task<IResult> FiltrosDosItensAsync(
+        Guid id,
+        EngineDbContext db,
+        CancellationToken ct,
+        [FromQuery] int redeId = 1)
+    {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+        if (await TotalDeItensAsync(db, id, redeId, ct) is null) return Results.NotFound();
+
+        var escopo = ItensDaSessao(db, id, redeId);
+
+        var lojas = await escopo.Select(i => i.LojaId).Distinct().OrderBy(l => l).ToListAsync(ct);
+        var categorias = await escopo.Where(i => i.Categoria != null)
+            .Select(i => i.Categoria!).Distinct().OrderBy(c => c).ToListAsync(ct);
+        var curvas = await escopo.Where(i => i.Curva != null)
+            .Select(i => i.Curva!).Distinct().OrderBy(c => c).ToListAsync(ct);
+
+        return Results.Ok(new FiltrosDisponiveis(
+            lojas,
+            categorias,
+            await escopo.AnyAsync(i => i.Categoria == null, ct),
+            curvas,
+            await escopo.AnyAsync(i => i.Curva == null, ct)));
+    }
+
+    /// <summary>
+    /// Todos os itens do recorte, sem paginar, para a Web montar a planilha.
+    ///
+    /// <para>
+    /// Rota separada em vez de <c>take</c> grande na listagem, de propósito: o teto de 200 da
+    /// página existe para proteger o circuito Blazor, e afrouxá-lo lá abriria o mesmo caminho
+    /// para a tela. Aqui quem consome é a Web montando um arquivo, não um navegador
+    /// renderizando linhas — e a sugestão inteira da Retiro são ~20 mil linhas, que é payload
+    /// de alguns MB entre dois serviços da mesma rede.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> ExportarItensAsync(
+        Guid id,
+        EngineDbContext db,
+        CancellationToken ct,
+        [FromQuery] int redeId = 1,
+        [FromQuery] string? orderBy = null,
+        [FromQuery] bool desc = true,
+        [FromQuery] int? lojaId = null,
+        [FromQuery] string? categoria = null,
+        [FromQuery] string? curva = null)
+    {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+        if (await TotalDeItensAsync(db, id, redeId, ct) is null) return Results.NotFound();
+
+        var coluna = OrdemItensSessao.Resolver(orderBy);
+        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva);
+
+        var itens = await OrdemItensSessao
+            .Aplicar(filtrados, coluna, desc)
+            .Select(ProjectItemToView)
+            .ToListAsync(ct);
+
+        return Results.Ok(itens);
     }
 
     /// <summary>
@@ -515,6 +610,109 @@ internal static class ComparacoesEndpoints
     /// tabela paginada ao lado da primeira.
     /// </summary>
     private const int TetoDePiores = 10;
+
+    /// <summary>
+    /// Valor de filtro que casa <b>ausência</b> de categoria ou de curva.
+    ///
+    /// <para>
+    /// Existe porque "sem categoria" é um recorte legítimo — em sessão materializada antes da
+    /// coluna existir é o recorte de <i>todos</i> os itens — e nulo não trafega em query
+    /// string de forma distinguível de "não filtrar". O sentinela é feio de propósito: um
+    /// rótulo bonito como "(sem categoria)" poderia colidir com uma categoria real do PBS e
+    /// filtrar a coisa errada em silêncio.
+    /// </para>
+    /// </summary>
+    public const string FiltroAusente = "__sem__";
+
+    /// <summary>
+    /// Filtros combináveis da tela de itens. <b>Autoridade única</b>: página, contagem,
+    /// totalizadores e exportação passam por aqui, e é isso que garante que a planilha traga
+    /// exatamente o que a tela mostrava e que os totais descrevam as linhas exibidas.
+    /// </summary>
+    private static IQueryable<ComparacaoSessaoItem> AplicarFiltros(
+        IQueryable<ComparacaoSessaoItem> itens, int? lojaId, string? categoria, string? curva)
+    {
+        if (lojaId is { } loja)
+        {
+            itens = itens.Where(i => i.LojaId == loja);
+        }
+
+        if (!string.IsNullOrWhiteSpace(categoria))
+        {
+            itens = categoria == FiltroAusente
+                ? itens.Where(i => i.Categoria == null)
+                : itens.Where(i => i.Categoria == categoria);
+        }
+
+        if (!string.IsNullOrWhiteSpace(curva))
+        {
+            itens = curva == FiltroAusente
+                ? itens.Where(i => i.Curva == null)
+                : itens.Where(i => i.Curva == curva);
+        }
+
+        return itens;
+    }
+
+    /// <summary>
+    /// Totalizadores do recorte, num único round-trip.
+    ///
+    /// <para>
+    /// <b>As somas anuláveis não podem sair do <c>SUM</c> direto, e isso custou um bug.</b> Um
+    /// <c>SUM</c> de <c>decimal?</c> traduzido pelo EF Core devolve <b>0</b> quando nenhuma
+    /// linha tem valor, não nulo — e zero ali afirma "o ML mandaria não comprar nada", que é o
+    /// contrário de "não houve cálculo". Por isso cada soma anulável é decidida pela
+    /// <b>contagem</b> de linhas que contribuíram: contagem zero devolve nulo, explicitamente.
+    /// </para>
+    ///
+    /// <para>
+    /// As contagens também viajam para a tela: uma compra de ML de 36 unidades apurada sobre
+    /// 147 de 20.153 itens não é a mesma coisa que 36 sobre tudo, e o número sozinho seria
+    /// lido como se falasse do recorte inteiro.
+    /// </para>
+    /// </summary>
+    private static async Task<TotaisDosItens> TotalizarAsync(
+        IQueryable<ComparacaoSessaoItem> filtrados, CancellationToken ct)
+    {
+        var b = await filtrados
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Itens = g.Count(),
+                CompraPbs = g.Sum(i => i.CompraSugeridaPbs),
+                CompraMl = g.Sum(i => i.CompraSugeridaMl),
+                ComCompraMl = g.Count(i => i.CompraSugeridaMl != null),
+                Vendido = g.Sum(i => i.VendidoNaJanela),
+                SobraPbs = g.Sum(i => i.SobraPbsUnidades),
+                SobraMl = g.Sum(i => i.SobraMlUnidades),
+                ComSobraMl = g.Count(i => i.SobraMlUnidades != null),
+                ValorPbs = g.Sum(i => i.SobraPbsValor),
+                ComValorPbs = g.Count(i => i.SobraPbsValor != null),
+                ValorMl = g.Sum(i => i.SobraMlValor),
+                ComValorMl = g.Count(i => i.SobraMlValor != null),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        // Recorte vazio: GroupBy não devolve linha nenhuma.
+        if (b is null)
+        {
+            return new TotaisDosItens(0, 0m, null, 0, 0m, 0m, null, 0, null, 0, null, 0);
+        }
+
+        return new TotaisDosItens(
+            b.Itens,
+            b.CompraPbs,
+            b.ComCompraMl == 0 ? null : b.CompraMl,
+            b.ComCompraMl,
+            b.Vendido,
+            b.SobraPbs,
+            b.ComSobraMl == 0 ? null : b.SobraMl,
+            b.ComSobraMl,
+            b.ComValorPbs == 0 ? null : b.ValorPbs,
+            b.ComValorPbs,
+            b.ComValorMl == 0 ? null : b.ValorMl,
+            b.ComValorMl);
+    }
 
     /// <summary>
     /// Os itens de uma sessão, <b>escopados pela rede do pai no mesmo round-trip</b>.
@@ -699,13 +897,15 @@ internal static class ComparacoesEndpoints
             i.Sku,
             i.NomeProduto,
             i.Curva,
+            i.Categoria,
             i.CompraSugeridaPbs,
             i.CompraSugeridaMl,
             i.VendidoNaJanela,
             i.SobraPbsUnidades,
             i.SobraMlUnidades,
             i.SobraPbsValor,
-            i.JanelaAlemDoHistorico);
+            i.JanelaAlemDoHistorico,
+            i.SobraMlValor);
 
     private static readonly Expression<Func<ComparacaoSessao, SessaoView>> ProjectToView =
         s => new SessaoView(
@@ -773,11 +973,48 @@ internal sealed record SessaoView(
 /// Viaja na resposta porque uma coluna recusada cai no padrão: sem este campo a tela
 /// desenharia a seta de ordenação num cabeçalho que não ordenou nada.
 /// </param>
+/// <param name="Total">Itens do recorte — o denominador da paginação exibida.</param>
+/// <param name="TotalSemFiltro">
+/// População inteira da sessão. Viaja junto para a tela poder dizer "12 de 20.153": só o
+/// total filtrado deixaria um recorte de 12 itens parecendo a sugestão completa.
+/// </param>
 internal sealed record SessaoItensPage(
     int Total,
     string OrderBy,
     bool Desc,
-    IReadOnlyList<SessaoItemView> Itens);
+    IReadOnlyList<SessaoItemView> Itens,
+    int TotalSemFiltro = 0,
+    TotaisDosItens? Totais = null);
+
+/// <param name="ItensComCompraMl">
+/// Sobre quantos itens do recorte <paramref name="CompraMlUnidades"/> foi apurada. Sem este
+/// número a soma do ML parece falar de todos os itens filtrados.
+/// </param>
+internal sealed record TotaisDosItens(
+    int Itens,
+    decimal CompraPbsUnidades,
+    decimal? CompraMlUnidades,
+    int ItensComCompraMl,
+    decimal VendidoNaJanela,
+    decimal SobraPbsUnidades,
+    decimal? SobraMlUnidades,
+    int ItensComSobraMl,
+    decimal? SobraPbsValor,
+    int ItensComValorPbs,
+    decimal? SobraMlValor,
+    int ItensComValorMl);
+
+/// <param name="TemItemSemCategoria">
+/// Se existe item sem categoria no cadastro. A tela usa isto para oferecer o recorte "sem
+/// categoria" — que em sessão materializada antes da coluna existir é o recorte de todos os
+/// itens, e é a diferença entre explicar a ausência e mostrar um filtro vazio sem motivo.
+/// </param>
+internal sealed record FiltrosDisponiveis(
+    IReadOnlyList<int> Lojas,
+    IReadOnlyList<string> Categorias,
+    bool TemItemSemCategoria,
+    IReadOnlyList<string> Curvas,
+    bool TemItemSemCurva);
 
 /// <summary>
 /// Uma linha do detalhe. Os anuláveis chegam anuláveis <b>de propósito</b>: nulo é "não foi
@@ -797,13 +1034,15 @@ internal sealed record SessaoItemView(
     string Sku,
     string? NomeProduto,
     string? Curva,
+    string? Categoria,
     decimal CompraSugeridaPbs,
     decimal? CompraSugeridaMl,
     decimal VendidoNaJanela,
     decimal SobraPbsUnidades,
     decimal? SobraMlUnidades,
     decimal? SobraPbsValor,
-    bool JanelaAlemDoHistorico);
+    bool JanelaAlemDoHistorico,
+    decimal? SobraMlValor = null);
 
 /// <param name="Itens">População inteira da sessão — o denominador de todo o resto.</param>
 /// <param name="SobraExtraMlUnidades">
