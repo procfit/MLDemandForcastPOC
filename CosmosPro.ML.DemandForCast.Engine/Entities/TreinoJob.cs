@@ -20,20 +20,24 @@ public sealed class TreinoJob
     public DateTimeOffset? DataConclusao { get; set; }
 
     /// <summary>
-    /// Limite de SKUs (top por volume de vendas) usados no treino. Mantém o tempo
-    /// de treino do POC sob controle — o backtest retreina o LightGBM a cada fold.
-    /// </summary>
-    /// <summary>
     /// Orçamento de SKUs do treino, ou <c>null</c> para o <b>catálogo inteiro</b> — o
     /// default e o único valor usado pelo fluxo da sessão.
     ///
     /// <para>
     /// Nulo significa "sem teto", nunca "não sei" nem "zero SKUs". Um número existe para
     /// experimento e para teste: recortar pelos SKUs de maior volume treina o modelo numa
-    /// população mais densa do que a que ele vai atender, e o efeito medido disso foi um
-    /// modelo que nunca prevê perto de zero. Não havia limite de modelagem por trás do
-    /// teto de mil que vigorou até aqui — havia os 2100 parâmetros por comando do SQL
-    /// Server, hoje contornados por <c>EscopoDeSkus</c>.
+    /// população mais densa do que a que ele vai atender, o que é skew de treino/serviço.
+    /// Não havia limite de modelagem por trás do teto de mil que vigorou até aqui — havia
+    /// os 2100 parâmetros por comando do SQL Server, hoje contornados por
+    /// <c>EscopoDeSkus</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Medido, e menor do que se supunha:</b> na sugestão 125595 da Retiro só <b>991</b>
+    /// SKUs tinham venda antes do corte, contra um teto de mil — ele não excluiu SKU nenhum,
+    /// e removê-lo deixou a cobertura idêntica (147 itens na decisão, 563 na taxa). O viés
+    /// do modelo mal se moveu (MAE 0,47 → 0,44). O teto era um risco à espera de um catálogo
+    /// maior, não a causa do que se via ali.
     /// </para>
     /// </summary>
     public int? MaxSkus { get; set; }

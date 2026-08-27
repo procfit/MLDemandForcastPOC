@@ -15,7 +15,7 @@
         <RadzenFormField Text="Top SKUs" Variant="Variant.Outlined" Style="width: 130px">
             <RadzenNumeric @bind-Value="_maxSkus" Min="1" Placeholder="todos" />
         </RadzenFormField>
-        <HelpTip Position="TooltipPosition.Bottom" Text="Deixe vazio (o default) para treinar sobre o catálogo inteiro. Um número recorta os SKUs de MAIOR VOLUME da rede, o que serve para experimento rápido: o modelo passa a aprender numa população mais densa do que a que vai atender, e o efeito medido disso foi um modelo que nunca prevê perto de zero — ele compra demais em item de giro baixo." />
+        <HelpTip Position="TooltipPosition.Bottom" Text="Deixe vazio (o default) para treinar sobre o catálogo inteiro. Um número recorta os SKUs de MAIOR VOLUME da rede, o que serve para experimento rápido: o modelo passa a aprender numa população mais densa do que a que vai atender, e isso pode fazê-lo comprar demais em item de giro baixo." />
         <RadzenFormField Text="Treinar até (corte)" Variant="Variant.Outlined" Style="width: 190px">
             <RadzenDatePicker @bind-Value="_treinoAte" DateFormat="dd/MM/yyyy" ShowTime="false"
                               AllowClear="true" Placeholder="sem corte" />

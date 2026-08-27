@@ -100,11 +100,15 @@ public sealed class SessaoJobsTests
     /// <para>
     /// Antes havia piso (80) e teto (1000), e o teto existia por um limite de implementação —
     /// o <c>Sku IN (@s0…@sN)</c> gastava um parâmetro por SKU contra os 2100 que o SQL Server
-    /// aceita. O join com tabela temporária (<c>EscopoDeSkus</c>) tirou o limite, e o teto
-    /// tinha custo alto: na primeira sugestão real (Retiro) descartou 54% dos itens para
-    /// <c>ItensForaOrcamentoSkus</c> — por um motivo que não tem nada a ver com o método sob
-    /// teste — e treinou o modelo só na fatia densa do catálogo, que é skew de treino/serviço.
-    /// Um teto de volta aqui reabre os dois problemas de uma vez.
+    /// aceita. O join com tabela temporária (<c>EscopoDeSkus</c>) tirou o limite.
+    ///
+    /// <para>
+    /// Um teto de volta aqui recortaria a população da comparação pelo <b>volume</b> dos SKUs,
+    /// que não tem nada a ver com o método sob teste, e treinaria o modelo numa fatia mais
+    /// densa do que a que ele atende. Na Retiro o teto de mil não chegava a apertar (só 991
+    /// SKUs tinham venda antes do corte), mas isso é propriedade daquele conjunto, não
+    /// garantia: num catálogo maior o corte volta a morder.
+    /// </para>
     /// </para>
     /// </summary>
     [Theory]

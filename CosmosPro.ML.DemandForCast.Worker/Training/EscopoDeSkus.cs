@@ -11,9 +11,16 @@ namespace CosmosPro.ML.DemandForCast.Worker.Training;
 /// <b>Por que existe:</b> o <c>IN</c> parametrizado gastava um parâmetro por SKU e o SQL
 /// Server aceita 2100 por comando. Isso não era um teto de modelagem — era um limite de
 /// implementação —, mas virou um: o orçamento de SKUs do treino foi fixado em mil para
-/// ficar longe do estouro, e treinar só nos SKUs de maior volume enviesou o modelo para
-/// cima nos itens esparsos, que são a maioria do catálogo farma. O join não tem teto:
-/// um parâmetro (nenhum) para qualquer número de SKUs.
+/// ficar longe do estouro. O join não tem teto: um parâmetro (nenhum) para qualquer número
+/// de SKUs. Fechou também um bug latente em <c>StageEstoqueInicialLoader</c>, cuja lista
+/// vem dos itens da simulação e estouraria em runtime acima de 2100 SKUs.
+/// </para>
+///
+/// <para>
+/// <b>O que a remoção NÃO resolveu, medido:</b> na sugestão 125595 da Retiro só 991 SKUs
+/// tinham venda antes do corte, então o teto de mil não excluía SKU nenhum. Tirá-lo deixou
+/// a cobertura igual e o viés do modelo quase igual. Serve de aviso para a próxima
+/// hipótese: o teto era risco à espera de catálogo maior, não a causa daquele resultado.
 /// </para>
 ///
 /// <para>

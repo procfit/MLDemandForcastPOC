@@ -63,15 +63,14 @@ internal static class SessaoJobs
     /// Stage é diário, não horário, então não existe recorte fino a fazer.
     /// </para>
     /// </summary>
-/// <remarks>
+    /// <remarks>
     /// <b>O treino da sessão não tem orçamento de SKUs</b> (<c>MaxSkus = null</c>): carrega o
     /// catálogo inteiro da rede. Qualquer teto aqui deixaria parte da sugestão fora da
     /// população da comparação — contada em <c>ComparacaoOutput.ItensForaOrcamentoSkus</c> —
-    /// por um motivo que não tem nada a ver com o método sob teste; foi o que aconteceu com o
-    /// teto de mil, que descartou 54% dos itens da primeira sugestão real (Retiro) e, de
-    /// quebra, treinou o modelo só na fatia densa do catálogo. O que impede o pior caso de
-    /// tempo de treino virar espera infinita é
-    /// <see cref="ComparacaoSessao.LimiteDeFaseSemProgresso"/>, não um teto de SKUs.
+    /// por um motivo que não tem nada a ver com o método sob teste. O que impede o pior caso
+    /// de tempo de treino virar espera infinita é
+    /// <see cref="ComparacaoSessao.LimiteDeFaseSemProgresso"/>, não um teto de SKUs; medido na
+    /// Retiro, com ou sem teto o treino levou ~40s.
     /// </remarks>
     /// <param name="stage">
     /// Retrato da sugestão no Stage. <c>Cabecalhos</c> é a invariante de "<b>exatamente</b>

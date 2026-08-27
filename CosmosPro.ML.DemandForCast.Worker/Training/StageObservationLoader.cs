@@ -12,10 +12,21 @@ namespace CosmosPro.ML.DemandForCast.Worker.Training;
 /// <para>
 /// <b>Sem teto por default.</b> <c>maxSkus</c> nulo carrega o catálogo inteiro da rede;
 /// um valor restringe aos SKUs de <b>maior volume</b>, o que serve para experimento e
-/// para teste, não para produção. O recorte por volume não é neutro: treinar só nos
-/// densos e servir os esparsos é skew de treino/serviço, e foi o que produziu um modelo
-/// incapaz de prever perto de zero — ver <see cref="EscopoDeSkus"/> para o limite de
-/// implementação que fazia esse teto parecer obrigatório.
+/// para teste, não para produção. O recorte por volume não é neutro: treinar só nos densos
+/// e servir os esparsos é skew de treino/serviço — ver <see cref="EscopoDeSkus"/> para o
+/// limite de implementação que fazia esse teto parecer obrigatório.
+/// </para>
+///
+/// <para>
+/// <b>Sem teto, o conjunto de observações fica MAIOR que o orçamento ABC, e isso é
+/// deliberado.</b> O orçamento sai de <c>Vendas</c> (SKU que vendeu antes do corte), mas
+/// <see cref="MarkRupturasAsync"/> sem filtro alcança todo SKU de <c>EstoquesDiarios</c> —
+/// inclusive os que nunca venderam. Os dias de ruptura desses SKUs saem do treino
+/// (<c>IsValidTarget = !EmRuptura</c>), mas os dias densificados entre eles entram como
+/// <b>zero legítimo</b>. Na Retiro isso somou 3,3% de linhas (810.797 → 837.466) e é a
+/// explicação mais provável da única melhora observada ao remover o teto (MAE 0,47 → 0,44):
+/// exemplo de demanda zero é justamente o que faltava ao modelo. Não "conserte" isso
+/// escopando a ruptura ao orçamento sem medir antes — pode ser a pista, não o defeito.
 /// </para>
 ///
 /// <para>

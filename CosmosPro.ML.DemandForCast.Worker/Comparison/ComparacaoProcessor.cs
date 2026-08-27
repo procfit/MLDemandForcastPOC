@@ -571,9 +571,17 @@ internal sealed class ComparacaoProcessor(
 /// <b>O significado depende de <c>TreinoJob.MaxSkus</c>, e a diferença é grande.</b> Sem
 /// teto — o default —, cair aqui quer dizer <b>nenhuma venda antes do corte</b>: item que o
 /// ERP avaliou mas cujo SKU não tem série nenhuma para prever, o que é uma constatação
-/// sobre o dado. Com teto, quer dizer que o SKU tem série e mesmo assim não caber no
-/// recorte por volume — uma escolha nossa, não um limite do dado, e a razão pela qual o
-/// teto de mil que vigorou até aqui esvaziava metade da população.
+/// sobre o dado. Com teto, quer dizer que o SKU tem série e mesmo assim não cabe no recorte
+/// por volume — uma escolha nossa, não um limite do dado.
+/// </para>
+/// <para>
+/// <b>Um número alto aqui não é, por si, perda de comparação.</b> Na sugestão 125595 da
+/// Retiro foram 10.910 de 20.153 itens (54,1%) — todos sem venda antes do corte —, e nesses
+/// itens o <b>próprio ERP</b> declarou <c>DemandaDia</c> zero em 100% dos casos e mandou
+/// comprar 1 unidade no total. Incluí-los não alargaria a medição: encheria a população de
+/// pares onde os dois métodos dizem "não compre", inflando concordância sem informar nada.
+/// Antes de tratar este contador como cobertura perdida, confira a demanda que o ERP
+/// declarou nos itens que caíram aqui.
 /// </para>
 /// </param>
 /// <param name="RessalvaTreinoServe">

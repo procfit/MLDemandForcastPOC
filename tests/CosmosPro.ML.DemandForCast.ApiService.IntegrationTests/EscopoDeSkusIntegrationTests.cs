@@ -55,10 +55,10 @@ public sealed class EscopoDeSkusIntegrationTests(AppHostFixture fixture)
 
     /// <summary>
     /// A contraprova do teste acima: com teto o recorte é <b>por volume</b>, e some
-    /// justamente o item esparso. É o mecanismo que descartou 54% dos itens da primeira
-    /// sugestão real e treinou o modelo só na fatia densa do catálogo — mantido para
-    /// experimento, e mantido testado para que a diferença entre os dois modos fique
-    /// visível em vez de virar folclore.
+    /// justamente o item esparso. Mantido para experimento, e mantido testado para que a
+    /// diferença entre os dois modos fique visível em vez de virar folclore — na Retiro o
+    /// teto de mil não chegava a apertar (só 991 SKUs tinham venda antes do corte), e sem
+    /// este teste ninguém saberia dizer se o modo com teto ainda recorta algo.
     /// </summary>
     [Fact]
     public async Task Com_teto_o_loader_recorta_pelos_de_maior_volume()
