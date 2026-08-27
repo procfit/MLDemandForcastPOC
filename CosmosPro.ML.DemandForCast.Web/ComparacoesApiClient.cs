@@ -34,6 +34,29 @@ public class ComparacoesApiClient(HttpClient httpClient, IRedeContext redeContex
         return (await resp.Content.ReadFromJsonAsync<SessaoView>(cancellationToken: cts.Token))!;
     }
 
+    /// <summary>
+    /// Abre o download do ZIP que a sessão recebeu, para repetir a comparação sobre
+    /// exatamente o mesmo envio.
+    /// </summary>
+    /// <remarks>
+    /// Devolve a resposta crua com <see cref="HttpCompletionOption.ResponseHeadersRead"/>:
+    /// o corpo é repassado por stream por quem chama, nunca materializado aqui. Quem chama
+    /// é dono do <see cref="HttpResponseMessage"/> e precisa descartá-lo. Mesmo padrão de
+    /// <c>ExtratorApiClient.AbrirDownloadAsync</c>.
+    ///
+    /// <para>
+    /// Sem <see cref="LeituraTimeout"/>: este é o único GET deste client que não está atrás
+    /// do poll de 3s, e o ZIP pode ser grande — vale o teto de 10 minutos do próprio client,
+    /// o mesmo que o upload usa.
+    /// </para>
+    /// </remarks>
+    public async Task<HttpResponseMessage> AbrirDownloadDadosAsync(Guid id, CancellationToken ct = default)
+    {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        return await httpClient.GetAsync(
+            $"/api/comparacoes/{id}/dados?redeId={redeId}", HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+
     public async Task<IReadOnlyList<SessaoView>> ListAsync(int take = 50, CancellationToken ct = default)
     {
         var redeId = await redeContext.GetRedeIdAtualAsync();
@@ -184,7 +207,8 @@ public sealed record SessaoView(
     string? MotivoInviabilidade,
     string? MensagemErro,
     int? SkusSemCadastro = null,
-    string? ResultadoJson = null)
+    string? ResultadoJson = null,
+    bool DadosEnviados = false)
 {
     /// <summary>
     /// Se não há mais nada a esperar do servidor por conta própria, e o poll de 3s pode parar.

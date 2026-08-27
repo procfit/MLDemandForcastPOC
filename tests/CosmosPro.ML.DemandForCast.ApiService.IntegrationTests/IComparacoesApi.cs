@@ -27,6 +27,15 @@ public interface IComparacoesApi
         [Query] int redeId,
         CancellationToken ct = default);
 
+    /// <remarks>
+    /// <see cref="HttpResponseMessage"/> cru, e não <c>IApiResponse&lt;byte[]&gt;</c>: o teste
+    /// afirma o nome do arquivo, que vem no <c>Content-Disposition</c>, e precisa do 404 sem
+    /// exceção.
+    /// </remarks>
+    [Get("/api/comparacoes/{id}/dados")]
+    Task<HttpResponseMessage> DownloadDadosAsync(
+        Guid id, [Query] int redeId, CancellationToken ct = default);
+
     [Get("/api/comparacoes/{id}/itens")]
     Task<IApiResponse<SessaoItensPage>> ItensAsync(
         Guid id,
@@ -59,7 +68,8 @@ public sealed record SessaoView(
     string? MotivoInviabilidade,
     string? MensagemErro,
     int? SkusSemCadastro = null,
-    string? ResultadoJson = null);
+    string? ResultadoJson = null,
+    bool DadosEnviados = false);
 
 public sealed record SessaoItensPage(
     int Total,

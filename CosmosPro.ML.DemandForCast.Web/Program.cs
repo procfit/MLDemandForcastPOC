@@ -186,6 +186,7 @@ app.MapStaticAssets();
 
 app.MapLoginEndpoints();
 app.MapExtratorEndpoints();
+app.MapComparacoesDownloadEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

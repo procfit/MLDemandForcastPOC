@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Minio;
 using Minio.DataModel.Args;
+using Minio.Exceptions;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.Comparacoes;
 
@@ -35,6 +36,11 @@ internal static class ComparacoesEndpoints
              .Accepts<IFormFile>("multipart/form-data")
              .Produces(StatusCodes.Status202Accepted)
              .Produces<ValidationErrorResponse>(StatusCodes.Status400BadRequest)
+             .Produces(StatusCodes.Status404NotFound);
+
+        group.MapGet("/{id:guid}/dados", DownloadDadosAsync)
+             .WithName("DownloadComparacaoSessaoDados")
+             .Produces(StatusCodes.Status200OK, contentType: "application/zip")
              .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/{id:guid}/itens", ListItensAsync)
@@ -216,6 +222,83 @@ internal static class ComparacoesEndpoints
         logger.LogInformation("Sessao {SessaoId}: carga {CargaId} enfileirada", sessao.Id, carga.Id);
 
         return Results.Accepted($"/api/comparacoes/{sessao.Id}");
+    }
+
+    /// <summary>
+    /// Devolve o ZIP que a sessão recebeu, byte a byte como veio. Mesma rota do POST que o
+    /// enviou, no verbo oposto.
+    ///
+    /// <para>
+    /// <b>Existe para repetir uma comparação sobre exatamente o mesmo envio.</b> Cada import
+    /// substitui o Stage inteiro da rede (<c>CargaProcessor</c>), então o dado que uma sessão
+    /// antiga descreve já não está mais lá; e pedir ao TI do cliente para extrair de novo não
+    /// resolve, porque produziria outro arquivo, de outro instante, com outra janela de
+    /// vendas — números de duas execuções assim não são comparáveis. O arquivo original é a
+    /// única entrada que torna uma execução reprodutível.
+    /// </para>
+    ///
+    /// <para>
+    /// O ZIP sobrevive à exclusão da sessão, de propósito (ver <see cref="ExcluirAsync"/>),
+    /// então este endpoint continua servindo o envio de uma sessão que já não existe — só não
+    /// por este caminho, que parte dela.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>404 cobre três casos, e isso não é imprecisão:</b> sessão inexistente, sessão de
+    /// outra rede e sessão sem envio. Responder 403 no segundo confirmaria a quem sondasse
+    /// que a sessão existe em outro inquilino — mesma regra de <see cref="ItensDaSessao"/>.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> DownloadDadosAsync(
+        Guid id,
+        EngineDbContext db,
+        IMinioClient minio,
+        CancellationToken ct,
+        [FromQuery] int redeId = 1)
+    {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
+        // Sessão e carga na MESMA consulta: conferir o inquilino num round-trip à parte
+        // deixaria janela entre a checagem e a leitura do blob.
+        var arquivo = await db.ComparacaoSessoes
+            .AsNoTracking()
+            .Where(s => s.Id == id && s.RedeId == redeId)
+            .SelectMany(
+                s => db.CargasStage.Where(c => c.Id == s.CargaStageId),
+                (s, c) => new { c.BlobKey, c.NomeArquivoOriginal })
+            .FirstOrDefaultAsync(ct);
+
+        if (arquivo is null) return Results.NotFound();
+
+        // Stat antes de streamar: depois que Results.Stream começa a escrever o corpo, o
+        // status já foi enviado e um blob ausente viraria download truncado em vez de erro.
+        try
+        {
+            await minio.StatObjectAsync(
+                new StatObjectArgs()
+                    .WithBucket(ImportsEndpoints.BucketName)
+                    .WithObject(arquivo.BlobKey),
+                ct);
+        }
+        catch (Exception ex) when (ex is BucketNotFoundException or ObjectNotFoundException)
+        {
+            return Results.Problem(
+                title: "Arquivo do envio não está mais disponível",
+                detail: "A sessão registra o envio, mas o ZIP não está mais no armazenamento de " +
+                        "objetos. Isso acontece se o volume do MinIO foi recriado. Será preciso " +
+                        "extrair os dados no ERP novamente.",
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
+        return Results.Stream(
+            stream => minio.GetObjectAsync(
+                new GetObjectArgs()
+                    .WithBucket(ImportsEndpoints.BucketName)
+                    .WithObject(arquivo.BlobKey)
+                    .WithCallbackStream((s, token) => s.CopyToAsync(stream, token)),
+                ct),
+            contentType: "application/zip",
+            fileDownloadName: arquivo.NomeArquivoOriginal);
     }
 
     /// <summary>
@@ -637,7 +720,8 @@ internal static class ComparacoesEndpoints
             s.MotivoInviabilidade,
             s.MensagemErro,
             s.SkusSemCadastro,
-            null);
+            null,
+            s.CargaStageId != null);
 
     /// <summary>
     /// Projeção do detalhe — a única que traz o <c>ResultadoJson</c>. A listagem não o traz
@@ -657,12 +741,14 @@ internal static class ComparacoesEndpoints
             s.MotivoInviabilidade,
             s.MensagemErro,
             s.SkusSemCadastro,
-            s.ResultadoJson);
+            s.ResultadoJson,
+            s.CargaStageId != null);
 
     private static SessaoView ToView(ComparacaoSessao s) => new(
         s.Id, s.Nome, s.Status.ToString(), s.CriadoEm,
         s.SugestaoId, s.SugestaoDescricao, s.SugestaoDataHora, s.SugestaoTipoCalculo,
-        s.MotivoInviabilidade, s.MensagemErro, s.SkusSemCadastro, s.ResultadoJson);
+        s.MotivoInviabilidade, s.MensagemErro, s.SkusSemCadastro, s.ResultadoJson,
+        s.CargaStageId != null);
 }
 
 internal sealed record CreateSessaoRequest(string? Nome);
@@ -679,7 +765,8 @@ internal sealed record SessaoView(
     string? MotivoInviabilidade,
     string? MensagemErro,
     int? SkusSemCadastro = null,
-    string? ResultadoJson = null);
+    string? ResultadoJson = null,
+    bool DadosEnviados = false);
 
 /// <param name="OrderBy">
 /// Coluna <b>efetivamente</b> aplicada, depois da whitelist (<see cref="OrdemItensSessao"/>).

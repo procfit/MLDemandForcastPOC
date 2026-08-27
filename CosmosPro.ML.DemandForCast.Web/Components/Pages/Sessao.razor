@@ -18,6 +18,14 @@
         {
             <RadzenBadge Text="@SessaoView.EstadoLabel(_sessao.Status)" BadgeStyle="@SessaoView.BadgeFor(_sessao.Status)" Shade="Shade.Lighter" />
         }
+        @if (_sessao?.DadosEnviados == true)
+        {
+            <div style="flex: 1"></div>
+            <RadzenButton Click="@BaixarDados" Icon="folder_zip" Text="Baixar ZIP enviado"
+                          ButtonStyle="ButtonStyle.Light" Variant="Variant.Outlined" Size="ButtonSize.Small"
+                          data-test="baixar-zip-enviado" />
+            <HelpTip Position="TooltipPosition.Bottom" Text="Baixa o arquivo exatamente como foi enviado nesta comparação. Serve para repetir a comparação sobre o mesmo envio: cada importação substitui os dados da rede, então uma extração nova traria outra janela de vendas e os números das duas execuções não seriam comparáveis. Para repetir, crie uma comparação nova e envie este arquivo nela." />
+        }
     </RadzenStack>
 
     @if (!_carregou && _erroCarregamento is null)
@@ -357,6 +365,10 @@
     }
 
     private void BaixarExtrator() => Nav.NavigateTo("/extrator/download", forceLoad: true);
+
+    // forceLoad: é um endpoint HTTP comum, não rota Blazor — sem isso o router tentaria
+    // resolvê-la no circuito e cairia em "página não encontrada".
+    private void BaixarDados() => Nav.NavigateTo($"/comparacoes/{Id}/dados/download", forceLoad: true);
 
     private async Task TriggerFilePicker() =>
         await JS.InvokeVoidAsync("clickElementById", "sessao-zip-input");

@@ -535,6 +535,50 @@ public sealed class AppHostFixture : IAsyncLifetime
         return id;
     }
 
+    /// <summary>
+    /// Prende uma <c>CargaStage</c> a uma sessão já semeada, para a tela enxergar o envio.
+    ///
+    /// <para>
+    /// <b>Não põe objeto no MinIO, de propósito.</b> O que se afirma na tela é a decisão de
+    /// oferecer ou não o download — que sai de <c>SessaoView.DadosEnviados</c>, ou seja, de
+    /// <c>CargaStageId</c> —, não o conteúdo do arquivo: esse é afirmado byte a byte por
+    /// <c>SessaoDownloadIntegrationTests</c>, onde o ZIP passa pelo upload de verdade.
+    /// </para>
+    ///
+    /// <para>
+    /// Toda sessão concluída de verdade tem uma carga, então semear sem ela deixaria o E2E
+    /// olhando um estado que não existe em produção.
+    /// </para>
+    /// </summary>
+    public async Task SemearCargaNaSessaoAsync(
+        Guid sessaoId, string nomeArquivo, CancellationToken ct = default)
+    {
+        var connectionString = await App.GetConnectionStringAsync("engine", ct)
+            ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+
+        var cargaId = Guid.CreateVersion7();
+        await using (var insert = conn.CreateCommand())
+        {
+            insert.CommandText = """
+                INSERT INTO dbo.CargasStage
+                    (Id, RedeId, Status, DataAgendamento, DataConclusao, NomeArquivoOriginal, BlobKey)
+                SELECT @cargaId, s.RedeId, 'Concluida', @agora, @agora, @nome, @blobKey
+                FROM dbo.ComparacaoSessoes s WHERE s.Id = @sessaoId;
+
+                UPDATE dbo.ComparacaoSessoes SET CargaStageId = @cargaId WHERE Id = @sessaoId;
+                """;
+            insert.Parameters.AddWithValue("@cargaId", cargaId);
+            insert.Parameters.AddWithValue("@sessaoId", sessaoId);
+            insert.Parameters.AddWithValue("@agora", DateTimeOffset.UtcNow);
+            insert.Parameters.AddWithValue("@nome", nomeArquivo);
+            insert.Parameters.AddWithValue("@blobKey", $"{cargaId}.zip");
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Browser is not null) await Browser.DisposeAsync();

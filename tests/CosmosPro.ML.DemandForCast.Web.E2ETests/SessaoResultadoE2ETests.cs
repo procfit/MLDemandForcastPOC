@@ -197,10 +197,51 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             "a premissa que torna a estimativa circular precisa estar ao lado da recusa");
     }
 
+    /// <summary>
+    /// O botão de baixar o ZIP enviado. Sem ele, repetir uma comparação sobre o mesmo envio
+    /// depende de o cliente ainda ter o arquivo no disco — e cada import substitui o Stage
+    /// inteiro da rede, então uma extração nova traz outra janela de vendas e os números das
+    /// duas execuções não se comparam.
+    ///
+    /// <para>
+    /// Único caso desta classe que abre página própria, e não por capricho: os demais leem o
+    /// corpo em <b>texto</b> (<see cref="CorpoNormalizadoAsync"/>), onde nenhum atributo
+    /// aparece. Asserção por <c>data-test</c> em vez de pelo rótulo porque o rótulo é redação
+    /// e muda; o que não pode sumir é a oferta do download quando a sessão tem envio.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Sessao_com_envio_oferece_o_download_do_zip()
+    {
+        // Garante a semeadura (sessão + carga) reusando o mesmo caminho dos outros casos.
+        await ResultadoRenderizadoAsync();
+
+        var page = await fixture.NovaPaginaLogadaAsync();
+        try
+        {
+            await page.GotoAsync($"{fixture.WebfrontendUrl.TrimEnd('/')}/comparacoes/{_sessaoId}");
+            await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+            var botao = page.Locator("[data-test='baixar-zip-enviado']");
+            await botao.First.WaitForAsync(new() { Timeout = 60_000 });
+            (await botao.CountAsync()).Should().Be(1);
+        }
+        finally
+        {
+            await page.CloseAsync();
+        }
+    }
+
     // --- Infra do teste ------------------------------------------------------
 
     private static readonly SemaphoreSlim Portao = new(1, 1);
     private static string? _corpo;
+
+    /// <summary>
+    /// Sessão semeada por <see cref="ResultadoRenderizadoAsync"/>. Exposta para o único caso
+    /// que precisa abrir a página por conta própria, em vez de reler o corpo em cache.
+    /// </summary>
+    private static Guid _sessaoId;
 
     /// <summary>
     /// Semeia a sessão, abre a página e devolve o corpo renderizado. Feito uma vez por
@@ -214,7 +255,7 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         {
             if (_corpo is not null) return _corpo;
 
-            var sessaoId = await fixture.SemearSessaoConcluidaAsync(
+            _sessaoId = await fixture.SemearSessaoConcluidaAsync(
                 NomeDaSessao,
                 SugestaoId,
                 new DateTime(2026, 7, 1, 9, 30, 0),
@@ -224,10 +265,15 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
                 Itens(),
                 TestContext.Current.CancellationToken);
 
+            // Uma sessão concluída de verdade sempre veio de um envio; semear sem a carga
+            // deixaria a tela sob teste num estado que produção não produz.
+            await fixture.SemearCargaNaSessaoAsync(
+                _sessaoId, "extracao-pbs-semeada.zip", TestContext.Current.CancellationToken);
+
             var page = await fixture.NovaPaginaLogadaAsync();
             try
             {
-                await page.GotoAsync($"{fixture.WebfrontendUrl.TrimEnd('/')}/comparacoes/{sessaoId}");
+                await page.GotoAsync($"{fixture.WebfrontendUrl.TrimEnd('/')}/comparacoes/{_sessaoId}");
                 await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
                 // O conteúdo só aparece depois do circuito interativo assumir (o carregamento
