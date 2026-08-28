@@ -58,6 +58,17 @@
                     <RadzenDataGridColumn TItem="MercadoCoberturaView" Property="Unidades" Title="Unidades no mês" Width="160px" TextAlign="TextAlign.Right">
                         <Template Context="c">@c.Unidades.ToString("N0")</Template>
                     </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="MercadoCoberturaView" Title="" Width="70px" Sortable="false" TextAlign="TextAlign.Center">
+                        <HeaderTemplate>
+                            <HelpTip Text="Excluir um recorte apaga as observações daquele mês e brick — a série mensal perde esse ponto até você enviar de novo um relatório que o cubra. Use quando um arquivo errado foi carregado (mês trocado, rede trocada, teste). O catálogo de produtos e o painel de PDVs não são apagados, porque os outros meses do mesmo brick ainda os usam; o histórico de envios também fica. Comparações já concluídas não mudam: o resultado delas é gravado no momento da execução." Size="0.9rem" />
+                        </HeaderTemplate>
+                        <Template Context="c">
+                            <RadzenButton Icon="delete_outline" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Text"
+                                          Size="ButtonSize.Small" Disabled="@_excluindo"
+                                          Click="@(() => ExcluirCoberturaAsync(c))"
+                                          data-test="excluir-cobertura" />
+                        </Template>
+                    </RadzenDataGridColumn>
                 </Columns>
             </RadzenDataGrid>
         </RadzenStack>
@@ -119,10 +130,61 @@
     private string? _erro;
     private bool _loading;
     private bool _uploading;
+    private bool _excluindo;
     private Timer? _timer;
     private readonly CancellationTokenSource _cts = new();
 
     [Inject] private IJSRuntime JS { get; set; } = null!;
+    [Inject] private DialogService Dialogs { get; set; } = null!;
+
+    /// <summary>
+    /// Confirmação antes do DELETE, com o recorte nomeado no texto: "excluir" sem dizer o quê
+    /// é como um comprador apaga março achando que apagava abril. A frase declara também o
+    /// caminho de volta (reenviar um relatório que cubra o recorte) — exclusão aqui é
+    /// recuperável por reenvio, e saber disso muda a decisão de quem está em dúvida.
+    /// </summary>
+    private async Task ExcluirCoberturaAsync(MercadoCoberturaView celula)
+    {
+        var confirmado = await Dialogs.Confirm(
+            $"Apagar os dados de mercado de {celula.Mes:MM/yyyy} no brick {celula.Brick} " +
+            $"({celula.Observacoes:N0} observações)? A série mensal perde esse ponto até você " +
+            "enviar novamente um relatório da IQVIA que cubra esse mês e brick.",
+            "Excluir dados de mercado",
+            new ConfirmOptions { OkButtonText = "Excluir", CancelButtonText = "Cancelar" });
+        if (confirmado != true) return;
+
+        _excluindo = true;
+        try
+        {
+            var erro = await MercadoApi.ExcluirCoberturaAsync(celula.Mes, celula.Brick, _cts.Token);
+            if (erro is null)
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Recorte excluído",
+                    Detail = $"{celula.Mes:MM/yyyy} · brick {celula.Brick} saiu da série de mercado.",
+                    Duration = 5000,
+                });
+            }
+            else
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Error,
+                    Summary = "Não foi possível excluir",
+                    Detail = erro,
+                    Duration = 8000,
+                });
+            }
+
+            await RefreshAsync();
+        }
+        finally
+        {
+            _excluindo = false;
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {

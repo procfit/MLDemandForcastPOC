@@ -52,6 +52,33 @@ public class MercadoApiClient(HttpClient httpClient, IRedeContext redeContext)
             $"/api/mercado/cobertura?redeId={redeId}", ct);
         return result ?? [];
     }
+
+    /// <summary>
+    /// Exclui as observações de uma célula de cobertura (mês × brick). Devolve o erro em
+    /// texto, ou <c>null</c> no sucesso — o 409 de "envio em processamento" precisa chegar à
+    /// tela com a explicação do servidor, não como exceção genérica.
+    /// </summary>
+    public async Task<string?> ExcluirCoberturaAsync(DateOnly mes, string brick, CancellationToken ct = default)
+    {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        var resp = await httpClient.DeleteAsync(
+            $"/api/mercado/cobertura?redeId={redeId}&mes={mes:yyyy-MM-dd}&brick={Uri.EscapeDataString(brick)}", ct);
+
+        if (resp.IsSuccessStatusCode) return null;
+
+        if (resp.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.BadRequest)
+        {
+            var body = await resp.Content.ReadFromJsonAsync<ValidationErrorResponse>(cancellationToken: ct);
+            return body?.Errors is { Count: > 0 } erros ? string.Join(" ", erros) : "O servidor recusou a exclusão.";
+        }
+
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            return "Este recorte não existe mais — a tabela pode estar desatualizada. Atualize a página.";
+        }
+
+        return $"Falha ao excluir (HTTP {(int)resp.StatusCode}). Tente novamente.";
+    }
 }
 
 public sealed record MercadoUploadResult(bool Success, MercadoUploadResponse? Body, IReadOnlyList<string>? Errors);

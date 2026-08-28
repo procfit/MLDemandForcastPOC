@@ -26,6 +26,7 @@ public sealed class AppHostFixture : IAsyncLifetime
 
     public DistributedApplication App { get; private set; } = null!;
     public IImportsApi ImportsApi { get; private set; } = null!;
+    public IMercadoApi MercadoApi { get; private set; } = null!;
     public IRedesApi RedesApi { get; private set; } = null!;
     public IStageApi StageApi { get; private set; } = null!;
     public IComparacoesApi ComparacoesApi { get; private set; } = null!;
@@ -91,6 +92,7 @@ public sealed class AppHostFixture : IAsyncLifetime
         var httpClient = App.CreateHttpClient("apiservice", endpointName: "https");
         httpClient.Timeout = TimeSpan.FromMinutes(2);
         ImportsApi = RestService.For<IImportsApi>(httpClient);
+        MercadoApi = RestService.For<IMercadoApi>(httpClient);
         RedesApi = RestService.For<IRedesApi>(httpClient);
         StageApi = RestService.For<IStageApi>(httpClient);
         ComparacoesApi = RestService.For<IComparacoesApi>(httpClient);

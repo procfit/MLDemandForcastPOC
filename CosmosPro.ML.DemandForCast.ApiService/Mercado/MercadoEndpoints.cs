@@ -41,6 +41,12 @@ internal static class MercadoEndpoints
              .WithName("GetMercadoCobertura")
              .Produces<IReadOnlyList<MercadoCoberturaView>>();
 
+        group.MapDelete("/cobertura", ExcluirCoberturaAsync)
+             .WithName("DeleteMercadoCobertura")
+             .Produces(StatusCodes.Status204NoContent)
+             .Produces(StatusCodes.Status404NotFound)
+             .Produces<ValidationErrorResponse>(StatusCodes.Status409Conflict);
+
         return app;
     }
 
@@ -192,6 +198,75 @@ internal static class MercadoEndpoints
     /// da resposta é montado depois, sobre o resultado já materializado.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Apaga as observações de mercado de <b>uma célula de cobertura</b> — (mês, brick) — da
+    /// rede do chamador.
+    ///
+    /// <para>
+    /// A célula é a única unidade de exclusão que existe: as observações não guardam de qual
+    /// envio vieram (de propósito — a recarga substitui por (mês, brick), então "o que este
+    /// envio carregou" deixa de ser rastreável no instante em que outro arquivo cobre o mesmo
+    /// recorte). Excluir "por carga" prometeria uma granularidade que o modelo não tem.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Só as observações saem.</b> <c>MercadoProdutos</c> é catálogo por EAN, compartilhado
+    /// por todos os meses e bricks; <c>MercadoBrickPdvs</c> é o painel do brick, compartilhado
+    /// pelos meses dele — apagar o mês 03 do brick X não pode levar o painel que o mês 04 do
+    /// mesmo brick ainda usa. A <c>MercadoCarga</c> e o XLSX no MinIO também ficam: são o
+    /// histórico de envios, como nos imports do Stage.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>409 com carga em voo:</b> o <c>MercadoProcessor</c> escreve numa transação própria,
+    /// e um DELETE concorrente ao bulk dele terminaria em célula meio-cheia ou em deadlock —
+    /// com a mensagem culpando quem clicou. A recusa usa o mesmo desenho do bloqueio de sessão:
+    /// espera-se a fila esvaziar, não se compete com ela.
+    /// </para>
+    ///
+    /// <para>
+    /// 404 quando a célula não existe <b>nesta</b> rede — o que cobre também a sonda com
+    /// célula de outro inquilino, pela mesma regra dos demais endpoints (403 confirmaria a
+    /// existência).
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> ExcluirCoberturaAsync(
+        EngineDbContext db,
+        ILogger<Program> logger,
+        CancellationToken ct,
+        [FromQuery] DateOnly mes,
+        [FromQuery] string brick = "",
+        [FromQuery] int redeId = 1)
+    {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
+        if (string.IsNullOrWhiteSpace(brick))
+        {
+            return Results.BadRequest(new ValidationErrorResponse(["Informe o brick da célula a excluir."]));
+        }
+
+        var emVoo = await db.MercadoCargas
+            .AnyAsync(c => c.RedeId == redeId
+                && (c.Status == MercadoCargaStatus.Pendente || c.Status == MercadoCargaStatus.Processando), ct);
+        if (emVoo)
+        {
+            return Results.Conflict(new ValidationErrorResponse([
+                "Há um envio de dados de mercado em processamento nesta rede. Aguarde ele " +
+                "terminar e tente de novo — excluir durante a gravação deixaria o mês pela metade."]));
+        }
+
+        var removidas = await db.MercadoObservacoes
+            .Where(o => o.RedeId == redeId && o.Mes == mes && o.Brick == brick)
+            .ExecuteDeleteAsync(ct);
+
+        if (removidas == 0) return Results.NotFound();
+
+        logger.LogInformation(
+            "Mercado: {N} observação(ões) de {Mes:yyyy-MM} / brick '{Brick}' excluídas da rede {RedeId}.",
+            removidas, mes, brick, redeId);
+        return Results.NoContent();
+    }
+
     internal static IQueryable<MercadoCoberturaLinha> CoberturaQuery(EngineDbContext db, int redeId) =>
         db.MercadoObservacoes
             .AsNoTracking()
