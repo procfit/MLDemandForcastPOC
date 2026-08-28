@@ -46,7 +46,19 @@ internal sealed class StageSchemaDeployer(ILogger<StageSchemaDeployer> logger)
         // O Stage é 100% declarado no .sqlproj, então tabela que sai do source deve
         // sair do banco também — sem isto, dbo.MercadoIqvia (removida na F16) ficaria
         // órfã em todo banco já provisionado, com schema que ninguém mais mantém.
-        var opcoes = new DacDeployOptions { DropObjectsNotInSource = true };
+        //
+        // BlockOnPossibleDataLoss desligado É a metade que faz o drop funcionar: o default
+        // (true) recusa derrubar tabela COM LINHAS, e todo banco provisionado antes da F16
+        // tem linhas em MercadoIqvia — o deploy saía com exit 1 e, como os serviços esperam
+        // o migrador, nada subia. O CI não vê isso porque o banco dele nasce limpo; banco
+        // persistente (F5 local e produção) vê. Perder dado do STAGE por mudança de schema
+        // é aceitável por contrato: cada import o substitui inteiro e a fonte é o ERP do
+        // cliente — o que não pode perder dado é o engine, que o DacFx não toca.
+        var opcoes = new DacDeployOptions
+        {
+            DropObjectsNotInSource = true,
+            BlockOnPossibleDataLoss = false,
+        };
         servicos.Deploy(pacote, nomeBanco, upgradeExisting: true, options: opcoes, cancellationToken: ct);
 
         logger.LogInformation("Stage: schema publicado.");

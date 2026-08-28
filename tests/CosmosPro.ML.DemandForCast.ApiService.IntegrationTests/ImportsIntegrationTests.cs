@@ -53,15 +53,18 @@ public sealed class ImportsIntegrationTests(AppHostFixture fixture)
     [Fact]
     public async Task Upload_de_ZIP_sem_arquivo_obrigatorio_retorna_400_com_mensagem()
     {
-        // Arrange — ZIP propositalmente incompleto (sem mercado_iqvia.csv)
+        // Arrange — ZIP propositalmente incompleto: sem vendas.csv, que é obrigatório e o
+        // menos provável de sair do contrato (é a matéria-prima do engine). O arquivo omitido
+        // já foi mercado_iqvia.csv, e o teste passou a aceitar o upload quando a F16 o tirou
+        // do contrato — a premissa do "incompleto" precisa ser um arquivo que continue
+        // obrigatório, senão o teste valida o contrato de ontem.
         using var zip = new CsvZipBuilder()
             .WithLojas(new LojaFaker().Generate(1))
             .WithProdutos(new ProdutoFaker().Generate(1))
-            .WithVendas([])
+            // vendas.csv ausente intencionalmente
             .WithEstoquesDiarios([])
             .WithCompras([])
             .WithPromocoes([])
-            // mercado_iqvia.csv ausente intencionalmente
             .Build();
 
         // Act
