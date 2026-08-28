@@ -128,6 +128,67 @@ public sealed class MercadoCoberturaExclusaoIntegrationTests(AppHostFixture fixt
         }
     }
 
+    /// <summary>
+    /// <b>O incidente que motivou o endpoint:</b> o arquivo da IQVIA de uma rede foi enviado
+    /// na outra. Desfazer o envio tem de remover TUDO que ele deixou na rede errada — as
+    /// observações, o catálogo, o painel de PDVs (que carrega CNPJs das lojas da rede certa:
+    /// dado identificável de outro inquilino) e a própria linha do histórico, que exibia nome
+    /// de arquivo e cobertura aos usuários da rede errada. Sobra zero, e o teste conta linha a
+    /// linha em cada tabela porque "quase zero" aqui é vazamento entre inquilinos.
+    /// </summary>
+    [Fact]
+    public async Task Desfazer_o_envio_nao_deixa_nada_do_arquivo_na_rede()
+    {
+        var redeErrada = await EnsureRedeAsync("Rede Mercado Envio Errado", "mercado-envio-errado");
+        await LimparMercadoDaRedeAsync(redeErrada);
+        var cargaId = await EnviarArquivoAsync(redeErrada);
+
+        var resp = await fixture.MercadoApi.ExcluirEnvioAsync(
+            cargaId, redeErrada, TestContext.Current.CancellationToken);
+        resp.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        (await CoberturaAsync(redeErrada)).Should().BeEmpty();
+
+        await using var db = await AbrirEngineAsync(TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        (await db.MercadoObservacoes.CountAsync(o => o.RedeId == redeErrada, ct)).Should().Be(0);
+        (await db.MercadoProdutos.CountAsync(x => x.RedeId == redeErrada, ct)).Should().Be(0,
+            "sem nenhuma observação restante, o catálogo do arquivo alheio é órfão e sai");
+        (await db.MercadoBrickPdvs.CountAsync(x => x.RedeId == redeErrada, ct)).Should().Be(0,
+            "o painel carrega CNPJs das lojas da outra rede — é a parte mais sensível do vazamento");
+        (await db.MercadoCargas.CountAsync(c => c.RedeId == redeErrada, ct)).Should().Be(0,
+            "a linha do histórico exibia o arquivo alheio na tela da rede errada; desfazer inclui o rastro");
+    }
+
+    /// <summary>
+    /// A contraparte do teste acima: com DOIS envios de meses distintos, desfazer um preserva
+    /// o outro por inteiro — inclusive catálogo e painel, que o mês restante ainda referencia.
+    /// A varredura é de órfãos, não de tudo.
+    /// </summary>
+    [Fact]
+    public async Task Desfazer_um_envio_preserva_o_que_outro_envio_ainda_usa()
+    {
+        var redeId = await EnsureRedeAsync("Rede Mercado Dois Envios", "mercado-dois-envios");
+        await LimparMercadoDaRedeAsync(redeId);
+        var cargaMaio = await EnviarArquivoAsync(redeId, somenteMes: "202605");
+        await EnviarArquivoAsync(redeId, somenteMes: "202606");
+
+        var resp = await fixture.MercadoApi.ExcluirEnvioAsync(
+            cargaMaio, redeId, TestContext.Current.CancellationToken);
+        resp.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        (await CoberturaAsync(redeId)).Should().ContainSingle().Which.Mes.Should().Be(MesQueFica);
+
+        await using var db = await AbrirEngineAsync(TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+        (await db.MercadoProdutos.CountAsync(x => x.RedeId == redeId && x.Ean == Ean, ct)).Should().Be(1,
+            "o mês que ficou ainda referencia o EAN — a varredura é de órfãos, não de tudo");
+        (await db.MercadoBrickPdvs.CountAsync(x => x.RedeId == redeId && x.Brick == Brick, ct))
+            .Should().BeGreaterThan(0);
+        (await db.MercadoCargas.CountAsync(c => c.RedeId == redeId, ct)).Should().Be(1,
+            "só a linha do envio desfeito sai do histórico");
+    }
+
     private async Task<List<MercadoCoberturaResposta>> CoberturaAsync(int redeId)
     {
         var resp = await fixture.MercadoApi.CoberturaAsync(redeId, TestContext.Current.CancellationToken);
@@ -143,17 +204,35 @@ public sealed class MercadoCoberturaExclusaoIntegrationTests(AppHostFixture fixt
     private async Task<int> SemearDoisMesesAsync()
     {
         var redeId = await EnsureRedeAsync("Rede Mercado Exclusao", Slug);
+        await EnviarArquivoAsync(redeId);
+        return redeId;
+    }
+
+    /// <summary>
+    /// Envia um XLSX pelo caminho real e devolve o id da carga concluída. Com
+    /// <paramref name="somenteMes"/>, o arquivo cobre um único mês (AAAAMM); sem, cobre
+    /// 2026-05 e 2026-06.
+    /// </summary>
+    private async Task<Guid> EnviarArquivoAsync(int redeId, string? somenteMes = null)
+    {
+        string[] meses = somenteMes is null ? ["202605", "202606"] : [somenteMes];
+        var colunas = new List<string>
+        {
+            "Ean", "Produto Desc Longa", "Laboratorio", "Molecula",
+            "Areas da Farmacia", "Nec 1", "Forma 3", "Classe 4",
+        };
+        var valores = new List<object?> { Ean, "GLIFAGE XR 500MG X30", "MERCK", "METFORMINA", null, null, null, null };
+        foreach (var m in meses)
+        {
+            colunas.Add(IqviaXlsxBuilder.Medida(Brick, Bandeira, m, "Unidades"));
+            colunas.Add(IqviaXlsxBuilder.Medida(Brick, Bandeira, m, "Real CPP"));
+            valores.Add(10);
+            valores.Add(100.0);
+        }
 
         using var xlsx = new IqviaXlsxBuilder()
-            .WithColunas(
-                "Ean", "Produto Desc Longa", "Laboratorio", "Molecula",
-                "Areas da Farmacia", "Nec 1", "Forma 3", "Classe 4",
-                IqviaXlsxBuilder.Medida(Brick, Bandeira, "202605", "Unidades"),
-                IqviaXlsxBuilder.Medida(Brick, Bandeira, "202605", "Real CPP"),
-                IqviaXlsxBuilder.Medida(Brick, Bandeira, "202606", "Unidades"),
-                IqviaXlsxBuilder.Medida(Brick, Bandeira, "202606", "Real CPP"))
-            .AddLinha(Ean, "GLIFAGE XR 500MG X30", "MERCK", "METFORMINA",
-                null, null, null, null, 10, 100.0, 7, 70.0)
+            .WithColunas([.. colunas])
+            .AddLinha([.. valores])
             // Formato real da aba de PDVs: "BANDEIRA - CNPJ". Sem o prefixo o parser descarta
             // a linha em silêncio, e o teste do painel afirmaria ausência achando que afirma presença.
             .AddPdv(Brick, "CONCORRENTES - 00000000000000")
@@ -161,13 +240,13 @@ public sealed class MercadoCoberturaExclusaoIntegrationTests(AppHostFixture fixt
 
         xlsx.Position = 0;
         var upload = await fixture.MercadoApi.UploadAsync(
-            new StreamPart(xlsx, "iqvia-exclusao.xlsx",
+            new StreamPart(xlsx, $"iqvia-exclusao-{somenteMes ?? "completo"}.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             redeId, TestContext.Current.CancellationToken);
         upload.StatusCode.Should().Be(HttpStatusCode.Accepted, because: upload.Error?.Message ?? "sem detalhe");
 
         await AguardarCargaAsync(upload.Content!.Id, redeId);
-        return redeId;
+        return upload.Content.Id;
     }
 
     private async Task AguardarCargaAsync(Guid id, int redeId)
@@ -185,6 +264,22 @@ public sealed class MercadoCoberturaExclusaoIntegrationTests(AppHostFixture fixt
         }
 
         throw new TimeoutException($"Carga de mercado {id} não concluiu em 2 min.");
+    }
+
+    /// <summary>
+    /// Zera o mercado da rede antes do teste. Necessário porque o volume do SQL é persistente
+    /// e a rede é reaproveitada entre execuções: as cargas do histórico acumulam, e uma
+    /// asserção de contagem absoluta passaria na primeira execução e falharia na terceira —
+    /// que foi exatamente como este arquivo quebrou.
+    /// </summary>
+    private async Task LimparMercadoDaRedeAsync(int redeId)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var db = await AbrirEngineAsync(ct);
+        await db.MercadoObservacoes.Where(x => x.RedeId == redeId).ExecuteDeleteAsync(ct);
+        await db.MercadoProdutos.Where(x => x.RedeId == redeId).ExecuteDeleteAsync(ct);
+        await db.MercadoBrickPdvs.Where(x => x.RedeId == redeId).ExecuteDeleteAsync(ct);
+        await db.MercadoCargas.Where(x => x.RedeId == redeId).ExecuteDeleteAsync(ct);
     }
 
     private async Task<EngineDbContext> AbrirEngineAsync(CancellationToken ct)

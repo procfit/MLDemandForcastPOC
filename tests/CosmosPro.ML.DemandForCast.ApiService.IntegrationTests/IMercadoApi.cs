@@ -21,6 +21,10 @@ public interface IMercadoApi
     Task<IApiResponse<List<MercadoCoberturaResposta>>> CoberturaAsync(
         [Query] int redeId, CancellationToken ct = default);
 
+    [Delete("/api/mercado/uploads/{id}")]
+    Task<IApiResponse> ExcluirEnvioAsync(
+        Guid id, [Query] int redeId, CancellationToken ct = default);
+
     [Delete("/api/mercado/cobertura")]
     Task<IApiResponse> ExcluirCoberturaAsync(
         [Query] int redeId,

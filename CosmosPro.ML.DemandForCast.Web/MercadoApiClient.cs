@@ -79,6 +79,33 @@ public class MercadoApiClient(HttpClient httpClient, IRedeContext redeContext)
 
         return $"Falha ao excluir (HTTP {(int)resp.StatusCode}). Tente novamente.";
     }
+
+    /// <summary>
+    /// Desfaz um envio inteiro: recortes declarados, órfãos de catálogo/painel, o arquivo
+    /// guardado e a linha do histórico. Existe para o import feito na rede errada — o caso em
+    /// que até o rastro é contaminação. Mesmo contrato de erro do
+    /// <see cref="ExcluirCoberturaAsync"/>.
+    /// </summary>
+    public async Task<string?> ExcluirEnvioAsync(Guid cargaId, CancellationToken ct = default)
+    {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        var resp = await httpClient.DeleteAsync($"/api/mercado/uploads/{cargaId}?redeId={redeId}", ct);
+
+        if (resp.IsSuccessStatusCode) return null;
+
+        if (resp.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.BadRequest)
+        {
+            var body = await resp.Content.ReadFromJsonAsync<ValidationErrorResponse>(cancellationToken: ct);
+            return body?.Errors is { Count: > 0 } erros ? string.Join(" ", erros) : "O servidor recusou a exclusão.";
+        }
+
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+        {
+            return "Este envio não existe mais — a tabela pode estar desatualizada. Atualize a página.";
+        }
+
+        return $"Falha ao excluir (HTTP {(int)resp.StatusCode}). Tente novamente.";
+    }
 }
 
 public sealed record MercadoUploadResult(bool Success, MercadoUploadResponse? Body, IReadOnlyList<string>? Errors);

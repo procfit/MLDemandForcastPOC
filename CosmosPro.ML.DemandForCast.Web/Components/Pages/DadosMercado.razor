@@ -116,6 +116,18 @@
                             <small style="color: #c62828">@c.MensagemErro</small>
                         </Template>
                     </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="MercadoCargaView" Title="" Width="70px" Sortable="false" TextAlign="TextAlign.Center">
+                        <HeaderTemplate>
+                            <HelpTip Text="Desfaz o envio por inteiro: apaga os meses e bricks que ele carregou, o catálogo e o painel de PDVs que ficarem sem uso, o arquivo guardado e esta linha do histórico. É o botão para quando o arquivo foi enviado na rede errada — nada dele pode sobrar aqui. Se um mês deste envio já foi recarregado por um envio mais novo, o que sai é o dado atual daquele mês; nesse caso, reenvie depois o arquivo certo." Size="0.9rem" />
+                        </HeaderTemplate>
+                        <Template Context="c">
+                            <RadzenButton Icon="delete_forever" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Text"
+                                          Size="ButtonSize.Small"
+                                          Disabled="@(_excluindo || c.Status is "Pendente" or "Processando")"
+                                          Click="@(() => ExcluirEnvioAsync(c))"
+                                          data-test="excluir-envio" />
+                        </Template>
+                    </RadzenDataGridColumn>
                 </Columns>
             </RadzenDataGrid>
         </RadzenStack>
@@ -143,6 +155,56 @@
     /// caminho de volta (reenviar um relatório que cubra o recorte) — exclusão aqui é
     /// recuperável por reenvio, e saber disso muda a decisão de quem está em dúvida.
     /// </summary>
+    /// <summary>
+    /// Desfazer o envio inteiro — o caminho para o arquivo enviado na rede errada. O diálogo
+    /// nomeia o arquivo e a cobertura dele, porque "excluir envio" sem dizer qual convida a
+    /// apagar o certo achando que apaga o errado.
+    /// </summary>
+    private async Task ExcluirEnvioAsync(MercadoCargaView carga)
+    {
+        var confirmado = await Dialogs.Confirm(
+            $"Desfazer o envio \"{carga.NomeArquivoOriginal}\" ({DescreverResumo(carga)})? " +
+            "Saem os meses e bricks que ele carregou, o que ficar sem uso no catálogo e no painel " +
+            "de PDVs, o arquivo guardado e esta linha do histórico. Se algum mês já foi " +
+            "recarregado por um envio mais novo, o dado atual daquele mês sai junto — reenvie o " +
+            "arquivo certo depois.",
+            "Desfazer envio de dados de mercado",
+            new ConfirmOptions { OkButtonText = "Desfazer envio", CancelButtonText = "Cancelar" });
+        if (confirmado != true) return;
+
+        _excluindo = true;
+        try
+        {
+            var erro = await MercadoApi.ExcluirEnvioAsync(carga.Id, _cts.Token);
+            if (erro is null)
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Envio desfeito",
+                    Detail = $"\"{carga.NomeArquivoOriginal}\" e tudo que ele carregou saíram desta rede.",
+                    Duration = 6000,
+                });
+            }
+            else
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Error,
+                    Summary = "Não foi possível desfazer o envio",
+                    Detail = erro,
+                    Duration = 8000,
+                });
+            }
+
+            await RefreshAsync();
+        }
+        finally
+        {
+            _excluindo = false;
+        }
+    }
+
     private async Task ExcluirCoberturaAsync(MercadoCoberturaView celula)
     {
         var confirmado = await Dialogs.Confirm(

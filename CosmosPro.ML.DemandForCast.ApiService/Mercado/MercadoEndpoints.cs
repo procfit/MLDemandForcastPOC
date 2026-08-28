@@ -1,4 +1,6 @@
+using System.Text.Json;
 using CosmosPro.ML.DemandForCast.ApiService.Imports;
+using CosmosPro.ML.DemandForCast.Engine.Mercado;
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
 using Microsoft.AspNetCore.Mvc;
@@ -43,6 +45,12 @@ internal static class MercadoEndpoints
 
         group.MapDelete("/cobertura", ExcluirCoberturaAsync)
              .WithName("DeleteMercadoCobertura")
+             .Produces(StatusCodes.Status204NoContent)
+             .Produces(StatusCodes.Status404NotFound)
+             .Produces<ValidationErrorResponse>(StatusCodes.Status409Conflict);
+
+        group.MapDelete("/uploads/{id:guid}", ExcluirEnvioAsync)
+             .WithName("DeleteMercadoUpload")
              .Produces(StatusCodes.Status204NoContent)
              .Produces(StatusCodes.Status404NotFound)
              .Produces<ValidationErrorResponse>(StatusCodes.Status409Conflict);
@@ -199,6 +207,132 @@ internal static class MercadoEndpoints
     /// </para>
     /// </summary>
     /// <summary>
+    /// Desfaz um envio: os recortes que ele declarou, os órfãos de catálogo/painel, o XLSX no
+    /// MinIO e a própria linha do histórico.
+    ///
+    /// <para>
+    /// <b>Existe por causa do import na rede errada.</b> O caso real que o motivou: o arquivo
+    /// da IQVIA de uma rede foi enviado na outra. Excluir só os recortes deixaria, na rede
+    /// errada, o painel de PDVs — que carrega os CNPJs das lojas da rede certa, dado
+    /// identificável de outro inquilino — e a linha do envio visível na tela dela, com nome de
+    /// arquivo e cobertura. Num sistema em que isolamento por rede é invariante (F10/F11),
+    /// desfazer o engano tem de remover <b>tudo</b> que ele deixou, inclusive o rastro. É a
+    /// exceção deliberada à regra de "histórico fica": o histórico dos imports do Stage
+    /// descreve a própria rede; este descreveria a rede alheia.
+    /// </para>
+    ///
+    /// <para>
+    /// Os recortes removidos são o produto <c>Meses × Bricks</c> do resumo da carga — o
+    /// arquivo real da IQVIA traz cada brick com todos os meses, então o produto é exato. Se
+    /// um recorte já foi <b>recoberto</b> por envio mais novo, o que sai é o dado atual
+    /// daquele recorte; o diálogo da tela avisa. Carga que falhou não tem resumo: sai só a
+    /// linha e o blob.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> ExcluirEnvioAsync(
+        Guid id,
+        EngineDbContext db,
+        IMinioClient minio,
+        ILogger<Program> logger,
+        CancellationToken ct,
+        [FromQuery] int redeId = 1)
+    {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
+        var carga = await db.MercadoCargas
+            .FirstOrDefaultAsync(c => c.Id == id && c.RedeId == redeId, ct);
+        if (carga is null) return Results.NotFound();
+
+        if (carga.Status is MercadoCargaStatus.Pendente or MercadoCargaStatus.Processando)
+        {
+            return Results.Conflict(new ValidationErrorResponse([
+                "Este envio ainda está na fila ou em processamento. Aguarde ele terminar " +
+                "(ou falhar) para poder desfazê-lo."]));
+        }
+
+        var outroEmVoo = await db.MercadoCargas
+            .AnyAsync(c => c.RedeId == redeId && c.Id != id
+                && (c.Status == MercadoCargaStatus.Pendente || c.Status == MercadoCargaStatus.Processando), ct);
+        if (outroEmVoo)
+        {
+            return Results.Conflict(new ValidationErrorResponse([
+                "Há outro envio de dados de mercado em processamento nesta rede. Aguarde ele " +
+                "terminar e tente de novo — excluir durante a gravação deixaria o mês pela metade."]));
+        }
+
+        var resumo = carga.ResumoJson is null
+            ? null
+            : JsonSerializer.Deserialize<MercadoCargaResumo>(carga.ResumoJson, JsonWeb);
+
+        var observacoesRemovidas = 0;
+        if (resumo is not null)
+        {
+            foreach (var mes in resumo.Meses)
+            {
+                foreach (var brick in resumo.Bricks)
+                {
+                    observacoesRemovidas += await db.MercadoObservacoes
+                        .Where(o => o.RedeId == redeId && o.Mes == mes && o.Brick == brick)
+                        .ExecuteDeleteAsync(ct);
+                }
+            }
+
+            await VarrerCatalogoOrfaoAsync(db, redeId, ct);
+        }
+
+        // Blob antes da linha: se a remoção do MinIO falhar, a carga continua apontando para
+        // ele e a operação pode ser repetida. A ordem inversa deixaria um blob órfão sem
+        // nenhum registro de que existe.
+        try
+        {
+            await minio.RemoveObjectAsync(new RemoveObjectArgs()
+                .WithBucket(BucketName)
+                .WithObject(carga.BlobKey), ct);
+        }
+        catch (Minio.Exceptions.ObjectNotFoundException)
+        {
+            // Já não existe — nada a desfazer desse lado.
+        }
+        catch (Minio.Exceptions.BucketNotFoundException)
+        {
+        }
+
+        db.MercadoCargas.Remove(carga);
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Mercado: envio {CargaId} desfeito na rede {RedeId} — {Obs} observação(ões), blob e histórico removidos.",
+            id, redeId, observacoesRemovidas);
+        return Results.NoContent();
+    }
+
+    private static readonly JsonSerializerOptions JsonWeb = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// Remove do catálogo (<c>MercadoProdutos</c>) e do painel (<c>MercadoBrickPdvs</c>) o que
+    /// nenhuma observação restante da rede referencia.
+    ///
+    /// <para>
+    /// Roda depois de <b>toda</b> exclusão de observações, e é o que garante as duas pontas ao
+    /// mesmo tempo: enquanto algum mês do brick existir, o painel e os EANs dele ficam (os
+    /// meses restantes os usam); quando o último recorte sai, nada daquele arquivo sobra na
+    /// rede — que é a exigência do caso "importei na rede errada".
+    /// </para>
+    /// </summary>
+    private static async Task VarrerCatalogoOrfaoAsync(EngineDbContext db, int redeId, CancellationToken ct)
+    {
+        await db.MercadoProdutos
+            .Where(p => p.RedeId == redeId
+                && !db.MercadoObservacoes.Any(o => o.RedeId == redeId && o.Ean == p.Ean))
+            .ExecuteDeleteAsync(ct);
+
+        await db.MercadoBrickPdvs
+            .Where(p => p.RedeId == redeId
+                && !db.MercadoObservacoes.Any(o => o.RedeId == redeId && o.Brick == p.Brick))
+            .ExecuteDeleteAsync(ct);
+    }
+
+    /// <summary>
     /// Apaga as observações de mercado de <b>uma célula de cobertura</b> — (mês, brick) — da
     /// rede do chamador.
     ///
@@ -210,11 +344,12 @@ internal static class MercadoEndpoints
     /// </para>
     ///
     /// <para>
-    /// <b>Só as observações saem.</b> <c>MercadoProdutos</c> é catálogo por EAN, compartilhado
-    /// por todos os meses e bricks; <c>MercadoBrickPdvs</c> é o painel do brick, compartilhado
-    /// pelos meses dele — apagar o mês 03 do brick X não pode levar o painel que o mês 04 do
-    /// mesmo brick ainda usa. A <c>MercadoCarga</c> e o XLSX no MinIO também ficam: são o
-    /// histórico de envios, como nos imports do Stage.
+    /// <b>Saem as observações e o que ficar órfão.</b> <c>MercadoProdutos</c> e
+    /// <c>MercadoBrickPdvs</c> são compartilhados pelos meses do brick, então ficam enquanto
+    /// alguma observação restante os referenciar — e são varridos quando a última sai
+    /// (<see cref="VarrerCatalogoOrfaoAsync"/>). A <c>MercadoCarga</c> e o XLSX no MinIO
+    /// ficam: para desfazer um envio inteiro, rastro incluído, use o DELETE de
+    /// <c>/uploads/{id}</c>.
     /// </para>
     ///
     /// <para>
@@ -260,6 +395,8 @@ internal static class MercadoEndpoints
             .ExecuteDeleteAsync(ct);
 
         if (removidas == 0) return Results.NotFound();
+
+        await VarrerCatalogoOrfaoAsync(db, redeId, ct);
 
         logger.LogInformation(
             "Mercado: {N} observação(ões) de {Mes:yyyy-MM} / brick '{Brick}' excluídas da rede {RedeId}.",
