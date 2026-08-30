@@ -206,7 +206,7 @@ tela vazia, e nunca "tente de novo" para um arquivo que não vai servir.
 
 ---
 
-## Task 2: Vocabulário do alerta e cálculo do índice
+## Task 2: Vocabulário do alerta e cálculo do índice ✅ FEITO
 
 **Files:**
 - Create: `CosmosPro.ML.DemandForCast.Engine/Mercado/MercadoAlertas.cs`
@@ -454,7 +454,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 3: Escolher o mês da IQVIA
+## Task 3: Escolher o mês da IQVIA ✅ FEITO
 
 **Files:**
 - Create: `CosmosPro.ML.DemandForCast.Worker/Mercado/MercadoMesResolver.cs`
