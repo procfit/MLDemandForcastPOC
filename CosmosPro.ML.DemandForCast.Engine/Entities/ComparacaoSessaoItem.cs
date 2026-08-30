@@ -127,4 +127,73 @@ public sealed class ComparacaoSessaoItem
     /// </para>
     /// </summary>
     public bool JanelaAlemDoHistorico { get; set; }
+
+    // --- Sinal de mercado da IQVIA (F16 parte C, grupo B) ----------------------------
+    //
+    // Nulo nas sete significa "não foi possível calcular", nunca zero — o mesmo contrato
+    // das colunas do braço de ML, e pelo mesmo motivo. Cinco causas legítimas: loja sem
+    // Cnpj no Stage, CNPJ fora do painel da IQVIA, SKU sem Ean, EAN que a IQVIA não
+    // reportou, e nenhum mês coberto antes do mês da sugestão.
+
+    /// <summary>
+    /// Mês da IQVIA que este item comparou (primeiro dia do mês). É sempre <b>estritamente
+    /// anterior</b> ao mês da sugestão: o mês da sugestão contém as consequências dela, e
+    /// comparar contra ele tornaria circular a afirmação de que o alerta teria avisado o
+    /// comprador.
+    ///
+    /// <para>
+    /// Gravado por linha porque a tela precisa dizer contra o que comparou. A cobertura da
+    /// rede muda conforme novos relatórios entram, e uma sessão antiga tem de continuar
+    /// declarando o mês que ela realmente usou.
+    /// </para>
+    /// </summary>
+    public DateOnly? MercadoMes { get; set; }
+
+    /// <summary>Brick da IQVIA da loja, resolvido pelo CNPJ dela no painel.</summary>
+    public string? MercadoBrick { get; set; }
+
+    /// <summary>
+    /// Unidades que a IQVIA atribuiu às bandeiras próprias da rede, neste EAN, neste brick e
+    /// mês. <b>Zero é medição</b>, não ausência — e zero aqui com
+    /// <see cref="MercadoUnidadesConcorrentes"/> positivo é o alerta mais forte que existe: o
+    /// item está no cadastro, está na sugestão, o bairro vende, e a rede vendeu nada.
+    /// </summary>
+    public decimal? MercadoUnidadesRede { get; set; }
+
+    /// <summary>Unidades do agregado de concorrentes, no mesmo recorte.</summary>
+    public decimal? MercadoUnidadesConcorrentes { get; set; }
+
+    /// <summary>
+    /// Fatia da rede neste item dividida pela fatia agregada da rede no mesmo brick e mês.
+    /// 1,0 = o item vai tão bem quanto a rede vai naquele bairro; abaixo de 0,5 dispara
+    /// alerta (regra B2).
+    ///
+    /// <para>
+    /// <b>Não é fatia de mercado</b> — é desempenho relativo à própria rede, justamente para
+    /// o tamanho dela no bairro não contaminar a leitura. A régua por número de lojas
+    /// exigiria o contador de PDVs concorrentes, que o relatório da IQVIA publica apenas
+    /// numa área de tabela dinâmica que o parser não lê.
+    /// </para>
+    /// </summary>
+    public decimal? MercadoIndiceDesempenho { get; set; }
+
+    /// <summary>
+    /// Dias em que a loja ficou sem estoque deste SKU <b>no mês comparado</b> — não na
+    /// janela de cobertura da sugestão. É a evidência da regra B3.
+    ///
+    /// <para>
+    /// Nulo quando aquele mês não está no histórico de estoque importado, o que é diferente
+    /// de zero: zero afirma que havia estoque todos os dias, e é o que separa
+    /// <c>MercadoAlertas.SemCausa</c> de <c>MercadoAlertas.NaoApurado</c>.
+    /// </para>
+    /// </summary>
+    public int? MercadoDiasSemEstoque { get; set; }
+
+    /// <summary>
+    /// Classificação do alerta: um dos valores de <c>MercadoAlertas</c>. Nulo significa
+    /// <b>não avaliado</b> (sem dado de mercado para o item), e não "está tudo bem" — para
+    /// isso existe <c>MercadoAlertas.SemAlerta</c>. Quem renderiza precisa distinguir os
+    /// dois: o comprador não pode ler ausência de medição como aprovação.
+    /// </summary>
+    public string? MercadoAlerta { get; set; }
 }

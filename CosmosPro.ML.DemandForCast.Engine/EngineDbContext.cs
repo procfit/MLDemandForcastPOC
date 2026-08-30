@@ -1,4 +1,5 @@
 using CosmosPro.ML.DemandForCast.Engine.Entities;
+using CosmosPro.ML.DemandForCast.Engine.Mercado;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
@@ -208,6 +209,21 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.Property(x => x.SobraMlUnidades).HasPrecision(15, 3);
             b.Property(x => x.SobraPbsValor).HasPrecision(14, 4);
             b.Property(x => x.SobraMlValor).HasPrecision(14, 4);
+
+            // Sinal de mercado da IQVIA. As unidades espelham MercadoObservacao.Unidades
+            // (15,3). O índice ganha (9,4): ele é uma razão, e o teto teórico é
+            // 1 / fatia agregada da rede no brick -- fatia de 1% já daria 100, então 5
+            // dígitos inteiros cobrem com folga.
+            b.Property(x => x.MercadoUnidadesRede).HasPrecision(15, 3);
+            b.Property(x => x.MercadoUnidadesConcorrentes).HasPrecision(15, 3);
+            b.Property(x => x.MercadoIndiceDesempenho).HasPrecision(9, 4);
+            // Espelha MercadoObservacao.Brick.
+            b.Property(x => x.MercadoBrick).HasMaxLength(80);
+            b.Property(x => x.MercadoAlerta).HasMaxLength(MercadoAlertas.TamanhoMaximo);
+
+            // Índice para o filtro "só itens com alerta" não varrer a tabela inteira.
+            // SessaoId primeiro porque a consulta sempre fixa a sessão antes de filtrar.
+            b.HasIndex(x => new { x.SessaoId, x.MercadoAlerta });
 
             // Cascade: apagar a sessão apaga o detalhe. É a única FK real que sai da sessão
             // além da de Redes — os ponteiros para as três fases (CargaStageId, TreinoJobId,
