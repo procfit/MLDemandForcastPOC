@@ -104,43 +104,52 @@
 
     @if (MesDeMercado is { } mesMercado)
     {
-        <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-text-tertiary-color)">
-            Colunas de mercado comparadas contra <strong>@mesMercado.ToString("MM/yyyy")</strong> da
-            IQVIA — o último mês carregado <strong>antes</strong> do mês desta sugestão. Nunca o
-            mês da própria sugestão: aquele mês já contém o efeito desta compra, e usá-lo faria o
-            alerta descrever a própria decisão em vez de antecipá-la. Para trocar de mês, carregue
-            outro relatório em <a href="/mercado">Dados de mercado</a>.
-        </RadzenText>
-        @* Sempre visível, e não só no balão de ajuda: o comprador que lê "sem causa aparente"
-           conclui que o sistema conferiu tudo, inclusive preço. Preço é a hipótese 2 da regra
-           de negócio e ele NÃO é testável com esta fonte — a IQVIA publica um preço de
-           referência normalizado, idêntico para a rede e para os concorrentes, então não existe
-           preço de concorrente para comparar. Esconder isso num tooltip seria deixar o
-           comprador agir sobre uma conclusão que o sistema não sustenta. *@
-        <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-text-tertiary-color)"
-                    data-test="ressalva-preco-mercado">
-            O alerta verifica <strong>estoque</strong>, e não preço: o relatório da IQVIA não
-            informa o preço praticado pelos concorrentes. Por isso
-            <em>&ldquo;sem causa aparente&rdquo;</em> quer dizer que a falta de produto não explica
-            — não que o seu preço esteja certo.
-        </RadzenText>
-        @if (CoberturaDeMercado is { Com: var com, Total: var tot } && com < tot)
-        {
-            @* O comprador que vê metade da tabela com travessão pergunta por quê. A conta
-               vem do servidor, sobre o recorte inteiro -- contar na página carregada diria
-               "20 de 25" onde a resposta é "21 de 43". *@
-            <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-text-tertiary-color)"
-                        data-test="cobertura-de-mercado">
-                <strong>@com de @tot itens</strong> deste recorte têm medição de mercado; os
-                outros @(tot - com) aparecem com travessão. Falta de medição <strong>não</strong>
-                é sinal de que o item vai bem: significa que a loja não tem CNPJ no arquivo, que
-                o produto não tem código de barras no cadastro, ou que a IQVIA não reportou
-                venda dele naqueles bairros.
-            </RadzenText>
-        }
+        @* Um quadro só, e não três parágrafos de letra miúda. Cada fato aqui muda como o
+           comprador age sobre a coluna de alerta, então os três ficam visíveis sem hover: o mês
+           contra o qual ele está sendo comparado, sobre quantos itens há medição, e que preço
+           NÃO entra na conta. O porquê metodológico de cada um vai nos balões. *@
+        <RadzenCard Variant="Variant.Filled" data-test="painel-de-mercado">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
+                         JustifyContent="JustifyContent.SpaceBetween" Wrap="FlexWrap.Wrap" Gap="0.5rem"
+                         Style="margin-bottom: 0.75rem">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.4rem">
+                    <RadzenIcon Icon="insights" Style="font-size: 1.1rem; color: var(--rz-text-secondary-color)" />
+                    <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Mercado IQVIA</RadzenText>
+                </RadzenStack>
+                <RadzenLink Path="/mercado" Text="Gerenciar dados de mercado" Icon="open_in_new"
+                            Style="font-size: 0.8rem" />
+            </RadzenStack>
+
+            <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" Gap="2rem">
+                <div data-test="mes-de-mercado">
+                    <Totalizador Rotulo="Mês comparado"
+                                 Valor="@mesMercado.ToString("MM/yyyy")"
+                                 Nota="o último antes da sugestão"
+                                 Ajuda="@AjudaDoMes" />
+                </div>
+
+                @if (CoberturaDeMercado is { Com: var com, Total: var tot })
+                {
+                    <div data-test="cobertura-de-mercado">
+                        <Totalizador Rotulo="Com medição"
+                                     Valor="@($"{com} de {tot} itens")"
+                                     Nota="@(com < tot
+                                         ? $"os outros {tot - com} aparecem com travessão"
+                                         : "todo item do recorte tem medição")"
+                                     Ajuda="@AjudaDaCobertura" />
+                    </div>
+                }
+
+                <div data-test="ressalva-preco-mercado">
+                    <Totalizador Rotulo="O alerta verifica"
+                                 Valor="Estoque, não preço"
+                                 Nota="“sem causa” não valida o seu preço"
+                                 Ajuda="@AjudaDoPreco" />
+                </div>
+            </RadzenStack>
+        </RadzenCard>
     }
 
-    @* --- Totalizadores do recorte -------------------------------------------------- *@
     @if (_totais is { } t)
     {
         <RadzenCard Variant="Variant.Filled" data-test="totalizadores-itens">
@@ -566,6 +575,15 @@
     /// </summary>
     private (int Com, int Total)? CoberturaDeMercado =>
         _totais is { Itens: > 0 } t ? (t.ItensComDadoDeMercado, t.Itens) : null;
+
+    private const string AjudaDoMes =
+        "Nunca o mês da própria sugestão: aquele mês já contém o efeito desta compra, e usá-lo faria o alerta descrever a própria decisão em vez de antecipá-la. A regra é sempre o último mês carregado ANTES do mês da sugestão — com um relatório só carregado, isso cai no mesmo mês do ano anterior, que é sazonalmente comparável.";
+
+    private const string AjudaDaCobertura =
+        "Falta de medição significa uma de três coisas: a loja não tem CNPJ no arquivo enviado (versões antigas do extrator não trazem), o produto não tem código de barras no cadastro do PBS, ou a IQVIA não reportou venda dele naqueles bairros — o que por si já é informação: o mercado local não move o item.";
+
+    private const string AjudaDoPreco =
+        "O relatório da IQVIA não informa o preço praticado por cada concorrente: ele publica um preço de referência igual para a rede e para a concorrência. Medimos isso — em 37.410 comparações, zero diferença. Então preço não pode ser testado, e a hipótese de preço ficou fora do alerta em vez de virar um número que não significa o que promete.";
 
     private static string ExplicacaoDoAlerta(SessaoItem i) => i.MercadoAlerta switch
     {

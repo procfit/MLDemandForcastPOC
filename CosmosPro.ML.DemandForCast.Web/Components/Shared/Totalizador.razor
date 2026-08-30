@@ -8,9 +8,15 @@
    "sem cálculo do ML", que é justamente o caso que não pode virar zero. *@
 
 <RadzenStack Orientation="Orientation.Vertical" Gap="0" Style="min-width: 9rem">
-    <RadzenText TextStyle="TextStyle.Overline" Style="margin: 0; color: var(--rz-text-secondary-color)">
-        @Rotulo
-    </RadzenText>
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+        <RadzenText TextStyle="TextStyle.Overline" Style="margin: 0; color: var(--rz-text-secondary-color)">
+            @Rotulo
+        </RadzenText>
+        @if (!string.IsNullOrWhiteSpace(Ajuda))
+        {
+            <HelpTip Size="0.8rem" Text="@Ajuda" />
+        }
+    </RadzenStack>
     <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0">@Valor</RadzenText>
     @if (!string.IsNullOrWhiteSpace(Nota))
     {
@@ -31,4 +37,11 @@
 
     /// <summary>Sobre quantos itens o valor foi apurado, quando não é a população inteira.</summary>
     [Parameter] public string? Nota { get; set; }
+
+    /// <summary>
+    /// Explicação longa, num balão ao lado do rótulo. Para o <b>porquê</b> metodológico, que
+    /// o comprador consulta uma vez e depois ignora — o que ele precisa a cada olhada fica em
+    /// <see cref="Valor"/> e <see cref="Nota"/>, visíveis sem hover.
+    /// </summary>
+    [Parameter] public string? Ajuda { get; set; }
 }
