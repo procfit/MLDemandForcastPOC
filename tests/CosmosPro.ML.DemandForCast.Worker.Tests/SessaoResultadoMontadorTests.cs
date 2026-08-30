@@ -3,6 +3,8 @@ using CosmosPro.ML.DemandForCast.Forecasting.Evaluation;
 using CosmosPro.ML.DemandForCast.Purchasing.Comparison;
 using CosmosPro.ML.DemandForCast.Worker.Comparison;
 using CosmosPro.ML.DemandForCast.Worker.Sessoes;
+using CosmosPro.ML.DemandForCast.Engine.Mercado;
+using CosmosPro.ML.DemandForCast.Worker.Mercado;
 
 namespace CosmosPro.ML.DemandForCast.Worker.Tests;
 
@@ -345,13 +347,76 @@ public sealed class SessaoResultadoMontadorTests
         materializacao.Itens.Single().Curva.Should().BeNull();
     }
 
+    [Fact]
+    public void Item_com_sinal_de_mercado_recebe_as_sete_colunas()
+    {
+        var sinais = new Dictionary<(int LojaId, string Sku), SinalDoItem>
+        {
+            [(LojaId, Sku)] = new(
+                Mes: new DateOnly(2025, 6, 1),
+                Brick: "528-RJ VOLTA REDONDA RETIRO",
+                UnidadesRede: 12m,
+                UnidadesConcorrentes: 988m,
+                Indice: 0.1234m,
+                DiasSemEstoque: 3,
+                Alerta: MercadoAlertas.Ruptura),
+        };
+
+        var item = Montar([Linha()], sinaisDeMercado: sinais).Itens.Single();
+
+        item.MercadoMes.Should().Be(new DateOnly(2025, 6, 1));
+        item.MercadoBrick.Should().Be("528-RJ VOLTA REDONDA RETIRO");
+        item.MercadoUnidadesRede.Should().Be(12m);
+        item.MercadoUnidadesConcorrentes.Should().Be(988m);
+        item.MercadoIndiceDesempenho.Should().Be(0.1234m);
+        item.MercadoDiasSemEstoque.Should().Be(3);
+        item.MercadoAlerta.Should().Be(MercadoAlertas.Ruptura);
+    }
+
+    [Fact]
+    public void Item_sem_sinal_de_mercado_fica_com_as_sete_nulas()
+    {
+        // Dicionario vazio: nenhuma das duas pontes fechou para este item -- loja sem CNPJ,
+        // CNPJ fora do painel, SKU sem EAN, EAN nao reportado, ou nenhum mes coberto antes
+        // da sugestao. Todos legitimos, todos nulo.
+        var item = Montar([Linha()]).Itens.Single();
+
+        item.MercadoMes.Should().BeNull();
+        item.MercadoBrick.Should().BeNull();
+        item.MercadoIndiceDesempenho.Should().BeNull();
+        item.MercadoDiasSemEstoque.Should().BeNull();
+        item.MercadoAlerta.Should().BeNull();
+        // Zero aqui diria ao comprador que o item vende zero no bairro -- e isso e uma
+        // medicao, que ninguem fez.
+        item.MercadoUnidadesRede.Should().BeNull();
+        item.MercadoUnidadesConcorrentes.Should().BeNull();
+    }
+
+    [Fact]
+    public void Sinal_de_outro_par_loja_sku_nao_contamina_o_item()
+    {
+        // Chave errada no dicionario nao pode vazar para a linha errada: seria dado
+        // comercial de uma loja aparecendo na linha de outra.
+        var sinais = new Dictionary<(int LojaId, string Sku), SinalDoItem>
+        {
+            [(LojaId + 999, Sku)] = new(
+                new DateOnly(2025, 6, 1), "outro brick", 1m, 1m, 0.1m, 0, MercadoAlertas.SemCausa),
+        };
+
+        var item = Montar([Linha()], sinaisDeMercado: sinais).Itens.Single();
+
+        item.MercadoAlerta.Should().BeNull();
+        item.MercadoBrick.Should().BeNull();
+    }
+
     // --- Arranjo --------------------------------------------------------------
 
     private static Materializacao Montar(
         IReadOnlyList<ItemDoStage> populacao,
         ComparisonResult? previsao = null,
         DecisionComparisonResult? decisao = null,
-        int? skusSemCadastro = 0)
+        int? skusSemCadastro = 0,
+        IReadOnlyDictionary<(int LojaId, string Sku), SinalDoItem>? sinaisDeMercado = null)
         => SessaoResultadoMontador.Montar(
             sessaoId: SessaoId,
             skusSemCadastro: skusSemCadastro,
@@ -361,7 +426,11 @@ public sealed class SessaoResultadoMontadorTests
                 previsao ?? Previsao([Pares()]),
                 decisao ?? Decisao(UtilidadeComparacao.ForaDoHorizonteMl)),
             populacao: populacao,
-            agora: Agora);
+            agora: Agora,
+            // Default vazio: dicionario ausente e o caso normal de quase todo teste deste
+            // arquivo, e o significado dele e "nenhum item tem dado de mercado".
+            sinaisDeMercado: sinaisDeMercado
+                ?? new Dictionary<(int LojaId, string Sku), SinalDoItem>());
 
     /// <summary>
     /// Linha da sugestão do ERP com os números do <see cref="Sobra_do_braco_pbs_bate_com_o_SobraCalculator"/>:

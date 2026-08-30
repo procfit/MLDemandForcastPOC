@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
 using CosmosPro.ML.DemandForCast.Worker.Comparison;
+using CosmosPro.ML.DemandForCast.Worker.Mercado;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
@@ -72,6 +73,18 @@ internal sealed class SessaoResultadoMaterializador(
 
         var populacao = await LerPopulacaoAsync(sessao.RedeId, job, sugestoes, stageConnStr, ct);
 
+        // Sessão sem data de sugestão não tem mês de corte, então não tem sinal de mercado:
+        // sem o corte, a comparação usaria o mês que contém as consequências da própria
+        // sugestão, e a afirmação "o alerta teria avisado o comprador" cairia.
+        var sinaisDeMercado = sessao.SugestaoDataHora is { } dataHora
+            ? await new MercadoSinalLoader(stageConnStr, services, logger).CarregarAsync(
+                  sessao.RedeId,
+                  diaDaSugestao: DateOnly.FromDateTime(dataHora),
+                  janelaInicio: job.JanelaInicio,
+                  itens: [.. populacao.Select(p => (p.Item.LojaId, p.Item.Sku))],
+                  ct)
+            : new Dictionary<(int LojaId, string Sku), SinalDoItem>();
+
         var materializacao = SessaoResultadoMontador.Montar(
             sessaoId: sessao.Id,
             skusSemCadastro: sessao.SkusSemCadastro,
@@ -79,7 +92,8 @@ internal sealed class SessaoResultadoMaterializador(
             sugestaoDataHora: sessao.SugestaoDataHora,
             comparacao: comparacao,
             populacao: populacao,
-            agora: DateTimeOffset.UtcNow);
+            agora: DateTimeOffset.UtcNow,
+            sinaisDeMercado: sinaisDeMercado);
 
         var gravou = await GravarAsync(sessao, materializacao, ct);
         if (!gravou) return false;
@@ -437,6 +451,13 @@ internal sealed class SessaoResultadoMaterializador(
         tabela.Columns.Add("SobraPbsValor", typeof(decimal));
         tabela.Columns.Add("SobraMlValor", typeof(decimal));
         tabela.Columns.Add("JanelaAlemDoHistorico", typeof(bool));
+        tabela.Columns.Add("MercadoMes", typeof(DateTime));
+        tabela.Columns.Add("MercadoBrick", typeof(string));
+        tabela.Columns.Add("MercadoUnidadesRede", typeof(decimal));
+        tabela.Columns.Add("MercadoUnidadesConcorrentes", typeof(decimal));
+        tabela.Columns.Add("MercadoIndiceDesempenho", typeof(decimal));
+        tabela.Columns.Add("MercadoDiasSemEstoque", typeof(int));
+        tabela.Columns.Add("MercadoAlerta", typeof(string));
 
         foreach (var item in itens)
         {
@@ -457,7 +478,17 @@ internal sealed class SessaoResultadoMaterializador(
                 item.SobraMlUnidades ?? (object)DBNull.Value,
                 item.SobraPbsValor ?? (object)DBNull.Value,
                 item.SobraMlValor ?? (object)DBNull.Value,
-                item.JanelaAlemDoHistorico);
+                item.JanelaAlemDoHistorico,
+                // DBNull e nunca 0/"": as sete colunas distinguem "nao deu para calcular"
+                // de "a IQVIA mediu zero", e o bulk e a ultima ponta onde isso pode ser
+                // perdido em silencio. DateOnly nao e tipo aceito pelo SqlBulkCopy.
+                item.MercadoMes?.ToDateTime(TimeOnly.MinValue) ?? (object)DBNull.Value,
+                item.MercadoBrick ?? (object)DBNull.Value,
+                item.MercadoUnidadesRede ?? (object)DBNull.Value,
+                item.MercadoUnidadesConcorrentes ?? (object)DBNull.Value,
+                item.MercadoIndiceDesempenho ?? (object)DBNull.Value,
+                item.MercadoDiasSemEstoque ?? (object)DBNull.Value,
+                item.MercadoAlerta ?? (object)DBNull.Value);
         }
 
         return tabela;

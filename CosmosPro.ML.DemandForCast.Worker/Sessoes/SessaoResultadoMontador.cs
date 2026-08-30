@@ -1,6 +1,7 @@
 using CosmosPro.ML.DemandForCast.Engine.Entities;
 using CosmosPro.ML.DemandForCast.Purchasing.Comparison;
 using CosmosPro.ML.DemandForCast.Worker.Comparison;
+using CosmosPro.ML.DemandForCast.Worker.Mercado;
 
 namespace CosmosPro.ML.DemandForCast.Worker.Sessoes;
 
@@ -193,7 +194,8 @@ internal static class SessaoResultadoMontador
         DateTime? sugestaoDataHora,
         ComparacaoOutput comparacao,
         IReadOnlyList<ItemDoStage> populacao,
-        DateTimeOffset agora)
+        DateTimeOffset agora,
+        IReadOnlyDictionary<(int LojaId, string Sku), SinalDoItem> sinaisDeMercado)
     {
         // ToDictionary e não indexador com "último vence": chave repetida significaria mais
         // de uma sugestão na população, invariante que SessaoJobs recusa antes do treino.
@@ -250,6 +252,12 @@ internal static class SessaoResultadoMontador
                        vendido: linha.VendidoNaJanela,
                        precoCompra: item.PrecoCompra));
 
+            // Ausência da chave é o caso normal, não exceção: loja sem CNPJ, CNPJ fora do
+            // painel da IQVIA, SKU sem EAN, EAN que a IQVIA não reportou, ou nenhum mês
+            // coberto antes da sugestão. As sete colunas ficam nulas, e nulo aqui significa
+            // "não foi possível calcular" — nunca zero.
+            var sinal = sinaisDeMercado.GetValueOrDefault((item.LojaId, item.Sku));
+
             itens.Add(new ComparacaoSessaoItem
             {
                 SessaoId = sessaoId,
@@ -269,6 +277,13 @@ internal static class SessaoResultadoMontador
                 SobraPbsValor = item.PrecoCompra is null ? null : sobraPbs.Valor,
                 SobraMlValor = item.PrecoCompra is null ? null : ml?.Sobra.Valor,
                 JanelaAlemDoHistorico = linha.JanelaAlemDoHistorico,
+                MercadoMes = sinal?.Mes,
+                MercadoBrick = sinal?.Brick,
+                MercadoUnidadesRede = sinal?.UnidadesRede,
+                MercadoUnidadesConcorrentes = sinal?.UnidadesConcorrentes,
+                MercadoIndiceDesempenho = sinal?.Indice,
+                MercadoDiasSemEstoque = sinal?.DiasSemEstoque,
+                MercadoAlerta = sinal?.Alerta,
             });
 
             vendidoTotal += linha.VendidoNaJanela;
