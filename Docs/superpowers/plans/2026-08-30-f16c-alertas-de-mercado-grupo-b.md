@@ -864,7 +864,7 @@ escreva-o copiando a forma do arquivo de teste vizinho citado na tarefa.
 
 ---
 
-## Task 5: Carregar o sinal de mercado do banco
+## Task 5: Carregar o sinal de mercado do banco ✅ FEITO
 
 **Files:**
 - Create: `CosmosPro.ML.DemandForCast.Worker/Mercado/MercadoSinalLoader.cs`
@@ -1059,7 +1059,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 6: Montador e materializador gravam o sinal
+## Task 6: Montador e materializador gravam o sinal ✅ FEITO
 
 **Files:**
 - Modify: `CosmosPro.ML.DemandForCast.Worker/Sessoes/SessaoResultadoMontador.cs:189` (assinatura de `Montar`) e o laço `foreach (var linha in populacao)`
@@ -1240,7 +1240,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 7: API expõe as colunas e o filtro de alerta
+## Task 7: API expõe as colunas e o filtro de alerta ✅ FEITO
 
 **Files:**
 - Modify: `CosmosPro.ML.DemandForCast.ApiService/Comparacoes/ComparacoesEndpoints.cs` — DTO do item, `AplicarFiltros` (linha 632) e as duas chamadas dela (linhas 427 e 497)
@@ -1364,7 +1364,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 8: Tela e Excel
+## Task 8: Tela e Excel ✅ FEITO
 
 **Files:**
 - Modify: `CosmosPro.ML.DemandForCast.Web/ComparacoesApiClient.cs:314` (espelho do DTO)
@@ -1531,3 +1531,35 @@ nenhuma tarefa deste plano.
 - **Atualizar CLAUDE.md §4** com as invariantes novas: nulo ≠ zero nas colunas de mercado, o mês estritamente anterior, e o vocabulário de alerta.
 - **Plano do grupo A**: bloqueado na versão nova do extrator (`catalogo_eans.csv`). Escrever quando o Claiton fechar o campo que falta.
 - **Correção pendente na spec:** ela diz que o `CargaProcessor` carrega o catálogo "no Stage como os demais **e** faz o upsert em `RedeCatalogoEans`". Melhor não passar pelo Stage: uma tabela de Stage que ninguém lê é exatamente o defeito que a F16 corrigiu ao remover `MercadoIqvia`. O CSV deve ir **só** para `engine.RedeCatalogoEans`. Ajustar a spec junto com o plano do grupo A.
+
+---
+
+## Fechamento — 2026-08-30
+
+**As 8 tarefas estão feitas.** 900 testes verdes em 13 projetos, incluindo os de
+integração contra SQL Server real e os E2E no navegador.
+
+**Achados que só apareceram implementando, e que valem mais que o código:**
+
+1. **Comparação exata de EAN casa zero.** O PBS grava 14 caracteres com zero à esquerda, a
+   IQVIA grava 13. Sem normalizar, o loader devolveria dicionário vazio em toda sessão, sem
+   erro, sem log, sem nada na tela denunciando. Medido antes de escrever o loader — é o
+   único motivo pelo qual a Task 1 era portão e não formalidade.
+2. **Componente Radzen não repassa atributo desconhecido ao DOM.** O `data-test` no
+   `RadzenCheckBox` não existia no HTML, e o E2E falhava por timeout sem dizer o motivo.
+   Vive num `<span>` agora.
+3. **O `INSERT` da fixture E2E lista colunas à mão.** Coluna nova em
+   `ComparacaoSessaoItens` precisa entrar lá também, senão o teste afirma "sem dado de
+   mercado" sem que nada no caminho da tela esteja errado. Perdi uma rodada nisso.
+
+**O que falta para o comprador ver número na tela** — nada disso é código:
+
+- **Um extrator novo chegar ao Ronieri, da Retiro, e ser usado.** Os ZIPs de hoje não
+  trazem `Cnpj` em `lojas.csv`. A tela já explica isso quando acontece (aviso
+  `data-test="aviso-sem-mercado"`), em vez de mostrar travessão em silêncio.
+- **A resposta sobre FARMA ONE.** 6 PDVs próprios no painel sem coluna de venda: se as
+  vendas deles estiverem em `CONCORRENTES`, todo alerta enviesa para disparar. Pergunta para
+  quem puxa o relatório da IQVIA; o parser já aceita bandeira própria nova sem mudança.
+- **Um mês da IQVIA anterior ao mês da sugestão.** Com o arquivo de junho/2026 e sugestão de
+  junho/2026, a regra cai em junho/2025 — que o arquivo traz. Sessão de mês sem cobertura
+  anterior fica sem sinal, por desenho.
