@@ -177,9 +177,32 @@ Volta Redonda. Conferível numa consulta só, quando chegar o primeiro ZIP com `
       mercado, e a tela precisa dizer quantas lojas ficaram fora — junto com a razão
       (fora dos bricks cobertos, ou CNPJ ausente do painel).
 
+### Resultado 5 — publicar o extrator não basta: a pessoa tem de usar o build novo
+
+Informação do Perez em 2026-08-30: o ZIP de 18/08 saiu do `0.17.0` porque o **Ronieri, da
+Retiro, não usou o build publicado**. Ou seja, o gargalo não é a publicação — é o
+humano do outro lado, e nenhuma versão nova conserta isso sozinha.
+
+**O conserto é o software detectar e dizer, em vez de confiar em quem clica.** O
+`manifesto.json` já declara `VersaoExtractor`, mas número de versão é rótulo, e este
+repositório já provou que rótulo mente: o `0.17.0` do `origin/main` emite `Cnpj` e o
+`0.17.0` que o Ronieri usou não. **Testar a capacidade, não o rótulo**, e separar dois
+desfechos que exigem ações diferentes:
+
+| o que o ZIP traz | o que significa | o que a tela diz |
+|---|---|---|
+| `lojas.csv` **sem** a coluna `Cnpj` | extrator antigo | "Este envio veio de uma versão do extrator anterior aos alertas de mercado. Baixe o extrator novo e gere o ZIP outra vez." |
+| coluna presente, **todas** as lojas com `Cnpj` nulo | extrator novo, ERP sem CGC | "As lojas deste envio não têm CNPJ cadastrado no PBS. Sem CNPJ, o alerta de mercado não se prende a bairro nenhum." |
+| coluna presente, **parte** com `Cnpj` | normal | declarar quantas lojas ficaram fora |
+
+Isso segue o padrão que a F14 já usa para inviabilidade: texto de comprador em vez de
+tela vazia, e nunca "tente de novo" para um arquivo que não vai servir.
+
 - [ ] **Step 4: Subir a versão do extrator e publicar um build novo** (novo, veio da
       medição). Bump em `CosmosPro.ML.DemandForCast.Extractor.csproj` para `0.18.0` e
-      entrega ao comprador, para os ZIPs passarem a trazer `Cnpj`.
+      entrega ao comprador, para os ZIPs passarem a trazer `Cnpj`. **O bump é para os dois
+      builds deixarem de ser indistinguíveis**, não para resolver a adoção — quem resolve
+      a adoção é o aviso na tela do Step 6.
 
 ---
 
@@ -1445,6 +1468,17 @@ Expected: PASS.
 
 Run: `dotnet test tests/CosmosPro.ML.DemandForCast.Web.E2ETests --filter SessaoResultado`
 Expected: PASS.
+
+- [ ] **Step 6b: A tela explica a ausência em vez de mostrar tabela vazia**
+
+Quando **nenhum** item da sessão tiver dado de mercado, a tabela não esconde as colunas e
+não mostra travessão em silêncio: um aviso acima dela diz o porquê, escolhido pelo que o
+envio realmente trouxe (a tabela de três linhas do Resultado 5 da Task 1).
+
+O sinal é a **capacidade**, não a versão declarada no manifesto: contar lojas da sessão
+com `Cnpj` preenchido. Zero lojas com CNPJ e coluna ausente é uma mensagem; zero com a
+coluna presente é outra. Sem isso, o comprador vê a tela nova sem número nenhum e conclui
+que o alerta de mercado não funciona.
 
 - [ ] **Step 7: Rodar a suíte inteira**
 
