@@ -124,6 +124,20 @@
             <em>&ldquo;sem causa aparente&rdquo;</em> quer dizer que a falta de produto não explica
             — não que o seu preço esteja certo.
         </RadzenText>
+        @if (CoberturaDeMercado is { Com: var com, Total: var tot } && com < tot)
+        {
+            @* O comprador que vê metade da tabela com travessão pergunta por quê. A conta
+               vem do servidor, sobre o recorte inteiro -- contar na página carregada diria
+               "20 de 25" onde a resposta é "21 de 43". *@
+            <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-text-tertiary-color)"
+                        data-test="cobertura-de-mercado">
+                <strong>@com de @tot itens</strong> deste recorte têm medição de mercado; os
+                outros @(tot - com) aparecem com travessão. Falta de medição <strong>não</strong>
+                é sinal de que o item vai bem: significa que a loja não tem CNPJ no arquivo, que
+                o produto não tem código de barras no cadastro, ou que a IQVIA não reportou
+                venda dele naqueles bairros.
+            </RadzenText>
+        }
     }
 
     @* --- Totalizadores do recorte -------------------------------------------------- *@
@@ -546,6 +560,13 @@
     /// NÃO verificou — sem isso "sem causa aparente" lê como "já conferi tudo", e preço nunca
     /// foi conferido porque a fonte não traz preço de concorrente.
     /// </summary>
+    /// <summary>
+    /// Quantos itens do recorte têm medição de mercado, e sobre quantos. Nulo quando ainda
+    /// não há totais carregados ou o recorte está vazio — aí não há o que declarar.
+    /// </summary>
+    private (int Com, int Total)? CoberturaDeMercado =>
+        _totais is { Itens: > 0 } t ? (t.ItensComDadoDeMercado, t.Itens) : null;
+
     private static string ExplicacaoDoAlerta(SessaoItem i) => i.MercadoAlerta switch
     {
         "Ruptura" =>

@@ -348,6 +348,13 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             var linhas = page.Locator("[data-test='totalizadores-itens']");
             await linhas.First.WaitForAsync(new() { Timeout = 60_000 });
 
+            // O contador de cobertura declara sobre quantos itens do recorte há medição.
+            // Sem ele, metade da tabela com travessão passa por "a rede vai bem em tudo".
+            var cobertura = page.Locator("[data-test='cobertura-de-mercado']");
+            (await cobertura.CountAsync()).Should().Be(1,
+                "a sessão semeia 1 item com medição de 3, então a declaração precisa aparecer");
+            (await cobertura.InnerTextAsync()).Should().Contain("1 de 3 itens");
+
             var antes = await page.Locator("[data-test='tabela-itens'] tbody tr").CountAsync();
             antes.Should().BeGreaterThan(1, "a sessão semeia três itens");
 
@@ -386,6 +393,7 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
                 .Locator("[data-test=\'alerta-de-mercado\']")
                 .First.GetAttributeAsync("title");
             titulo.Should().Contain("Preço não foi verificado");
+
         }
         finally
         {

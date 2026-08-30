@@ -706,6 +706,7 @@ internal static class ComparacoesEndpoints
                 ComValorPbs = g.Count(i => i.SobraPbsValor != null),
                 ValorMl = g.Sum(i => i.SobraMlValor),
                 ComValorMl = g.Count(i => i.SobraMlValor != null),
+                ComMercado = g.Count(i => i.MercadoAlerta != null),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -727,7 +728,8 @@ internal static class ComparacoesEndpoints
             b.ComValorPbs == 0 ? null : b.ValorPbs,
             b.ComValorPbs,
             b.ComValorMl == 0 ? null : b.ValorMl,
-            b.ComValorMl);
+            b.ComValorMl,
+            b.ComMercado);
     }
 
     /// <summary>
@@ -1025,7 +1027,11 @@ internal sealed record TotaisDosItens(
     decimal? SobraPbsValor,
     int ItensComValorPbs,
     decimal? SobraMlValor,
-    int ItensComValorMl);
+    int ItensComValorMl,
+    // Itens do recorte com medição de mercado. Sai daqui, e não da página carregada, porque
+    // a página traz 25 linhas de um recorte que pode ter milhares -- contar na tela diria
+    // "20 de 25" onde a resposta é "21 de 43".
+    int ItensComDadoDeMercado = 0);
 
 /// <param name="TemItemSemCategoria">
 /// Se existe item sem categoria no cadastro. A tela usa isto para oferecer o recorte "sem

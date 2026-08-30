@@ -471,7 +471,11 @@ public sealed record TotaisDosItens(
     decimal? SobraPbsValor,
     int ItensComValorPbs = 0,
     decimal? SobraMlValor = null,
-    int ItensComValorMl = 0)
+    int ItensComValorMl = 0,
+    // Itens do recorte com medição de mercado. Vem do servidor, e não de contagem na página
+    // carregada: a página traz 25 linhas de um recorte que pode ter milhares, então contar
+    // aqui diria "20 de 25" onde a resposta é "21 de 43".
+    int ItensComDadoDeMercado = 0)
 {
     /// <summary>
     /// Diferença de sobra entre os braços, ou <c>null</c> quando o ML não foi apurado em

@@ -267,6 +267,55 @@ public sealed class FiltrosDosItensIntegrationTests(AppHostFixture fixture)
         semDado.MercadoUnidadesRede.Should().BeNull();
     }
 
+    [Fact]
+    public async Task O_contador_de_cobertura_de_mercado_fala_do_recorte_e_nao_da_pagina()
+    {
+        // A semeadura tem 6 itens: 4 com medição de mercado (3 alertas + 1 SemAlerta) e 2 sem.
+        // O contador tem de dizer 4 de 6 -- e continuar correto quando a página traz menos
+        // linhas que o recorte, que é o caso normal da tela (25 por página).
+        var ct = TestContext.Current.CancellationToken;
+        var (redeId, sessaoId) = await SemearAsync();
+
+        var paginaInteira = await fixture.ComparacoesApi.ItensAsync(
+            sessaoId, redeId, take: 200, ct: ct);
+
+        paginaInteira.Content!.Totais!.Itens.Should().Be(6);
+        paginaInteira.Content.Totais.ItensComDadoDeMercado.Should().Be(4);
+
+        // Duas linhas por página: o contador NÃO pode encolher com a paginação. Contar na
+        // página carregada diria "2 de 2" onde a resposta é "4 de 6", e o comprador leria a
+        // tabela como se todo item tivesse medição.
+        var paginaCurta = await fixture.ComparacoesApi.ItensAsync(
+            sessaoId, redeId, take: 2, ct: ct);
+
+        paginaCurta.Content!.Itens.Should().HaveCount(2, "a página foi limitada");
+        paginaCurta.Content.Totais!.Itens.Should().Be(6, "os totais falam do recorte");
+        paginaCurta.Content.Totais.ItensComDadoDeMercado.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task O_contador_de_cobertura_acompanha_o_filtro()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (redeId, sessaoId) = await SemearAsync();
+
+        // Loja 2 tem os dois itens SEM medição (S5 e S6).
+        var loja2 = await fixture.ComparacoesApi.ItensAsync(
+            sessaoId, redeId, take: 200, lojaId: 2, ct: ct);
+
+        loja2.Content!.Totais!.Itens.Should().Be(2);
+        loja2.Content.Totais.ItensComDadoDeMercado.Should().Be(0,
+            "nenhum item da loja 2 tem medição -- e a tela precisa poder dizer isso");
+
+        // Com o filtro de alerta, todo item do recorte tem medição por construção, então a
+        // frase de cobertura não deve aparecer na tela (com == total).
+        var comAlerta = await fixture.ComparacoesApi.ItensAsync(
+            sessaoId, redeId, take: 200, somenteComAlerta: true, ct: ct);
+
+        comAlerta.Content!.Totais!.Itens.Should().Be(3);
+        comAlerta.Content.Totais.ItensComDadoDeMercado.Should().Be(3);
+    }
+
     private async Task<(int RedeId, Guid SessaoId)> SemearAsync()
     {
         var redeId = await EnsureRedeAsync("Rede Filtros de Itens", Slug);

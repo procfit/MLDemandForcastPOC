@@ -109,7 +109,8 @@ public sealed record TotaisDosItens(
     decimal? SobraPbsValor,
     int ItensComValorPbs,
     decimal? SobraMlValor,
-    int ItensComValorMl);
+    int ItensComValorMl,
+    int ItensComDadoDeMercado = 0);
 
 public sealed record FiltrosDisponiveis(
     List<int> Lojas,
