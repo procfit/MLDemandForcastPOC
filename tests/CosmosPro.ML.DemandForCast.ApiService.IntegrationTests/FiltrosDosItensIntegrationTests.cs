@@ -2,6 +2,7 @@ using System.Net;
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
 using Microsoft.EntityFrameworkCore;
+using CosmosPro.ML.DemandForCast.Engine.Mercado;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 
@@ -190,6 +191,82 @@ public sealed class FiltrosDosItensIntegrationTests(AppHostFixture fixture)
     /// item sem categoria, e a loja 2 inteira <b>sem</b> cálculo de ML. Compras em múltiplos de
     /// 10 para cada soma esperada ser conferível de cabeça.
     /// </summary>
+    [Fact]
+    public async Task Filtro_de_alerta_traz_so_os_alertas_de_verdade()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (redeId, sessaoId) = await SemearAsync();
+
+        var pagina = await fixture.ComparacoesApi.ItensAsync(
+            sessaoId, redeId, take: 200, somenteComAlerta: true, ct: ct);
+
+        pagina.IsSuccessStatusCode.Should().BeTrue();
+
+        // SemAlerta e "avaliado e esta bem"; nulo e "nao avaliado". Nenhum dos dois e
+        // alerta, e incluir o nulo encheria a lista de itens que ninguem mediu.
+        pagina.Content!.Itens.Select(i => i.Sku).Should().BeEquivalentTo(["S1", "S2", "S3"]);
+        pagina.Content.Total.Should().Be(3);
+        pagina.Content.TotalSemFiltro.Should().Be(6);
+    }
+
+    [Fact]
+    public async Task Os_totais_do_recorte_respeitam_o_filtro_de_alerta()
+    {
+        // Mesma clausula para pagina e totais. Se divergissem, o comprador veria 3 itens na
+        // tela e um total apurado sobre 6.
+        var ct = TestContext.Current.CancellationToken;
+        var (redeId, sessaoId) = await SemearAsync();
+
+        var comFiltro = await fixture.ComparacoesApi.ItensAsync(
+            sessaoId, redeId, take: 200, somenteComAlerta: true, ct: ct);
+        var semFiltro = await fixture.ComparacoesApi.ItensAsync(
+            sessaoId, redeId, take: 200, ct: ct);
+
+        comFiltro.Content!.Totais!.Itens.Should().Be(3);
+        semFiltro.Content!.Totais!.Itens.Should().Be(6);
+
+        // A compra do PBS e 10 por item: o total tem de acompanhar o recorte, nao a sessao.
+        comFiltro.Content.Totais.CompraPbsUnidades.Should().Be(30m);
+        semFiltro.Content.Totais.CompraPbsUnidades.Should().Be(60m);
+    }
+
+    [Fact]
+    public async Task O_filtro_de_alerta_combina_com_os_outros()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (redeId, sessaoId) = await SemearAsync();
+
+        // Loja 1 + curva A + com alerta = S1 e S2 (S3 e curva B, S4 e SemAlerta).
+        var pagina = await fixture.ComparacoesApi.ItensAsync(
+            sessaoId, redeId, take: 200, lojaId: 1, curva: "A", somenteComAlerta: true, ct: ct);
+
+        pagina.Content!.Itens.Select(i => i.Sku).Should().BeEquivalentTo(["S1", "S2"]);
+    }
+
+    [Fact]
+    public async Task As_colunas_de_mercado_voltam_no_dto()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (redeId, sessaoId) = await SemearAsync();
+
+        var pagina = await fixture.ComparacoesApi.ItensAsync(
+            sessaoId, redeId, take: 200, ct: ct);
+
+        var comAlerta = pagina.Content!.Itens.Single(i => i.Sku == "S1");
+        comAlerta.MercadoAlerta.Should().Be(MercadoAlertas.Ruptura);
+        comAlerta.MercadoMes.Should().Be(new DateOnly(2025, 6, 1));
+        comAlerta.MercadoBrick.Should().Be("528-RJ VOLTA REDONDA RETIRO");
+        comAlerta.MercadoIndiceDesempenho.Should().Be(0.12m);
+        comAlerta.MercadoDiasSemEstoque.Should().Be(3);
+
+        // Item sem medicao volta com nulo, e nunca zero: a tela precisa distinguir
+        // "sem dado" de "dentro do esperado".
+        var semDado = pagina.Content.Itens.Single(i => i.Sku == "S5");
+        semDado.MercadoAlerta.Should().BeNull();
+        semDado.MercadoIndiceDesempenho.Should().BeNull();
+        semDado.MercadoUnidadesRede.Should().BeNull();
+    }
+
     private async Task<(int RedeId, Guid SessaoId)> SemearAsync()
     {
         var redeId = await EnsureRedeAsync("Rede Filtros de Itens", Slug);
@@ -216,10 +293,16 @@ public sealed class FiltrosDosItensIntegrationTests(AppHostFixture fixture)
         });
 
         db.ComparacaoSessaoItens.AddRange(
-            Item(sessaoId, 1, "S1", "A", "ANALGESICO", compraPbs: 10m, compraMl: 1m),
-            Item(sessaoId, 1, "S2", "A", "ANTIBIOTICO", compraPbs: 10m, compraMl: 1m),
-            Item(sessaoId, 1, "S3", "B", "ANALGESICO", compraPbs: 10m, compraMl: 1m),
-            Item(sessaoId, 1, "S4", "B", categoria: null, compraPbs: 10m, compraMl: 1m),
+            // Alertas distribuidos de proposito: 3 alertas de verdade, 1 avaliado e OK,
+            // 2 sem dado de mercado. O filtro tem de trazer exatamente os 3 primeiros.
+            Item(sessaoId, 1, "S1", "A", "ANALGESICO", compraPbs: 10m, compraMl: 1m,
+                 mercadoAlerta: MercadoAlertas.Ruptura),
+            Item(sessaoId, 1, "S2", "A", "ANTIBIOTICO", compraPbs: 10m, compraMl: 1m,
+                 mercadoAlerta: MercadoAlertas.SemCausa),
+            Item(sessaoId, 1, "S3", "B", "ANALGESICO", compraPbs: 10m, compraMl: 1m,
+                 mercadoAlerta: MercadoAlertas.NaoApurado),
+            Item(sessaoId, 1, "S4", "B", categoria: null, compraPbs: 10m, compraMl: 1m,
+                 mercadoAlerta: MercadoAlertas.SemAlerta),
             Item(sessaoId, 2, "S5", "A", "ANALGESICO", compraPbs: 10m, compraMl: null),
             Item(sessaoId, 2, "S6", "B", "ANTIBIOTICO", compraPbs: 10m, compraMl: null));
 
@@ -229,7 +312,7 @@ public sealed class FiltrosDosItensIntegrationTests(AppHostFixture fixture)
 
     private static ComparacaoSessaoItem Item(
         Guid sessaoId, int lojaId, string sku, string curva, string? categoria,
-        decimal compraPbs, decimal? compraMl) => new()
+        decimal compraPbs, decimal? compraMl, string? mercadoAlerta = null) => new()
         {
             SessaoId = sessaoId,
             LojaId = lojaId,
@@ -248,6 +331,26 @@ public sealed class FiltrosDosItensIntegrationTests(AppHostFixture fixture)
             SobraPbsValor = 50m,
             SobraMlValor = compraMl is null ? null : 40m,
             JanelaAlemDoHistorico = false,
+            // Nulo = item sem dado de mercado. Preenchido = avaliado, e o valor diz o
+            // desfecho. As colunas de medida acompanham, para o item nao ficar com alerta
+            // sem numero que o sustente.
+            MercadoAlerta = mercadoAlerta,
+            MercadoMes = mercadoAlerta is null ? null : new DateOnly(2025, 6, 1),
+            MercadoBrick = mercadoAlerta is null ? null : "528-RJ VOLTA REDONDA RETIRO",
+            MercadoUnidadesRede = mercadoAlerta is null ? null : 12m,
+            MercadoUnidadesConcorrentes = mercadoAlerta is null ? null : 988m,
+            MercadoIndiceDesempenho = mercadoAlerta switch
+            {
+                null => null,
+                MercadoAlertas.SemAlerta => 1.10m,
+                _ => 0.12m,
+            },
+            MercadoDiasSemEstoque = mercadoAlerta switch
+            {
+                MercadoAlertas.Ruptura => 3,
+                MercadoAlertas.SemCausa or MercadoAlertas.SemAlerta => 0,
+                _ => null,
+            },
         };
 
     private async Task<EngineDbContext> AbrirEngineAsync(CancellationToken ct)

@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Minio;
 using Minio.DataModel.Args;
 using Minio.Exceptions;
+using CosmosPro.ML.DemandForCast.Engine.Mercado;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.Comparacoes;
 
@@ -414,7 +415,8 @@ internal static class ComparacoesEndpoints
         [FromQuery] bool desc = true,
         [FromQuery] int? lojaId = null,
         [FromQuery] string? categoria = null,
-        [FromQuery] string? curva = null)
+        [FromQuery] string? curva = null,
+        [FromQuery] bool? somenteComAlerta = null)
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
 
@@ -424,7 +426,7 @@ internal static class ComparacoesEndpoints
         take = Math.Clamp(take, 1, 200);
         skip = Math.Max(0, skip);
 
-        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva);
+        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta);
 
         var totais = await TotalizarAsync(filtrados, ct);
 
@@ -488,13 +490,14 @@ internal static class ComparacoesEndpoints
         [FromQuery] bool desc = true,
         [FromQuery] int? lojaId = null,
         [FromQuery] string? categoria = null,
-        [FromQuery] string? curva = null)
+        [FromQuery] string? curva = null,
+        [FromQuery] bool? somenteComAlerta = null)
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
         if (await TotalDeItensAsync(db, id, redeId, ct) is null) return Results.NotFound();
 
         var coluna = OrdemItensSessao.Resolver(orderBy);
-        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva);
+        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta);
 
         var itens = await OrdemItensSessao
             .Aplicar(filtrados, coluna, desc)
@@ -630,7 +633,8 @@ internal static class ComparacoesEndpoints
     /// exatamente o que a tela mostrava e que os totais descrevam as linhas exibidas.
     /// </summary>
     private static IQueryable<ComparacaoSessaoItem> AplicarFiltros(
-        IQueryable<ComparacaoSessaoItem> itens, int? lojaId, string? categoria, string? curva)
+        IQueryable<ComparacaoSessaoItem> itens, int? lojaId, string? categoria, string? curva,
+        bool? somenteComAlerta = null)
     {
         if (lojaId is { } loja)
         {
@@ -649,6 +653,18 @@ internal static class ComparacoesEndpoints
             itens = curva == FiltroAusente
                 ? itens.Where(i => i.Curva == null)
                 : itens.Where(i => i.Curva == curva);
+        }
+
+        if (somenteComAlerta == true)
+        {
+            // Lista os tres alertas de verdade em vez de negar SemAlerta. Nulo nao sobrevive
+            // a comparacao de desigualdade em SQL, entao "!= SemAlerta" deixaria o item sem
+            // dado de mercado entrar ou sair conforme o tradutor -- e ele nao e alerta, e
+            // "nao avaliado".
+            itens = itens.Where(i =>
+                i.MercadoAlerta == MercadoAlertas.Ruptura
+                || i.MercadoAlerta == MercadoAlertas.SemCausa
+                || i.MercadoAlerta == MercadoAlertas.NaoApurado);
         }
 
         return itens;
@@ -905,7 +921,14 @@ internal static class ComparacoesEndpoints
             i.SobraMlUnidades,
             i.SobraPbsValor,
             i.JanelaAlemDoHistorico,
-            i.SobraMlValor);
+            i.SobraMlValor,
+            i.MercadoMes,
+            i.MercadoBrick,
+            i.MercadoUnidadesRede,
+            i.MercadoUnidadesConcorrentes,
+            i.MercadoIndiceDesempenho,
+            i.MercadoDiasSemEstoque,
+            i.MercadoAlerta);
 
     private static readonly Expression<Func<ComparacaoSessao, SessaoView>> ProjectToView =
         s => new SessaoView(
@@ -1042,7 +1065,17 @@ internal sealed record SessaoItemView(
     decimal? SobraMlUnidades,
     decimal? SobraPbsValor,
     bool JanelaAlemDoHistorico,
-    decimal? SobraMlValor = null);
+    decimal? SobraMlValor = null,
+    // Sinal de mercado da IQVIA. Anulaveis de proposito: nulo e "sem dado de mercado para
+    // este item", nunca zero. Quem renderiza precisa distinguir -- ver o XML doc de
+    // ComparacaoSessaoItem.
+    DateOnly? MercadoMes = null,
+    string? MercadoBrick = null,
+    decimal? MercadoUnidadesRede = null,
+    decimal? MercadoUnidadesConcorrentes = null,
+    decimal? MercadoIndiceDesempenho = null,
+    int? MercadoDiasSemEstoque = null,
+    string? MercadoAlerta = null);
 
 /// <param name="Itens">População inteira da sessão — o denominador de todo o resto.</param>
 /// <param name="SobraExtraMlUnidades">

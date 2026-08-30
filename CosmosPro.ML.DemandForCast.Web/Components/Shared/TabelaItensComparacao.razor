@@ -47,6 +47,18 @@
             </RadzenFormField>
         }
 
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.35rem">
+            @* O data-test vive num <span> puro, e nao no RadzenCheckBox: componente Radzen
+               nao repassa atributo desconhecido para o DOM, e o seletor do E2E nao acharia
+               nada -- falha por timeout, sem dizer o motivo. *@
+            <span data-test="filtro-somente-com-alerta">
+                <RadzenCheckBox TValue="bool" Value="@_filtro.SomenteComAlerta" Name="somenteComAlerta"
+                                Change="@(v => AplicarAsync(_filtro with { SomenteComAlerta = (bool)v }))" />
+            </span>
+            <RadzenLabel Text="Só com alerta de mercado" Component="somenteComAlerta" Style="cursor: pointer" />
+            <HelpTip Text="Mostra só os itens em que a rede vendeu abaixo do que costuma vender naquele bairro, segundo a IQVIA. Item sem dado de mercado NÃO entra neste recorte: ausência de medição não é alerta, e tratá-la como alerta encheria a lista de itens que ninguém mediu." />
+        </RadzenStack>
+
         @if (_filtro.Algum)
         {
             <RadzenButton Click="@(() => AplicarAsync(FiltroDeItens.Nenhum))" Icon="filter_alt_off"
@@ -67,6 +79,35 @@
                 existir. Rode uma comparação nova, com o mesmo arquivo, para poder filtrar por categoria.
             </div>
         </RadzenAlert>
+    }
+
+    @if (_semMercadoNenhum)
+    {
+        @* Sem este aviso, o comprador vê três colunas novas com travessão em toda linha e
+           conclui que o alerta de mercado não funciona. O que falta é sempre uma das duas
+           pontes, e as duas têm conserto diferente. *@
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter"
+                     AllowClose="false" data-test="aviso-sem-mercado">
+            <strong>Nenhum item desta comparação tem dado de mercado da IQVIA.</strong>
+            <div style="margin-top: 0.35rem">
+                Isso acontece quando falta uma das duas ligações. <strong>Loja → bairro:</strong> o
+                arquivo enviado precisa vir de um extrator que traga o CNPJ das lojas — versões
+                antigas não trazem, e sem CNPJ nenhuma loja se liga a um bairro da IQVIA.
+                <strong>Produto → código de barras:</strong> o produto precisa ter EAN no cadastro do
+                PBS, e a IQVIA precisa ter reportado venda dele naqueles bairros.
+                Confira também, na tela <a href="/mercado">Dados de mercado</a>, se existe um mês
+                carregado <em>anterior</em> ao mês desta sugestão — a comparação nunca usa o mês da
+                própria sugestão.
+            </div>
+        </RadzenAlert>
+    }
+
+    @if (MesDeMercado is { } mesMercado)
+    {
+        <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-text-tertiary-color)">
+            Colunas de mercado comparadas contra <strong>@mesMercado.ToString("MM/yyyy")</strong> da
+            IQVIA — o último mês carregado antes do mês desta sugestão.
+        </RadzenText>
     }
 
     @* --- Totalizadores do recorte -------------------------------------------------- *@
@@ -109,6 +150,8 @@
             <div style="margin-top: 0.35rem">@_erro</div>
         </RadzenAlert>
     }
+
+    <div data-test="tabela-itens">
 
     <RadzenDataGrid @ref="_grid" TItem="SessaoItem"
                     Data="@_itens" Count="@_total" LoadData="@LoadData"
@@ -229,8 +272,69 @@
                     }
                 </Template>
             </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoIndiceDesempenho"
+                                  Title="Índice vs bairro" Width="150px" TextAlign="TextAlign.Right">
+                <HeaderTemplate>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                        <span>Índice vs bairro</span>
+                        <HelpTip Text="Quanto este item captura no bairro, comparado com o que a rede captura ali em média. 1,00 = igual ao normal da rede. 0,50 = metade. Abaixo de 0,50 acende alerta. Não é fatia de mercado: o tamanho da rede no bairro está nos dois lados da conta e se cancela, então o que sobra é o desempenho do produto." />
+                    </RadzenStack>
+                </HeaderTemplate>
+                <Template Context="i">
+                    @if (i.MercadoIndiceDesempenho is { } ix)
+                    {
+                        <span title="@DetalheDoMercado(i)"
+                              style="@(ix < 0.5m ? "color: var(--rz-danger); font-weight: 600" : null)">
+                            @ix.ToString("N2")
+                        </span>
+                    }
+                    else
+                    {
+                        @* Travessão e nunca zero: zero diria que o item não vende no bairro, o
+                           que é uma medição, e ninguém a fez. *@
+                        <span style="color: var(--rz-text-tertiary-color)" title="Sem dado de mercado para este item">—</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoDiasSemEstoque"
+                                  Title="Dias sem estoque" Width="140px" TextAlign="TextAlign.Right">
+                <Template Context="i">
+                    @if (i.MercadoDiasSemEstoque is { } d)
+                    {
+                        <span>@d</span>
+                    }
+                    else
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">—</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoAlerta"
+                                  Title="Alerta de mercado" Width="230px">
+                <Template Context="i">
+                    @if (i.AlertaDeMercadoLegivel is { } rotulo)
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                            <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger); font-size: 1rem" />
+                            <span style="color: var(--rz-danger)">@rotulo</span>
+                        </RadzenStack>
+                    }
+                    else if (i.TemDadoDeMercado)
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">dentro do esperado</span>
+                    }
+                    else
+                    {
+                        @* "Sem dado" e "dentro do esperado" são afirmações diferentes, e a
+                           coluna precisa distingui-las: o comprador não pode ler ausência de
+                           medição como aprovação. *@
+                        <span style="color: var(--rz-text-tertiary-color)" title="Uma das pontes não fechou: loja sem CNPJ, produto sem código de barras, ou a IQVIA não reportou este item no bairro.">sem dado</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
         </Columns>
     </RadzenDataGrid>
+    </div>
 </RadzenStack>
 
 @code {
@@ -381,6 +485,9 @@
                 SessaoId, args.Skip ?? 0, args.Top ?? 25, orderBy, desc, _filtro);
 
             _itens = pagina.Itens;
+            // "Nenhum item com dado de mercado" só significa algo quando há itens: página
+            // vazia por filtro não é ausência de mercado.
+            _semMercadoNenhum = _itens.Count > 0 && !_itens.Any(i => i.TemDadoDeMercado);
             _total = pagina.Total;
             _totalSemFiltro = pagina.TotalSemFiltro;
             _totais = pagina.Totais;
@@ -399,6 +506,28 @@
     }
 
     private static string Unidades(decimal valor) => valor.ToString("N0");
+
+    /// <summary>
+    /// Tooltip da célula do índice: as unidades que produziram o número, e o mês e bairro que
+    /// foram comparados. Vive no title da célula para a tabela não ganhar quatro colunas —
+    /// mas o comprador precisa poder auditar o índice sem abrir a planilha.
+    /// </summary>
+    private static string DetalheDoMercado(SessaoItem i)
+    {
+        var mes = i.MercadoMes is { } m ? m.ToString("MM/yyyy") : "?";
+        var nossas = i.MercadoUnidadesRede is { } r ? Unidades(r) : "?";
+        var deles = i.MercadoUnidadesConcorrentes is { } c ? Unidades(c) : "?";
+        return $"{i.MercadoBrick} em {mes}: nós {nossas} un., concorrentes {deles} un.";
+    }
+
+    /// <summary>
+    /// Nenhum item da página tem dado de mercado. Não é o mesmo que "a rede vai bem": é uma
+    /// das pontes não fechando para o envio inteiro, e o aviso acima da tabela diz qual.
+    /// </summary>
+    private bool _semMercadoNenhum;
+
+    /// <summary>Mês da IQVIA que esta sessão comparou, do primeiro item que o declara.</summary>
+    private DateOnly? MesDeMercado => _itens.FirstOrDefault(i => i.MercadoMes is not null)?.MercadoMes;
 
     private static string UnidadesOuSemMl(decimal? valor) =>
         valor is { } v ? Unidades(v) : SemCalculoDoMl;

@@ -423,7 +423,11 @@ public sealed record SessaoItensPage(
 /// Filtros combináveis da tela de itens. <c>null</c> em cada campo é "não filtrar por isto";
 /// <see cref="Ausente"/> é o recorte "sem categoria"/"sem curva", que é coisa diferente.
 /// </summary>
-public sealed record FiltroDeItens(int? LojaId = null, string? Categoria = null, string? Curva = null)
+public sealed record FiltroDeItens(
+    int? LojaId = null,
+    string? Categoria = null,
+    string? Curva = null,
+    bool SomenteComAlerta = false)
 {
     /// <summary>
     /// Sentinela que casa ausência do atributo. Precisa ser <b>o mesmo</b> string que a
@@ -437,7 +441,8 @@ public sealed record FiltroDeItens(int? LojaId = null, string? Categoria = null,
 
     public bool Algum => LojaId is not null
         || !string.IsNullOrWhiteSpace(Categoria)
-        || !string.IsNullOrWhiteSpace(Curva);
+        || !string.IsNullOrWhiteSpace(Curva)
+        || SomenteComAlerta;
 
     public string ParaQueryString()
     {
@@ -445,6 +450,7 @@ public sealed record FiltroDeItens(int? LojaId = null, string? Categoria = null,
         if (LojaId is { } loja) q += $"&lojaId={loja}";
         if (!string.IsNullOrWhiteSpace(Categoria)) q += $"&categoria={Uri.EscapeDataString(Categoria)}";
         if (!string.IsNullOrWhiteSpace(Curva)) q += $"&curva={Uri.EscapeDataString(Curva)}";
+        if (SomenteComAlerta) q += "&somenteComAlerta=true";
         return q;
     }
 }
@@ -503,8 +509,38 @@ public sealed record SessaoItem(
     decimal? SobraPbsValor,
     bool JanelaAlemDoHistorico,
     string? Categoria = null,
-    decimal? SobraMlValor = null)
+    decimal? SobraMlValor = null,
+    // Sinal de mercado da IQVIA. Nulo e "sem dado de mercado para este item", nunca zero:
+    // a tela mostra travessao e diz o porque, nao um numero.
+    DateOnly? MercadoMes = null,
+    string? MercadoBrick = null,
+    decimal? MercadoUnidadesRede = null,
+    decimal? MercadoUnidadesConcorrentes = null,
+    decimal? MercadoIndiceDesempenho = null,
+    int? MercadoDiasSemEstoque = null,
+    string? MercadoAlerta = null)
 {
+    /// <summary>
+    /// Rotulo do alerta em portugues de comprador. Devolve <c>null</c> quando nao ha alerta
+    /// a mostrar -- item sem dado de mercado (<c>MercadoAlerta</c> nulo) ou avaliado e dentro
+    /// do esperado. Os dois casos sao distinguidos por <see cref="TemDadoDeMercado"/>, e a
+    /// tela precisa dizer coisas diferentes sobre eles.
+    /// </summary>
+    public string? AlertaDeMercadoLegivel => MercadoAlerta switch
+    {
+        "Ruptura" => "Possivel perda por ruptura",
+        "SemCausa" => "Abaixo do bairro, sem causa aparente",
+        "NaoApurado" => "Abaixo do bairro, estoque nao apurado",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Houve medicao de mercado para este item. Falso significa que uma das pontes nao
+    /// fechou (loja sem CNPJ, SKU sem EAN, EAN nao reportado pela IQVIA, ou nenhum mes
+    /// coberto antes da sugestao) -- e nao que o item vai bem.
+    /// </summary>
+    public bool TemDadoDeMercado => MercadoAlerta is not null;
+
     /// <summary>
     /// Quem chegou mais perto do que a loja realmente vendeu, nesta linha: menor sobra.
     ///

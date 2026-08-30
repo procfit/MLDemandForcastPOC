@@ -47,6 +47,7 @@ public interface IComparacoesApi
         [Query] int? lojaId = null,
         [Query] string? categoria = null,
         [Query] string? curva = null,
+        [Query] bool? somenteComAlerta = null,
         CancellationToken ct = default);
 
     [Get("/api/comparacoes/{id}/itens/filtros")]
@@ -60,6 +61,7 @@ public interface IComparacoesApi
         [Query] int? lojaId = null,
         [Query] string? categoria = null,
         [Query] string? curva = null,
+        [Query] bool? somenteComAlerta = null,
         CancellationToken ct = default);
 
     [Get("/api/comparacoes/{id}/analise")]
@@ -129,7 +131,14 @@ public sealed record SessaoItemResposta(
     decimal? SobraPbsValor,
     bool JanelaAlemDoHistorico,
     string? Categoria = null,
-    decimal? SobraMlValor = null);
+    decimal? SobraMlValor = null,
+    DateOnly? MercadoMes = null,
+    string? MercadoBrick = null,
+    decimal? MercadoUnidadesRede = null,
+    decimal? MercadoUnidadesConcorrentes = null,
+    decimal? MercadoIndiceDesempenho = null,
+    int? MercadoDiasSemEstoque = null,
+    string? MercadoAlerta = null);
 
 public sealed record SessaoAnaliseResposta(
     int Itens,

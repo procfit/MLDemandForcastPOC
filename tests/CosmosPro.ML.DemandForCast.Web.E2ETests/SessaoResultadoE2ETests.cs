@@ -8,6 +8,7 @@ using CosmosPro.ML.DemandForCast.Worker.Comparison;
 using CosmosPro.ML.DemandForCast.Worker.Sessoes;
 
 using Microsoft.Playwright;
+using CosmosPro.ML.DemandForCast.Engine.Mercado;
 
 namespace CosmosPro.ML.DemandForCast.Web.E2ETests;
 
@@ -320,6 +321,59 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
     /// execução do processo: o resultado é o mesmo para todas as asserções, e repetir login e
     /// navegação por teste só somaria segundos sem cobrir nada a mais.
     /// </summary>
+    /// <summary>
+    /// O filtro "só com alerta de mercado" na tabela de itens, clicado de verdade.
+    ///
+    /// <para>
+    /// Abre página própria, como o caso do download, porque os demais leem o corpo em texto e
+    /// aqui é preciso <b>interagir</b>. O que se afirma é a cadeia inteira: o checkbox manda
+    /// <c>somenteComAlerta</c>, a apiservice filtra pela mesma cláusula que alimenta os
+    /// totais, e a tabela encolhe. Um dos três itens semeados tem alerta; os outros dois não
+    /// têm dado de mercado nenhum — e ausência de medição não pode entrar no recorte de
+    /// alerta, senão a lista se enche de itens que ninguém mediu.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task O_comprador_filtra_a_tabela_por_alerta_de_mercado()
+    {
+        await ResultadoRenderizadoAsync();
+
+        var page = await fixture.NovaPaginaLogadaAsync();
+        try
+        {
+            var baseUrl = fixture.WebfrontendUrl.TrimEnd('/');
+            await page.GotoAsync($"{baseUrl}/comparacoes/{_sessaoId}");
+            await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+            var linhas = page.Locator("[data-test='totalizadores-itens']");
+            await linhas.First.WaitForAsync(new() { Timeout = 60_000 });
+
+            var antes = await page.Locator("[data-test='tabela-itens'] tbody tr").CountAsync();
+            antes.Should().BeGreaterThan(1, "a sessão semeia três itens");
+
+            var checkbox = page.Locator("[data-test='filtro-somente-com-alerta']");
+            await checkbox.First.WaitForAsync(new() { Timeout = 30_000 });
+            await checkbox.First.ClickAsync();
+            await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+            // Espera a tabela reagir: o recalculo passa pelo servidor.
+            await page.WaitForFunctionAsync(
+                "() => document.querySelectorAll(\"[data-test='tabela-itens'] tbody tr\").length === 1",
+                new PageWaitForFunctionOptions { Timeout = 30_000 });
+
+            var depois = await page.Locator("[data-test='tabela-itens'] tbody tr").CountAsync();
+            depois.Should().Be(1, "só um dos três itens semeados tem alerta de mercado");
+
+            var corpo = await page.Locator("body").InnerTextAsync();
+            corpo.Should().Contain("Possivel perda por ruptura",
+                "o alerta aparece com texto de comprador, não com o nome interno");
+        }
+        finally
+        {
+            await page.CloseAsync();
+        }
+    }
+
     private async Task<string> ResultadoRenderizadoAsync()
     {
         await Portao.WaitAsync(TestContext.Current.CancellationToken);
@@ -448,6 +502,15 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             SobraPbsValor = 192.5m,
             SobraMlValor = null,
             JanelaAlemDoHistorico = false,
+            // Único item com dado de mercado, de propósito: o filtro tem de reduzir a
+            // tabela, e os itens sem dado têm de ficar de fora dele.
+            MercadoMes = new DateOnly(2025, 6, 1),
+            MercadoBrick = "528-RJ VOLTA REDONDA RETIRO",
+            MercadoUnidadesRede = 12m,
+            MercadoUnidadesConcorrentes = 988m,
+            MercadoIndiceDesempenho = 0.12m,
+            MercadoDiasSemEstoque = 3,
+            MercadoAlerta = MercadoAlertas.Ruptura,
         },
         new()
         {

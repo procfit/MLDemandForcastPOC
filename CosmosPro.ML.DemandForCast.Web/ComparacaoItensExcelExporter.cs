@@ -1,3 +1,4 @@
+using System.Globalization;
 using ClosedXML.Excel;
 
 namespace CosmosPro.ML.DemandForCast.Web;
@@ -147,6 +148,9 @@ public static class ComparacaoItensExcelExporter
             "Comprado (PBS un.)", "Compraria (ML un.)", "Vendido no período (un.)",
             "Sobrou (PBS un.)", "Sobraria (ML un.)",
             "R$ parado (PBS)", "R$ parado (ML)", "Quem ficou mais perto", "Ressalva",
+            "Mês IQVIA", "Bairro (brick)", "Vendemos no bairro (un.)",
+            "Concorrentes no bairro (un.)", "Índice vs bairro", "Dias sem estoque",
+            "Alerta de mercado",
         ];
 
         for (var c = 0; c < cabecalhos.Length; c++)
@@ -172,6 +176,20 @@ public static class ComparacaoItensExcelExporter
             ws.Cell(linha, 12).Value = Numero(i.SobraMlValor);
             ws.Cell(linha, 13).Value = QuemFicouMaisPerto(i);
             ws.Cell(linha, 14).Value = i.JanelaAlemDoHistorico ? "período incompleto" : "";
+
+            // Célula VAZIA, nunca zero, quando não houve medição de mercado. A planilha é
+            // ordenada pelo comprador: zero no índice colocaria o item sem medição junto
+            // dos piores, e zero em unidades afirmaria que o bairro não vende o item.
+            ws.Cell(linha, 15).Value = i.MercadoMes is { } m
+                ? m.ToString("MM/yyyy", CultureInfo.InvariantCulture)
+                : "";
+            ws.Cell(linha, 16).Value = i.MercadoBrick ?? "";
+            ws.Cell(linha, 17).Value = i.MercadoUnidadesRede is { } ur ? ur : Blank;
+            ws.Cell(linha, 18).Value = i.MercadoUnidadesConcorrentes is { } uc ? uc : Blank;
+            ws.Cell(linha, 19).Value = i.MercadoIndiceDesempenho is { } ix ? ix : Blank;
+            ws.Cell(linha, 20).Value = i.MercadoDiasSemEstoque is { } de ? de : Blank;
+            ws.Cell(linha, 21).Value = i.AlertaDeMercadoLegivel
+                ?? (i.TemDadoDeMercado ? "dentro do esperado" : "sem dado de mercado");
             linha++;
         }
 
@@ -198,6 +216,14 @@ public static class ComparacaoItensExcelExporter
     };
 
     private static XLCellValue Numero(decimal? v) => v is { } d ? d : SemCalculoMl;
+
+    /// <summary>
+    /// Célula em branco para medida de mercado ausente. Diferente de <c>SemCalculoMl</c>: lá
+    /// a ausência é um desfecho esperado do braço de ML e a planilha a nomeia; aqui a coluna
+    /// só existe quando houve medição, e a coluna "Alerta de mercado" já diz "sem dado de
+    /// mercado" na mesma linha.
+    /// </summary>
+    private static readonly XLCellValue Blank = "";
 
     private static string Rotulo(string? filtro, string quandoAusente) => filtro switch
     {

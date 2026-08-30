@@ -115,6 +115,38 @@ public sealed class ComparacaoItensExcelExporterTests
         ws.Cell(3, 4).GetString().Should().Be("(sem categoria)");
     }
 
+    [Fact]
+    public void As_colunas_de_mercado_saem_e_a_ausencia_fica_em_branco()
+    {
+        using var wb = Abrir(Build(FiltroDeItens.Nenhum, Itens()));
+        var ws = wb.Worksheet("Itens");
+
+        // Cabeçalhos nas posições 15..21.
+        ws.Cell(1, 15).GetString().Should().Be("Mês IQVIA");
+        ws.Cell(1, 19).GetString().Should().Be("Índice vs bairro");
+        ws.Cell(1, 21).GetString().Should().Be("Alerta de mercado");
+
+        // Linha 2: item COM medição.
+        ws.Cell(2, 15).GetString().Should().Be("06/2025");
+        ws.Cell(2, 16).GetString().Should().Be("528-RJ VOLTA REDONDA RETIRO");
+        ws.Cell(2, 17).GetDouble().Should().Be(12d);
+        ws.Cell(2, 18).GetDouble().Should().Be(988d);
+        ws.Cell(2, 19).GetDouble().Should().BeApproximately(0.1234d, 0.00001d);
+        ws.Cell(2, 20).GetDouble().Should().Be(3d);
+        ws.Cell(2, 21).GetString().Should().Be("Possivel perda por ruptura");
+
+        // Linha 3: item SEM medição. Célula em BRANCO, não zero -- o comprador ordena a
+        // planilha por estas colunas, e zero no índice colocaria o item sem medição junto
+        // dos piores, enquanto zero em unidades afirmaria que o bairro não vende o item.
+        ws.Cell(3, 17).IsEmpty().Should().BeTrue();
+        ws.Cell(3, 19).IsEmpty().Should().BeTrue();
+        ws.Cell(3, 20).IsEmpty().Should().BeTrue();
+        ws.Cell(3, 19).Value.IsNumber.Should().BeFalse("o Excel não pode somar o que ninguém mediu");
+
+        // E a coluna de alerta diz qual dos dois casos é, em vez de ficar vazia junto.
+        ws.Cell(3, 21).GetString().Should().Be("sem dado de mercado");
+    }
+
     private static byte[] Build(FiltroDeItens filtro, IReadOnlyList<SessaoItem> itens, int totalSemFiltro = 2) =>
         ComparacaoItensExcelExporter.Build(
             Sessao,
@@ -148,7 +180,11 @@ public sealed class ComparacaoItensExcelExporterTests
         new(LojaId: 18, Sku: "154643", NomeProduto: "KOIDE D 120ML", Curva: "A",
             CompraSugeridaPbs: 5m, CompraSugeridaMl: 3m, VendidoNaJanela: 4m,
             SobraPbsUnidades: 10m, SobraMlUnidades: 8m, SobraPbsValor: 100m,
-            JanelaAlemDoHistorico: false, Categoria: "MPX ETICO", SobraMlValor: 80m),
+            JanelaAlemDoHistorico: false, Categoria: "MPX ETICO", SobraMlValor: 80m,
+            MercadoMes: new DateOnly(2025, 6, 1), MercadoBrick: "528-RJ VOLTA REDONDA RETIRO",
+            MercadoUnidadesRede: 12m, MercadoUnidadesConcorrentes: 988m,
+            MercadoIndiceDesempenho: 0.1234m, MercadoDiasSemEstoque: 3,
+            MercadoAlerta: "Ruptura"),
         new(LojaId: 18, Sku: "999999", NomeProduto: null, Curva: null,
             CompraSugeridaPbs: 0m, CompraSugeridaMl: null, VendidoNaJanela: 0m,
             SobraPbsUnidades: 0m, SobraMlUnidades: null, SobraPbsValor: null,

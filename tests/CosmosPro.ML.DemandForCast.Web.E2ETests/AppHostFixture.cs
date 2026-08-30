@@ -507,11 +507,15 @@ public sealed class AppHostFixture : IAsyncLifetime
                 INSERT INTO dbo.ComparacaoSessaoItens
                     (SessaoId, LojaId, Sku, NomeProduto, Curva, CompraSugeridaPbs, CompraSugeridaMl,
                      VendidoNaJanela, DemandaDiaPbs, DemandaDiaMl, DemandaDiaReal,
-                     SobraPbsUnidades, SobraMlUnidades, SobraPbsValor, SobraMlValor, JanelaAlemDoHistorico)
+                     SobraPbsUnidades, SobraMlUnidades, SobraPbsValor, SobraMlValor, JanelaAlemDoHistorico,
+                     MercadoMes, MercadoBrick, MercadoUnidadesRede, MercadoUnidadesConcorrentes,
+                     MercadoIndiceDesempenho, MercadoDiasSemEstoque, MercadoAlerta)
                 VALUES
                     (@sessaoId, @lojaId, @sku, @nomeProduto, @curva, @compraPbs, @compraMl,
                      @vendido, @demandaPbs, @demandaMl, @demandaReal,
-                     @sobraPbsUn, @sobraMlUn, @sobraPbsVl, @sobraMlVl, @alemDoHistorico);
+                     @sobraPbsUn, @sobraMlUn, @sobraPbsVl, @sobraMlVl, @alemDoHistorico,
+                     @mercadoMes, @mercadoBrick, @mercadoUnRede, @mercadoUnConc,
+                     @mercadoIndice, @mercadoDiasSemEstoque, @mercadoAlerta);
                 """;
             insertItem.Parameters.AddWithValue("@sessaoId", id);
             insertItem.Parameters.AddWithValue("@lojaId", item.LojaId);
@@ -529,6 +533,17 @@ public sealed class AppHostFixture : IAsyncLifetime
             insertItem.Parameters.AddWithValue("@sobraPbsVl", (object?)item.SobraPbsValor ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@sobraMlVl", (object?)item.SobraMlValor ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@alemDoHistorico", item.JanelaAlemDoHistorico);
+            // O INSERT lista colunas a mao, entao coluna nova precisa entrar aqui tambem --
+            // sem isso o item chega ao banco com o campo nulo e o E2E afirma "sem dado" sem
+            // que nada no caminho da tela esteja errado.
+            insertItem.Parameters.AddWithValue("@mercadoMes",
+                (object?)item.MercadoMes?.ToDateTime(TimeOnly.MinValue) ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@mercadoBrick", (object?)item.MercadoBrick ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@mercadoUnRede", (object?)item.MercadoUnidadesRede ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@mercadoUnConc", (object?)item.MercadoUnidadesConcorrentes ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@mercadoIndice", (object?)item.MercadoIndiceDesempenho ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@mercadoDiasSemEstoque", (object?)item.MercadoDiasSemEstoque ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@mercadoAlerta", (object?)item.MercadoAlerta ?? DBNull.Value);
             await insertItem.ExecuteNonQueryAsync(ct);
         }
 
