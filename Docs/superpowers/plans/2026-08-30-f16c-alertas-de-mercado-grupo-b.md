@@ -136,6 +136,47 @@ comprador usa. Dois executáveis com a mesma versão e comportamento diferente.
 - [x] **Step 2: Rodar** — feito em 2026-08-30.
 - [x] **Step 3: Aplicar a regra de decisão** — 48,8%, banda intermediária: seguir com a
       declaração na tela.
+### Resultado 4 — FARMA ONE está no painel e não tem coluna de venda 🔴
+
+Combinado de 2026-08-30: a Retiro exporta **só lojas de Volta Redonda**. Isso alinha o
+ZIP com a geografia do arquivo, mas deixa duas perguntas abertas.
+
+**A primeira é de correção, não de cobertura.** A aba de PDVs lista três bandeiras; as
+colunas de medida têm duas:
+
+| brick | CONCORRENTES | DROGARIA RETIRO | FARMA ONE |
+|---|---|---|---|
+| 526 Centro | 1 (agregado) | 6 | **1** |
+| 527 Água Limpa | 1 (agregado) | 11 | **3** |
+| 528 Retiro | 1 (agregado) | 6 | **2** |
+
+**FARMA ONE tem 6 PDVs no painel e nenhuma coluna de `Unidades`.** As vendas dessas 6
+lojas estão dentro de `CONCORRENTES` ou dentro de `DROGARIA RETIRO`, e o arquivo não diz
+qual. A tabela dinâmica da aba de PDVs soma FARMA ONE junto com DROGARIA RETIRO (7/14/8),
+o que sugere que quem puxou o relatório os considera próprios — mas isso é o agrupamento
+do analista, não a dimensão `Bandeira` da IQVIA.
+
+Se estiverem em `CONCORRENTES`, **todo alerta fica enviesado para disparar**: 6 de 29
+lojas próprias contariam como concorrência, a fatia da rede sai subestimada e o índice,
+puxado para baixo. Pior: uma loja FARMA ONE exportada casaria com um brick pelo CNPJ e
+seria comparada contra uma medida de "nós" que exclui a venda dela mesma.
+
+**Pendência, e não é de código:** perguntar a quem puxa o relatório da IQVIA se FARMA ONE
+está dentro de `DROGARIA RETIRO` ou de `CONCORRENTES`. Se estiver em `CONCORRENTES`, o
+pedido correto é que a próxima extração traga FARMA ONE como bandeira própria — o parser
+já aceita qualquer bandeira que não seja `CONCORRENTES` como própria, então nada muda no
+código.
+
+**A segunda é de cobertura.** Volta Redonda tem mais bricks do que os três do arquivo — o
+próprio filtro da consulta pediu **quatro** (incluiu `524-RJ_VASSOURAS`, que não gerou
+coluna). Loja em bairro fora de 526/527/528 não se prende a brick nenhum, mesmo estando em
+Volta Redonda. Conferível numa consulta só, quando chegar o primeiro ZIP com `Cnpj`.
+
+- [ ] **Step 5: Conferir o casamento de CNPJ no primeiro ZIP novo** (novo). Cruzar os
+      CNPJs de `lojas.csv` com `MercadoBrickPdvs`. Quem não casar não recebe dado de
+      mercado, e a tela precisa dizer quantas lojas ficaram fora — junto com a razão
+      (fora dos bricks cobertos, ou CNPJ ausente do painel).
+
 - [ ] **Step 4: Subir a versão do extrator e publicar um build novo** (novo, veio da
       medição). Bump em `CosmosPro.ML.DemandForCast.Extractor.csproj` para `0.18.0` e
       entrega ao comprador, para os ZIPs passarem a trazer `Cnpj`.
