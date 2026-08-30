@@ -365,8 +365,27 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             depois.Should().Be(1, "só um dos três itens semeados tem alerta de mercado");
 
             var corpo = await page.Locator("body").InnerTextAsync();
-            corpo.Should().Contain("Possivel perda por ruptura",
+            corpo.Should().Contain("Possível perda por ruptura",
                 "o alerta aparece com texto de comprador, não com o nome interno");
+
+            // A ressalva de preço é SEMPRE VISÍVEL, e não só num balão de ajuda: quem lê
+            // "sem causa aparente" conclui que o sistema conferiu preço também. Preço é a
+            // hipótese 2 da regra de negócio e não é testável com esta fonte -- a IQVIA publica
+            // um preço de referência idêntico para a rede e para os concorrentes. Esconder a
+            // ressalva deixaria o comprador agir sobre conclusão que o sistema não sustenta.
+            var ressalva = page.Locator("[data-test=\'ressalva-preco-mercado\']");
+            (await ressalva.CountAsync()).Should().Be(1);
+            (await ressalva.InnerTextAsync()).Should().Contain("não preço");
+
+            // E a célula do alerta carrega a explicação por linha num atributo do DOM, que
+            // sobrevive sem hover.
+            // Ancorado no data-test do próprio alerta, e não em "o último span com title": a
+            // versão anterior deste teste quebrou ao mover a coluna de lugar, porque passou a
+            // ler o title da célula do índice.
+            var titulo = await page
+                .Locator("[data-test=\'alerta-de-mercado\']")
+                .First.GetAttributeAsync("title");
+            titulo.Should().Contain("Preço não foi verificado");
         }
         finally
         {

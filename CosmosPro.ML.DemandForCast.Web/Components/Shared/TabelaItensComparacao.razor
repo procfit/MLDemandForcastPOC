@@ -106,7 +106,23 @@
     {
         <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-text-tertiary-color)">
             Colunas de mercado comparadas contra <strong>@mesMercado.ToString("MM/yyyy")</strong> da
-            IQVIA — o último mês carregado antes do mês desta sugestão.
+            IQVIA — o último mês carregado <strong>antes</strong> do mês desta sugestão. Nunca o
+            mês da própria sugestão: aquele mês já contém o efeito desta compra, e usá-lo faria o
+            alerta descrever a própria decisão em vez de antecipá-la. Para trocar de mês, carregue
+            outro relatório em <a href="/mercado">Dados de mercado</a>.
+        </RadzenText>
+        @* Sempre visível, e não só no balão de ajuda: o comprador que lê "sem causa aparente"
+           conclui que o sistema conferiu tudo, inclusive preço. Preço é a hipótese 2 da regra
+           de negócio e ele NÃO é testável com esta fonte — a IQVIA publica um preço de
+           referência normalizado, idêntico para a rede e para os concorrentes, então não existe
+           preço de concorrente para comparar. Esconder isso num tooltip seria deixar o
+           comprador agir sobre uma conclusão que o sistema não sustenta. *@
+        <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-text-tertiary-color)"
+                    data-test="ressalva-preco-mercado">
+            O alerta verifica <strong>estoque</strong>, e não preço: o relatório da IQVIA não
+            informa o preço praticado pelos concorrentes. Por isso
+            <em>&ldquo;sem causa aparente&rdquo;</em> quer dizer que a falta de produto não explica
+            — não que o seu preço esteja certo.
         </RadzenText>
     }
 
@@ -178,6 +194,36 @@
             <RadzenDataGridColumn TItem="SessaoItem" Property="LojaId" Title="Loja" Width="90px" TextAlign="TextAlign.Right" />
             <RadzenDataGridColumn TItem="SessaoItem" Property="Curva" Title="Curva" Width="90px">
                 <Template Context="i">@(string.IsNullOrWhiteSpace(i.Curva) ? "sem curva" : i.Curva)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoAlerta"
+                                  Title="Alerta de mercado" Width="240px">
+                <HeaderTemplate>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                        <span>Alerta de mercado</span>
+                        <HelpTip Text="Acende quando o índice fica abaixo de 0,50. Aí o sistema procura a causa numa ordem: primeiro estoque — se houve dia sem estoque no mês comparado, diz possível perda por ruptura; se havia estoque todos os dias, diz sem causa aparente e o item vai para a sua análise; se aquele mês não veio no arquivo, diz estoque não apurado, que NÃO é o mesmo que não houve ruptura. PREÇO NÃO É VERIFICADO: o relatório da IQVIA não traz o preço que cada concorrente cobrou, então sem causa aparente NÃO significa que o preço está certo — significa que estoque não explica, e preço não pôde ser testado." />
+                    </RadzenStack>
+                </HeaderTemplate>
+                <Template Context="i">
+                    @if (i.AlertaDeMercadoLegivel is { } rotulo)
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                            <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger); font-size: 1rem" />
+                            <span style="color: var(--rz-danger)" title="@ExplicacaoDoAlerta(i)"
+                                  data-test="alerta-de-mercado">@rotulo</span>
+                        </RadzenStack>
+                    }
+                    else if (i.TemDadoDeMercado)
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">dentro do esperado</span>
+                    }
+                    else
+                    {
+                        @* "Sem dado" e "dentro do esperado" são afirmações diferentes, e a
+                           coluna precisa distingui-las: o comprador não pode ler ausência de
+                           medição como aprovação. *@
+                        <span style="color: var(--rz-text-tertiary-color)" title="Uma das pontes não fechou: loja sem CNPJ, produto sem código de barras, ou a IQVIA não reportou este item no bairro.">sem dado</span>
+                    }
+                </Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="Categoria" Title="Categoria" Width="150px" Sortable="false">
                 <HeaderTemplate>
@@ -297,7 +343,13 @@
                 </Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoDiasSemEstoque"
-                                  Title="Dias sem estoque" Width="140px" TextAlign="TextAlign.Right">
+                                  Title="Dias sem estoque" Width="150px" TextAlign="TextAlign.Right">
+                <HeaderTemplate>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                        <span>Dias sem estoque</span>
+                        <HelpTip Text="ATENÇÃO à janela: são dias sem estoque dentro do MÊS DA IQVIA que está sendo comparado (o mês no rodapé dos filtros), e NÃO no período que esta compra deveria cobrir. São perguntas diferentes: aqui a pergunta é por que vendemos pouco naquele mês, e a ruptura da cobertura da compra aparece na manchete da comparação, acima desta tabela. Travessão significa que aquele mês não veio no histórico de estoque do arquivo enviado — não que havia estoque todos os dias." />
+                    </RadzenStack>
+                </HeaderTemplate>
                 <Template Context="i">
                     @if (i.MercadoDiasSemEstoque is { } d)
                     {
@@ -306,29 +358,6 @@
                     else
                     {
                         <span style="color: var(--rz-text-tertiary-color)">—</span>
-                    }
-                </Template>
-            </RadzenDataGridColumn>
-            <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoAlerta"
-                                  Title="Alerta de mercado" Width="230px">
-                <Template Context="i">
-                    @if (i.AlertaDeMercadoLegivel is { } rotulo)
-                    {
-                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
-                            <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger); font-size: 1rem" />
-                            <span style="color: var(--rz-danger)">@rotulo</span>
-                        </RadzenStack>
-                    }
-                    else if (i.TemDadoDeMercado)
-                    {
-                        <span style="color: var(--rz-text-tertiary-color)">dentro do esperado</span>
-                    }
-                    else
-                    {
-                        @* "Sem dado" e "dentro do esperado" são afirmações diferentes, e a
-                           coluna precisa distingui-las: o comprador não pode ler ausência de
-                           medição como aprovação. *@
-                        <span style="color: var(--rz-text-tertiary-color)" title="Uma das pontes não fechou: loja sem CNPJ, produto sem código de barras, ou a IQVIA não reportou este item no bairro.">sem dado</span>
                     }
                 </Template>
             </RadzenDataGridColumn>
@@ -512,6 +541,29 @@
     /// foram comparados. Vive no title da célula para a tabela não ganhar quatro colunas —
     /// mas o comprador precisa poder auditar o índice sem abrir a planilha.
     /// </summary>
+    /// <summary>
+    /// Frase por alerta, no title da célula. Cada uma diz o que o sistema verificou e o que
+    /// NÃO verificou — sem isso "sem causa aparente" lê como "já conferi tudo", e preço nunca
+    /// foi conferido porque a fonte não traz preço de concorrente.
+    /// </summary>
+    private static string ExplicacaoDoAlerta(SessaoItem i) => i.MercadoAlerta switch
+    {
+        "Ruptura" =>
+            $"Vendemos abaixo do nosso normal neste bairro E ficamos {i.MercadoDiasSemEstoque} dia(s) "
+            + "sem estoque no mês comparado. A falta de produto é a explicação mais provável. "
+            + "Preço não foi verificado: a IQVIA não informa o preço dos concorrentes.",
+        "SemCausa" =>
+            "Vendemos abaixo do nosso normal neste bairro e havia estoque todos os dias do mês "
+            + "comparado — falta de produto NÃO explica. Preço não foi verificado: a IQVIA não "
+            + "informa o preço dos concorrentes. Vale olhar exposição, mix de apresentação e "
+            + "concorrente novo no bairro.",
+        "NaoApurado" =>
+            "Vendemos abaixo do nosso normal neste bairro, mas o mês comparado não veio no "
+            + "histórico de estoque do arquivo enviado — então NÃO se sabe se faltou produto. "
+            + "Não é o mesmo que \"não houve ruptura\".",
+        _ => "",
+    };
+
     private static string DetalheDoMercado(SessaoItem i)
     {
         var mes = i.MercadoMes is { } m ? m.ToString("MM/yyyy") : "?";

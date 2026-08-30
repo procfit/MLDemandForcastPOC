@@ -133,7 +133,7 @@ public sealed class ComparacaoItensExcelExporterTests
         ws.Cell(2, 18).GetDouble().Should().Be(988d);
         ws.Cell(2, 19).GetDouble().Should().BeApproximately(0.1234d, 0.00001d);
         ws.Cell(2, 20).GetDouble().Should().Be(3d);
-        ws.Cell(2, 21).GetString().Should().Be("Possivel perda por ruptura");
+        ws.Cell(2, 21).GetString().Should().Be("Possível perda por ruptura");
 
         // Linha 3: item SEM medição. Célula em BRANCO, não zero -- o comprador ordena a
         // planilha por estas colunas, e zero no índice colocaria o item sem medição junto

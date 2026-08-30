@@ -528,9 +528,9 @@ public sealed record SessaoItem(
     /// </summary>
     public string? AlertaDeMercadoLegivel => MercadoAlerta switch
     {
-        "Ruptura" => "Possivel perda por ruptura",
+        "Ruptura" => "Possível perda por ruptura",
         "SemCausa" => "Abaixo do bairro, sem causa aparente",
-        "NaoApurado" => "Abaixo do bairro, estoque nao apurado",
+        "NaoApurado" => "Abaixo do bairro, estoque não apurado",
         _ => null,
     };
 
