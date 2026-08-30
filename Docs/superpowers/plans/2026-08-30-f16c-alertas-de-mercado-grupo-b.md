@@ -612,7 +612,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 4: Colunas novas no item da sessão
+## Task 4: Colunas novas no item da sessão ✅ FEITO
 
 **Files:**
 - Modify: `CosmosPro.ML.DemandForCast.Engine/Entities/ComparacaoSessaoItem.cs`
