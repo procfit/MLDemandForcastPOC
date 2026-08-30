@@ -12,7 +12,13 @@
 
 **Branch:** `feat/f16c-alertas-de-mercado` (já criada, baseada em `origin/main`).
 
-**Escopo deste plano:** apenas o **grupo B** (regras B1, B2, B3, B6). O grupo A (tela de oportunidades, regras A1–A3) tem plano próprio e está bloqueado na versão nova do extrator.
+**Escopo deste plano:** apenas o **grupo B** (regras B1, B2, B3, B6). O grupo A (tela de
+oportunidades, regras A1–A3) tem plano próprio e espera o `catalogo_eans.csv`.
+
+**Correção de 2026-08-30, vinda da Task 1:** o grupo B **também** depende de um extrator
+novo. Os ZIPs de hoje não trazem `Cnpj` em `lojas.csv`, e sem ele nenhuma loja se prende
+a brick nenhum. O código deste plano é escrito e testado sem esperar nada; a tela só
+mostra número depois de um build novo do extrator e de uma sessão nova.
 
 ## Global Constraints
 
@@ -58,88 +64,81 @@
 
 ---
 
-## Task 1: Portão — medir o casamento de EAN
+## Task 1: Portão — medir o casamento de EAN ✅ FEITO em 2026-08-30
 
-**Este é um portão, não código.** Quem executa é o Perez, no DbGate do ambiente publicado. As 7 tarefas seguintes só valem se este número passar.
+Medido fora do banco, a partir do ZIP `extracao-pbs_20260818-1745.zip` (rede Retiro,
+sugestão 125527 "EXELTIS - IQVIA", extrator 0.17.0) cruzado com
+`IQVIA_MES_junho2026.XLSX`. **Não foi preciso consultar banco nenhum** — o ZIP traz
+`produtos.csv` com `Sku` e `Ean`, e o XLSX traz os EANs da IQVIA.
 
-**Por que primeiro:** o sinal de mercado liga o item da sugestão (que tem `Sku`) à observação da IQVIA (que tem `Ean`). Se poucos SKUs da sessão tiverem EAN que exista na IQVIA, as colunas novas nascem quase todas nulas e a tela não tem o que mostrar. Descobrir isso depois de construir a tela custa o trabalho inteiro.
+### Resultado 1 — a regra de normalização, resolvida
 
-**Files:**
-- Create: `Docs/consultas/casamento-ean-iqvia.sql`
+| regra | cadastro que casa |
+|---|---|
+| comparação exata, string como veio | **0,0%** |
+| sem zeros à esquerda nos dois lados | 60,2% |
+| ambos preenchidos até 14 dígitos | 60,2% |
 
-**Interfaces:**
-- Consumes: nada.
-- Produces: um percentual de casamento, registrado neste plano antes da Task 2 começar.
+**A comparação exata casa zero.** O PBS grava o EAN com **14 caracteres e zero à
+esquerda** (`07896094928060`); a IQVIA grava 13 (`7891721201806`). Sem normalizar, o
+`MercadoSinalLoader` produziria dicionário vazio em toda sessão, sem erro nenhum e sem
+nada na tela denunciando.
 
-- [ ] **Step 1: Escrever a consulta**
+**Regra adotada no loader (Task 5): tirar zeros à esquerda dos dois lados antes de
+comparar.** Equivale a preencher ambos até 14. Não usar comparação exata, e não
+preencher até 13 (o valor de 14 do PBS não é truncado por `rjust(13)`, e o resultado é
+0% de casamento).
 
-Criar `Docs/consultas/casamento-ean-iqvia.sql`. Ela roda no banco `Stage` e faz uma consulta cruzada com `engine` pelo nome de três partes — os dois bancos vivem na mesma instância.
-
-```sql
--- Casamento entre os EANs do cadastro que veio no ZIP da sessão e os EANs que a
--- IQVIA reportou. Roda no banco Stage; o cruzamento com engine é por nome de três
--- partes (mesma instância).
---
--- Trocar @RedeId pela rede que se quer medir.
-DECLARE @RedeId INT = 1;
-
-WITH ProdutosDaRede AS (
-    SELECT  P.Sku,
-            EanNormalizado = NULLIF(LTRIM(RTRIM(P.Ean)), '')
-    FROM    dbo.Produtos P
-    WHERE   P.RedeId = @RedeId
-),
-EansDaIqvia AS (
-    SELECT DISTINCT O.Ean
-    FROM   engine.dbo.MercadoObservacoes O
-    WHERE  O.RedeId = @RedeId
-)
-SELECT
-    ProdutosNoStage        = COUNT(*),
-    SemEanNoCadastro       = SUM(CASE WHEN P.EanNormalizado IS NULL THEN 1 ELSE 0 END),
-    ComEanNoCadastro       = SUM(CASE WHEN P.EanNormalizado IS NOT NULL THEN 1 ELSE 0 END),
-    CasamExato             = SUM(CASE WHEN EXISTS (
-                                  SELECT 1 FROM EansDaIqvia I WHERE I.Ean = P.EanNormalizado
-                              ) THEN 1 ELSE 0 END),
-    CasamComZeroAEsquerda  = SUM(CASE WHEN EXISTS (
-                                  SELECT 1 FROM EansDaIqvia I
-                                  WHERE  I.Ean = RIGHT('0000000000000' + P.EanNormalizado, 13)
-                              ) THEN 1 ELSE 0 END)
-FROM ProdutosDaRede P;
-```
-
-- [ ] **Step 2: Rodar no DbGate do ambiente publicado**
-
-O Perez executa. Anotar os cinco números na tabela abaixo.
+### Resultado 2 — a taxa, na rede certa
 
 | medida | valor |
 |---|---|
-| Produtos no Stage | |
-| Sem EAN no cadastro | |
-| Com EAN no cadastro | |
-| Casam exato | |
-| Casam com zero à esquerda | |
+| itens (loja × sku) na sugestão | 422 |
+| lojas na sugestão | 10 |
+| SKUs distintos | 43 |
+| sem EAN no cadastro | 0 (0,0%) |
+| com EAN | 43 (100,0%) |
+| **com EAN que a IQVIA reportou** | **21 (48,8%)** |
 
-- [ ] **Step 3: Aplicar a regra de decisão**
+**48,8%**, na banda intermediária da regra de decisão (30%–60%). **Seguir, e a tela tem
+de declarar quantos itens ficaram sem dado de mercado.**
 
-`taxa = CasamExato / ComEanNoCadastro`.
+**O que os 22 sem casamento realmente são.** A lista de EANs do relatório da IQVIA não é
+um catálogo — é *o que teve movimento nos bricks pedidos*. EAN ausente do arquivo, num
+brick e mês cobertos, significa **o mercado daqueles bairros não vendeu esse item**, e
+não "falha de join". Para o comprador isso é informação, não erro. O
+`MercadoAlertaCalculador` já trata o caso corretamente: mercado zero e rede zero devolve
+nulo, e a coluna mostra travessão.
 
-- **taxa ≥ 60%** — seguir para a Task 2. Se `CasamComZeroAEsquerda` for materialmente maior que `CasamExato`, a normalização do loader (Task 5) usa o zero à esquerda; caso contrário, comparação exata e nada mais.
-- **taxa entre 30% e 60%** — seguir, mas a tela precisa declarar quantos itens ficaram sem dado de mercado. Registrar a taxa neste plano.
-- **taxa < 30%** — **parar**. Voltar à spec: o problema é de fonte, não de código, e nenhuma tela conserta.
+A amostra é pequena e de um fornecedor só (Exeltis, 43 SKUs). Refazer a medição num
+ZIP de sugestão ampla quando houver, mas não bloqueia: a regra de normalização, que era
+o risco real, está resolvida.
 
-- [ ] **Step 4: Commit da consulta**
+### Resultado 3 — a outra ponte não existe nos ZIPs de hoje 🔴
 
-```bash
-git add Docs/consultas/casamento-ean-iqvia.sql
-git commit -m "docs(mercado): add the EAN match query that gates the market signal
+`lojas.csv` do ZIP de 18/08 **não tem a coluna `Cnpj`**. O extrator que o comprador tem
+é anterior à F16, então **toda loja entraria com CNPJ nulo e nenhum item receberia dado
+de mercado**, mesmo com o EAN casando.
 
-A consulta mede quantos SKUs do cadastro importado têm EAN que a IQVIA
-reportou. Abaixo de 30% de casamento o sinal de mercado nasce quase todo
-nulo, e o problema é de fonte -- nenhuma tela conserta.
+`origin/main` já emite `Cnpj` (`Queries/lojas.sql` lê `ENTIDADES.CGC`, e `StageContract`
+declara a coluna), mas **o número de versão continua `0.17.0`** — o mesmo do build que o
+comprador usa. Dois executáveis com a mesma versão e comportamento diferente.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
-```
+**Duas consequências para o cronograma:**
+
+1. **O grupo B não é "desbloqueado" como este plano afirmava.** O código pode ser escrito
+   e testado inteiro, mas só produz dado depois de um extrator novo chegar ao comprador e
+   uma sessão nova ser enviada. Nenhum ZIP existente serve.
+2. **Subir a versão do extrator é pré-requisito**, não capricho: sem isso, ninguém
+   distingue o build que traz CNPJ do que não traz, e a sessão falha em silêncio.
+
+- [x] **Step 1: Escrever a consulta** — dispensada. A medição saiu do ZIP, sem banco.
+- [x] **Step 2: Rodar** — feito em 2026-08-30.
+- [x] **Step 3: Aplicar a regra de decisão** — 48,8%, banda intermediária: seguir com a
+      declaração na tela.
+- [ ] **Step 4: Subir a versão do extrator e publicar um build novo** (novo, veio da
+      medição). Bump em `CosmosPro.ML.DemandForCast.Extractor.csproj` para `0.18.0` e
+      entrega ao comprador, para os ZIPs passarem a trazer `Cnpj`.
 
 ---
 
