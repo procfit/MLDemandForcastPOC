@@ -76,10 +76,17 @@ internal sealed class ExtractionService
                 rows[StageContract.Compras] = CopyQuery(connection, "compras.sql", StageContract.Compras, zip, lojaIds, request.DataInicial, request.DataFinal, 5, total, progress, ct, skusCsv: skusCsv);
                 rows[StageContract.Promocoes] = CopyQuery(connection, "promocoes.sql", StageContract.Promocoes, zip, lojaIds, request.DataInicial, request.DataFinal, 6, total, progress, ct, skusCsv: skusCsv);
 
-                var cabecalho = CopySugestaoHeader(connection, zip, request.SugestaoId, 7, total, progress, ct)
+                // Catálogo de códigos de barras: mestre INTEIRO, sem recorte. É o único CSV do
+                // ZIP que ignora o escopo por SKU de propósito -- contra um cadastro escopado à
+                // sugestão, todo produto de fora pareceria ausente do cadastro e a tela de
+                // oportunidades viraria lista de itens que a rede já vende.
+                rows[StageContract.CatalogoEans] = CopyQuerySemFiltro(
+                    connection, "catalogo_eans.sql", StageContract.CatalogoEans, zip, 7, total, progress, ct);
+
+                var cabecalho = CopySugestaoHeader(connection, zip, request.SugestaoId, 8, total, progress, ct)
                     ?? throw new FalhaDeDominioException(new SugestaoNaoEncontradaErro(request.SugestaoId));
                 rows[StageContract.SugestoesCompra] = 1;
-                rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, lojaIds, 8, total, progress, ct);
+                rows[StageContract.SugestoesCompraItens] = CopyQuery(connection, "sugestoes_compra_itens.sql", StageContract.SugestoesCompraItens, zip, request.SugestaoId, lojaIds, 9, total, progress, ct);
 
                 zip.WriteText(ZipManifest.EntryName, ZipManifest.Escrever(new ZipManifest(
                     request.SugestaoId,
@@ -368,6 +375,29 @@ internal sealed class ExtractionService
         CancellationToken ct)
     {
         using var command = CreateSugestaoCommand(connection, SqlResources.Load(queryFile), sugestaoId, lojaIds);
+        return CopyQueryCore(entryName, queryFile, zip, command, fileIndex, fileCount, progress, ct, inspect: null);
+    }
+
+    /// <summary>
+    /// Consulta <b>sem parâmetro nenhum</b>, para o catálogo de códigos de barras: ele é o
+    /// mestre inteiro da rede, sem recorte por loja, por data ou por SKU. As outras duas
+    /// sobrecargas exigem um recorte, e forçar um aqui seria justamente o defeito que este
+    /// arquivo existe para evitar — catálogo escopado responde "está nesta compra?" em vez de
+    /// "está no meu cadastro?".
+    /// </summary>
+    private static long CopyQuerySemFiltro(
+        SqlConnection connection,
+        string queryFile,
+        string entryName,
+        CsvZipWriter zip,
+        int fileIndex,
+        int fileCount,
+        IProgress<ExtractionProgress> progress,
+        CancellationToken ct)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = SqlResources.Load(queryFile);
+        command.CommandTimeout = CommandTimeoutSeconds;
         return CopyQueryCore(entryName, queryFile, zip, command, fileIndex, fileCount, progress, ct, inspect: null);
     }
 

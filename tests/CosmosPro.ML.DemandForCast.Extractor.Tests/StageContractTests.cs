@@ -76,10 +76,54 @@ public sealed class StageContractTests
     [InlineData("estoques_movimentos.sql")]
     [InlineData("compras.sql")]
     [InlineData("promocoes.sql")]
+    [InlineData("catalogo_eans.sql")]
     public void Query_embarcada_existe_no_assembly(string arquivo)
     {
         var sql = SqlResources.Load(arquivo);
 
         sql.Should().NotBeNullOrWhiteSpace();
     }
+    /// <summary>
+    /// <c>catalogo_eans.csv</c> é o primeiro CSV do ZIP que <b>não</b> tem tabela
+    /// correspondente no Stage: ele vai para <c>engine.RedeCatalogoEans</c>, porque a tela de
+    /// oportunidades não pertence a sessão nenhuma e o Stage é apagado a cada import.
+    /// </summary>
+    [Fact]
+    public void O_catalogo_de_eans_esta_no_contrato_com_as_tres_colunas()
+    {
+        StageContract.Headers.Should().ContainKey(StageContract.CatalogoEans);
+        StageContract.Headers[StageContract.CatalogoEans].Should().Equal(["Sku", "Ean", "Nome"]);
+        StageContract.WriteOrder.Should().Contain(StageContract.CatalogoEans);
+    }
+
+    /// <summary>
+    /// <b>A ausência dele no mapeamento Stage é deliberada, e este teste existe para ela não
+    /// ser "corrigida".</b> <see cref="Mapeamento"/> pareia CSV com tabela do Stage; incluir o
+    /// catálogo ali faria o teste de header procurar <c>TableSchemas.ByTable["CatalogoEans"]</c>,
+    /// que não existe — e a correção óbvia (criar a tabela no Stage) é exatamente o defeito
+    /// que a F16 corrigiu ao remover <c>MercadoIqvia</c>: tabela de Stage que ninguém lê,
+    /// apagada a cada import.
+    /// </summary>
+    [Fact]
+    public void O_catalogo_de_eans_nao_tem_tabela_no_Stage()
+    {
+        Mapeamento.Select(m => m.File).Should().NotContain(StageContract.CatalogoEans);
+        TableSchemas.ByTable.Keys.Should().NotContain("RedeCatalogoEans",
+            "o catálogo vive no banco engine, gravado por EF Core, não pelo bulk do Stage");
+    }
+
+    /// <summary>
+    /// Ordem importa para o log da extração fazer sentido: o comprador vê "produtos da
+    /// sugestão: 43" e depois "catálogo de códigos: 29.068", e a diferença entre os dois
+    /// números é exatamente o motivo pelo qual este arquivo existe.
+    /// </summary>
+    [Fact]
+    public void O_catalogo_e_escrito_depois_dos_produtos_da_sugestao()
+    {
+        var ordem = StageContract.WriteOrder.ToList();
+
+        ordem.IndexOf(StageContract.CatalogoEans)
+             .Should().BeGreaterThan(ordem.IndexOf(StageContract.Produtos));
+    }
+
 }
