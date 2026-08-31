@@ -28,6 +28,17 @@ internal static class ImportSchemas
     public static readonly IReadOnlyDictionary<string, string[]> OptionalFiles = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
     {
         ["sinais_externos.csv"] = ["Data", "Geografia", "Tipo", "Valor"],
+        // Catálogo completo de códigos de barras da rede. Opcional porque ZIP de extrator
+        // anterior à 0.18.0 não o traz, e recusar o import puniria o comprador por usar um
+        // build velho. Sem ele a tela de oportunidades não roda, e diz isso.
+        //
+        // "Nome" fica fora da validação de propósito: é conveniência de exibição, e exigi-lo
+        // quebraria um ZIP que trouxesse só as duas colunas que fecham a comparação.
+        //
+        // Único CSV do contrato que NÃO vai para o Stage: ele é gravado em
+        // engine.RedeCatalogoEans, porque a tela que o consome não pertence a sessão
+        // nenhuma e o Stage é apagado a cada import.
+        ["catalogo_eans.csv"] = ["Sku", "Ean"],
         // Sugestões do ERP: só quem extrai do PBS traz. O dataset sintético e os
         // ZIPs anteriores à F12 não têm, e o import precisa seguir funcionando.
         ["sugestoes_compra.csv"] = ["SugestaoId", "DataHora", "TipoCalculo"],

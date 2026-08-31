@@ -1,7 +1,9 @@
+using System.Data;
 using System.Globalization;
 using System.IO.Compression;
 using CosmosPro.ML.DemandForCast.Engine;
 using CosmosPro.ML.DemandForCast.Engine.Entities;
+using CosmosPro.ML.DemandForCast.Engine.Mercado;
 using CosmosPro.ML.DemandForCast.Worker.Sessoes;
 using CsvHelper;
 using CsvHelper.Configuration;
@@ -69,6 +71,12 @@ internal sealed class CargaProcessor(
             var leitura = sessao is null ? null : ManifestoLeitor.Ler(workDir);
 
             var linhas = await LoadIntoStageAsync(workDir, rede, ct);
+
+            // Catálogo de códigos de barras: vai para o banco engine, e por isso em transação
+            // própria -- transação entre bancos exigiria MSDTC. Falha aqui derruba o import
+            // inteiro de propósito: um import que gravou o Stage e não gravou o catálogo não é
+            // sucesso, e retentar é seguro porque as duas cargas são DELETE + INSERT.
+            await LoadCatalogoEansAsync(workDir, rede, ct);
 
             if (sessao is not null)
             {
@@ -205,6 +213,130 @@ internal sealed class CargaProcessor(
 
         ZipFile.ExtractToDirectory(zipPath, workDir);
         File.Delete(zipPath);
+    }
+
+    /// <summary>
+    /// Substitui o catálogo de códigos de barras da rede em <c>engine.RedeCatalogoEans</c>.
+    ///
+    /// <para>
+    /// <b>Arquivo ausente não é erro e não apaga nada.</b> ZIP de extrator anterior à 0.18.0
+    /// não traz o catálogo; apagar o que já existia puniria o comprador por usar um build
+    /// velho, tirando dele uma tela que funcionava.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Substituição por rede inteira</b>, e não merge: é retrato do cadastro. Produto
+    /// descadastrado tem de sair, senão a tela deixa de oferecer como oportunidade algo que a
+    /// rede já teve.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Dedupe por EAN</b> porque o mestre do PBS pode ter dois SKUs com o mesmo código
+    /// (apresentações cadastradas em duplicidade). O primeiro vence, e isso é determinístico
+    /// porque a consulta do extrator ordena por <c>PRODUTO</c> — sem a dedupe, o
+    /// <c>SqlBulkCopy</c> estoura violação de PK e o import falha por um defeito de cadastro
+    /// que não é do comprador.
+    /// </para>
+    /// </summary>
+    private async Task LoadCatalogoEansAsync(string workDir, Rede rede, CancellationToken ct)
+    {
+        var csv = Path.Combine(workDir, "catalogo_eans.csv");
+        if (!File.Exists(csv))
+        {
+            logger.LogInformation(
+                "Rede {RedeId}: ZIP sem catalogo_eans.csv (extrator anterior à 0.18.0); " +
+                "o catálogo existente foi preservado.", rede.Id);
+            return;
+        }
+
+        var linhas = LerCatalogo(csv);
+
+        var connStr = config.GetConnectionString("engine")
+            ?? throw new InvalidOperationException("Connection string 'engine' não encontrada.");
+
+        await using var conn = new SqlConnection(connStr);
+        await conn.OpenAsync(ct);
+        await using var tx = (SqlTransaction)await conn.BeginTransactionAsync(ct);
+
+        try
+        {
+            await using (var apagar = new SqlCommand(
+                "DELETE FROM dbo.RedeCatalogoEans WHERE RedeId = @redeId;", conn, tx))
+            {
+                apagar.Parameters.AddWithValue("@redeId", rede.Id);
+                apagar.CommandTimeout = 300;
+                await apagar.ExecuteNonQueryAsync(ct);
+            }
+
+            if (linhas.Count > 0)
+            {
+                var tabela = new DataTable();
+                tabela.Columns.Add("RedeId", typeof(int));
+                tabela.Columns.Add("Ean", typeof(string));
+                tabela.Columns.Add("Sku", typeof(string));
+                tabela.Columns.Add("Nome", typeof(string));
+
+                foreach (var (ean, sku, nome) in linhas)
+                {
+                    tabela.Rows.Add(rede.Id, ean, sku, nome ?? (object)DBNull.Value);
+                }
+
+                using var bulk = new SqlBulkCopy(conn, SqlBulkCopyOptions.Default, tx)
+                {
+                    DestinationTableName = "dbo.RedeCatalogoEans",
+                    BatchSize = 10_000,
+                    BulkCopyTimeout = 600,
+                };
+                foreach (DataColumn coluna in tabela.Columns)
+                {
+                    bulk.ColumnMappings.Add(coluna.ColumnName, coluna.ColumnName);
+                }
+                await bulk.WriteToServerAsync(tabela, ct);
+            }
+
+            await tx.CommitAsync(ct);
+            logger.LogInformation(
+                "Catálogo de EANs (rede {RedeId}): {Linhas} código(s).", rede.Id, linhas.Count);
+        }
+        catch
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Lê o CSV do catálogo já normalizado e deduplicado por EAN. Linha sem código utilizável
+    /// é descartada em silêncio: a consulta do extrator já filtra, e uma linha que chegue assim
+    /// vem de ZIP montado à mão.
+    /// </summary>
+    private static List<(string Ean, string Sku, string? Nome)> LerCatalogo(string caminho)
+    {
+        var porEan = new Dictionary<string, (string Ean, string Sku, string? Nome)>(StringComparer.Ordinal);
+
+        using var reader = new StreamReader(caminho);
+        using var csv = new CsvReader(reader, new CsvConfiguration(CultureInfo.InvariantCulture)
+        {
+            HasHeaderRecord = true,
+            DetectDelimiter = false,
+            Delimiter = ",",
+        });
+
+        csv.Read();
+        csv.ReadHeader();
+
+        while (csv.Read())
+        {
+            if (Ean.Normalizar(csv.GetField("Ean")) is not { } ean) continue;
+
+            var sku = csv.GetField("Sku")?.Trim();
+            if (string.IsNullOrEmpty(sku)) continue;
+
+            var nome = csv.HeaderRecord?.Contains("Nome") == true ? csv.GetField("Nome") : null;
+            porEan.TryAdd(ean, (ean, sku, string.IsNullOrWhiteSpace(nome) ? null : nome));
+        }
+
+        return [.. porEan.Values];
     }
 
     private async Task<long> LoadIntoStageAsync(string workDir, Rede rede, CancellationToken ct)

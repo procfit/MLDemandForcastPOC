@@ -152,7 +152,7 @@ internal sealed class MercadoSinalLoader(
                 totais.Rede + (ehConcorrente ? 0m : o.Unidades),
                 totais.Total + o.Unidades);
 
-            if (NormalizarEan(o.Ean) is not { } ean) continue;
+            if (Ean.Normalizar(o.Ean) is not { } ean) continue;
 
             var chave = (o.Brick, ean);
             var atual = porBrickEan.GetValueOrDefault(chave);
@@ -253,7 +253,7 @@ internal sealed class MercadoSinalLoader(
         await using var rd = await cmd.ExecuteReaderAsync(ct);
         while (await rd.ReadAsync(ct))
         {
-            if (NormalizarEan(rd.GetString(1)) is { } ean)
+            if (Ean.Normalizar(rd.GetString(1)) is { } ean)
             {
                 mapa[rd.GetString(0)] = ean;
             }
@@ -301,18 +301,5 @@ internal sealed class MercadoSinalLoader(
         }
 
         return mapa;
-    }
-
-    /// <summary>
-    /// Só dígitos, sem zeros à esquerda. É o que faz o EAN de 14 do PBS casar com o de 13
-    /// da IQVIA — ver a nota da classe. Devolve <c>null</c> para código vazio ou todo zero,
-    /// que não identifica produto nenhum.
-    /// </summary>
-    private static string? NormalizarEan(string? bruto)
-    {
-        if (string.IsNullOrWhiteSpace(bruto)) return null;
-
-        var digitos = new string([.. bruto.Where(char.IsAsciiDigit)]).TrimStart('0');
-        return digitos.Length == 0 ? null : digitos;
     }
 }
