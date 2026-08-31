@@ -73,18 +73,64 @@ As Tasks 1 a 4 vêm com o conteúdo completo. As Tasks 5 a 8 vêm com as **inter
 
 **Por que primeiro.** A1 responde "este produto está no meu cadastro?" comparando código de barras. Produto que a rede **tem** mas cujo cadastro não registra o código fica invisível para a comparação, e a tela afirma "você não vende isto" sobre algo que a rede vende. Isso não é ruído: é a tela mentindo na direção que faz o comprador comprar o que já tem.
 
-**O que já se sabe, medido em 2026-08-30** num cadastro real de PBS (79.711 produtos, ZIP `extracao-pbs_20260804-2233.zip`):
+**MEDIDO EM 2026-08-31, direto na instância da Natusfarma** (MCP `mssql-natusfarma-pbs-prod`,
+consulta de agregado, sem leitura de venda). O portão **passa com folga** — e a leitura que eu
+tinha feito antes estava enganada.
 
 | medida | valor |
 |---|---|
-| produtos no cadastro | 79.711 |
-| **sem código de barras** | **50.724 (63,6%)** |
-| com código de barras | 28.987 (36,4%) |
+| produtos no cadastro | 79.873 |
+| **produtos ativos** | **32.215 (40,3%)** |
+| ativos com EAN usável (formatado, não interno) | **29.053** |
+| **cobertura de EAN sobre o cadastro ATIVO** | **90,2%** |
+| ativos sem EAN usável | 3.162 |
+| inativos com EAN usável | 15 |
 
-Dois de cada três produtos não têm código. **Esse cadastro não é o da Retiro** — é de outra rede, na mesma instalação de PBS. A ordem de grandeza transfere; o número exato, não.
+**O 63,6% "sem código de barras" que eu havia calculado do ZIP contava produto morto.** Dos
+79.873 registros, 47.658 estão **inativos** — cadastro descontinuado, duplicado, código antigo.
+Eles não respondem "a rede vende isto"; são histórico. E são justamente eles que não têm EAN:
+dos 29.068 registros com EAN usável, **29.053 são ativos** — sobram 15 inativos.
+
+**Onde está a lacuna, por seção do cadastro** (ativos sem EAN usável / ativos na seção):
+
+| seção | sem EAN | total ativo | cobertura |
+|---|---|---|---|
+| `NÃO DEFINIDO` | **2.756** | 3.339 | 17,5% |
+| `USO_CONSUMO` | 44 | 78 | 43,6% |
+| `NAO_MEDICAMENTO_PEC` | 192 | 14.095 | **98,6%** |
+| `RX_PROMOVIDO` | 39 | 3.917 | **99,0%** |
+| `RX_GENERICO` | 19 | 2.162 | **99,1%** |
+| `MIP_MARCA` | 15 | 1.062 | **98,6%** |
+| `NAO_MEDICAMENTO_NTR` | 57 | 2.076 | 97,3% |
+| `NAO_MEDICAMENTO_OTC` | 14 | 1.347 | 99,0% |
+| `NAO_MEDICAMENTO_PAC` | 11 | 1.864 | 99,4% |
+| `MERCEARIA` | 9 | 1.450 | 99,4% |
+
+**87% da lacuna está numa seção só: `NÃO DEFINIDO`** — 2.756 dos 3.162. Cadastro sem seção
+definida, com 17,5% de cobertura de EAN, é registro incompleto, não produto de gôndola.
+`USO_CONSUMO` (44) é material de consumo da própria loja, que a IQVIA não cobre.
+
+**Nas seções que a IQVIA de fato cobre — medicamento, MIP, perfumaria, mercearia — a lacuna é
+de 362 produtos em ~28.800, ou 1,3%.** É esse o teto do falso positivo, e ele fica na faixa
+"abaixo de 10%" da regra de decisão: **mitigação A, declaração na tela, sem coluna de
+casamento por nome.**
+
+**Duas ressalvas que não dá para eliminar daqui.**
+
+1. **Isto é a Natusfarma, não a Retiro.** Mesmo software de PBS, mas higiene de cadastro é por
+   rede. O número da Retiro pode ser outro; o método e a ordem de grandeza transferem.
+2. **Não há acesso direto ao SQL Server da Retiro.** A medição lá sai **pelo extrator**: o
+   `catalogo_eans.csv` da Task 3 já devolve exatamente o que o portão precisa (uma linha por
+   produto com EAN usável), e a contagem de ativos sem EAN vira um **aviso do próprio
+   extrator**, na tela de extração. Ver o Step 4 abaixo.
+
+**Consequência de tamanho para a Task 3:** o `catalogo_eans.csv` sai com ~29 mil linhas, e não
+79 mil. O filtro `WHERE EANP.EAN_FORMATADO IS NOT NULL` descarta os dois terços que são
+cadastro morto sem código. Arquivo de poucas centenas de KB.
 
 **Files:**
 - Create: `Docs/consultas/cobertura-de-ean-no-cadastro.sql`
+
 
 **Interfaces:**
 - Consumes: nada.
@@ -92,7 +138,14 @@ Dois de cada três produtos não têm código. **Esse cadastro não é o da Reti
 
 - [ ] **Step 1: Escrever a consulta**
 
-Criar `Docs/consultas/cobertura-de-ean-no-cadastro.sql`. Roda no **PBS da Retiro** (SSMS), não no POC — a pergunta é sobre o cadastro de origem.
+Criar `Docs/consultas/cobertura-de-ean-no-cadastro.sql`. **Já rodada na Natusfarma** (resultado
+acima); ela fica no repositório como **especificação do que o extrator vai contar** no Step 5 e
+como forma de repetir a medição em qualquer PBS que se tenha acesso direto.
+
+A versão abaixo usa `OUTER APPLY`. A que rodou no MCP da Natus foi reformulada com `LEFT JOIN`
+porque o `queryBuilder` do MCP não aceita `OUTER APPLY` — as duas contam a mesma coisa; a de
+`LEFT JOIN` precisa de `COUNT(DISTINCT P.PRODUTO)` para o produto com dois EANs não contar duas
+vezes.
 
 ```sql
 -- Quantos produtos do cadastro da rede têm código de barras registrado.
@@ -121,37 +174,38 @@ OUTER APPLY (
 ) E;
 ```
 
-- [ ] **Step 2: Rodar no PBS da Retiro**
+- [x] **Step 2: Rodar na Natusfarma** — feito em 2026-08-31, resultado acima.
 
-O Perez executa. Anotar:
+- [x] **Step 3: Localizar a lacuna por seção** — feito. A quebra por seção respondeu a
+      pergunta melhor que o casamento por nome que este step previa: 87% da lacuna está em
+      `NÃO DEFINIDO`, que é cadastro incompleto e não produto de gôndola. Nas seções que a
+      IQVIA cobre, a cobertura de EAN é de 98,6% a 99,4%.
 
-| medida | valor |
-|---|---|
-| Produtos | |
-| ProdutosAtivos | |
-| ComEanQualquer | |
-| ComEanNaoInterno | |
-| AtivosComEanNaoInterno | |
+      O casamento por nome **fica de reserva**: se a Retiro medir abaixo de 90% nas seções
+      farma, ele volta como forma de estimar quantos dos ausentes a rede tem sob cadastro sem
+      código. Com 99%, ele mediria ruído.
 
-- [ ] **Step 3: Medir o falso positivo por nome**
+- [x] **Step 4: Aplicar a regra de decisão** — 1,3% nas seções que a IQVIA cobre, faixa
+      "abaixo de 10%": **mitigação A**, declaração na tela, sem coluna de casamento por nome.
 
-Só a contagem acima não diz o tamanho do dano. O que dói é: **dos produtos que a IQVIA vende e que parecem ausentes do cadastro, quantos a rede tem sob um cadastro sem código de barras?** Por definição isso não se mede por código — mede-se por nome.
+      As faixas ficam registradas porque a medição da Retiro ainda vai acontecer: abaixo de
+      10% → só a declaração; entre 10% e 40% → declaração mais coluna "possivelmente já
+      cadastrado"; acima de 40% → parar e reabrir a spec, porque aí o caminho é cadastro no
+      PBS e não software.
 
-Rodar localmente (não precisa de banco): cruzar `MercadoProdutos.DescricaoLonga` do XLSX da IQVIA com `Nome` do `produtos.csv` do catálogo completo, por nome normalizado (maiúsculas, sem acento, sem pontuação, colapsando espaços). Contar quantos "ausentes por código" têm nome idêntico ou quase.
+- [ ] **Step 5: O extrator passa a declarar a cobertura de EAN do cadastro** (novo, veio da
+      medição). Não há acesso direto ao SQL Server da Retiro, então a medição de lá vem pelo
+      extrator: ao gerar o `catalogo_eans.csv`, contar também os **produtos ativos sem EAN
+      usável** e mostrar no log e na confirmação da extração, no mesmo lugar onde
+      `SkusSemCadastro` já aparece.
 
-Registrar o resultado nesta tabela:
+      O número viaja no `manifesto.json` (campo novo, `ProdutosAtivosSemEan`) para a tela de
+      oportunidades poder declará-lo sem consultar o PBS. Sem isso, a frase da Task 7 fica
+      sem o N e o comprador não sabe o tamanho da ressalva.
 
-| medida | valor |
-|---|---|
-| EANs da IQVIA ausentes do cadastro por código | |
-| destes, com nome idêntico a algum produto do cadastro | |
-| **taxa estimada de falso positivo** | |
-
-- [ ] **Step 4: Aplicar a regra de decisão**
-
-- **falso positivo abaixo de 10%** — seguir com a mitigação **A** (declaração na tela, Task 7).
-- **entre 10% e 40%** — seguir com **A + B**: a declaração, mais uma coluna "possivelmente já cadastrado" preenchida pelo casamento por nome, que o comprador pode usar para ordenar. A lista continua útil; ela só deixa de fingir precisão que não tem.
-- **acima de 40%** — **parar e reabrir a spec.** A tela nasceria como lista de itens que a rede já tem, e nenhum filtro conserta isso. O caminho passa a ser cadastro (registrar os códigos no PBS), não software.
+      **Contagem por seção não entra.** O que muda a decisão é o total nas seções que a IQVIA
+      cobre, e a quebra por seção só serviu para eu entender de onde vinha a lacuna — ela não
+      é dado que o comprador aja sobre.
 
 - [ ] **Step 5: Commit da consulta e do resultado**
 
