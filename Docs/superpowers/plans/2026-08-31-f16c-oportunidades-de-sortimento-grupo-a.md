@@ -224,7 +224,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 2: A tabela do catálogo no banco `engine`
+## Task 2: A tabela do catálogo no banco `engine` ✅ FEITO
 
 **Files:**
 - Create: `CosmosPro.ML.DemandForCast.Engine/Entities/RedeCatalogoEan.cs`
@@ -421,7 +421,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 3: O extrator passa a trazer o catálogo
+## Task 3: O extrator passa a trazer o catálogo ✅ FEITO
 
 **Files:**
 - Create: `CosmosPro.ML.DemandForCast.Extractor/Queries/catalogo_eans.sql`
@@ -548,7 +548,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 4: O import grava o catálogo no `engine`
+## Task 4: O import grava o catálogo no `engine` ✅ FEITO
 
 **Files:**
 - Modify: `CosmosPro.ML.DemandForCast.ApiService/Imports/ImportSchemas.cs`
@@ -662,7 +662,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 5: As regras A1 e A2 em consulta
+## Task 5: As regras A1 e A2 em consulta ✅ FEITO
 
 **Files:**
 - Create: `CosmosPro.ML.DemandForCast.ApiService/Mercado/MercadoOportunidadesQuery.cs`
@@ -834,7 +834,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Task 6: O endpoint
+## Task 6: O endpoint ✅ FEITO
 
 **Files:**
 - Modify: `CosmosPro.ML.DemandForCast.ApiService/Mercado/MercadoEndpoints.cs`
@@ -884,7 +884,7 @@ Seguir a forma dos handlers vizinhos em `MercadoEndpoints.cs`: `ValidateRedeAsyn
 
 ---
 
-## Task 7: A tela
+## Task 7: A tela ✅ FEITO
 
 **Files:**
 - Create: `CosmosPro.ML.DemandForCast.Web/Components/Pages/Oportunidades.razor`
@@ -960,7 +960,7 @@ Run: `dotnet test tests/CosmosPro.ML.DemandForCast.Web.E2ETests --filter Oportun
 
 ---
 
-## Task 8: Fechar a documentação
+## Task 8: Fechar a documentação ✅ FEITO
 
 - [ ] **Step 1: README** — marcar o grupo A como feito na F16 parte C, com os números medidos e as limitações. O README não pode mentir (CLAUDE.md §9).
 - [ ] **Step 2: CLAUDE.md §4** — as invariantes novas: o catálogo no `engine` e não no Stage, substituição por rede inteira, catálogo vazio recusa em vez de devolver tudo, e só `CONCORRENTES` conta.
@@ -975,3 +975,42 @@ Run: `dotnet test tests/CosmosPro.ML.DemandForCast.Web.E2ETests --filter Oportun
 - **`FARMA ONE` tem 6 PDVs próprios no painel e nenhuma coluna de venda.** Se as vendas deles estiverem em `CONCORRENTES`, esta tela pode oferecer como oportunidade item que a própria rede vende sob outra bandeira. Pergunta aberta para quem puxa o relatório.
 - **Volta Redonda tem mais bricks que os três do arquivo** — o filtro da consulta pediu quatro. Oportunidade em bairro fora dos cobertos não aparece, e a tela não tem como saber que existe.
 - **A lista não estima demanda.** Ela diz "o bairro vende N unidades disto e você não tem"; quanto **você** venderia depende do seu fluxo, e o ML não pode prever série que não existe. Não transformar unidades do bairro em sugestão de compra sem uma decisão explícita sobre isso.
+
+---
+
+## Fechamento — 2026-08-31
+
+**As 8 tarefas estão feitas.** 924 testes verdes em 13 projetos (`dotnet test -m:1`).
+
+**O portão mudou o desenho, que era exatamente o motivo de ele existir.** A medição na
+Natusfarma mostrou 99% de cobertura de EAN nas seções que a IQVIA cobre, e **a coluna de
+casamento por nome saiu do escopo** — com 99% ela mediria ruído. Se eu tivesse construído
+antes de medir, teria escrito uma coluna inteira para um problema de 1,3%.
+
+**Dois desvios de plano, ambos para melhor:**
+
+1. **Os testes da consulta foram para o endpoint HTTP**, e não para a chamada direta que o
+   plano previa: o projeto de integração **não referencia** a ApiService, de propósito. O
+   desvio cobriu também o escopo por inquilino e o default do corte.
+2. **`CopyQuery` precisou de uma terceira sobrecarga.** As duas existentes exigem um recorte
+   (lojas+datas, ou sugestão+lojas), e forçar um recorte no catálogo seria justamente o
+   defeito que o arquivo existe para evitar.
+
+**Três defeitos que só apareceram olhando a tela ou o log, nenhum visível ao compilador:**
+
+1. **O E2E entra como PowerUser**, que cai na primeira rede ativa por id — semear numa rede
+   própria do teste deixava a tela olhando outro inquilino. 60s de timeout muda.
+2. **"1 códigos"** no painel. Nenhum teste pegaria; só a captura de tela.
+3. **O próprio teste quebrou ao eu corrigir o plural**, porque afirmava a palavra flexionada.
+   Reancorado no `data-test` do campo.
+
+**O que falta, e não é código deste plano:**
+
+- **`ProdutosAtivosSemEan` no manifesto do extrator** (Step 5 da Task 1). Trocaria a frase
+  medida na Natusfarma pelo número real da rede que está olhando a tela. Sem acesso direto ao
+  SQL Server da Retiro, é assim que a medição de lá chega.
+- **O extrator 0.18.0 chegar ao comprador e ser usado.** O CI já publica o pacote como
+  artefato; falta baixar e subir em `/admin/extrator`. Sem isso não há catálogo nem CNPJ, e
+  as duas telas do grupo A e do grupo B ficam explicando a ausência.
+- **A resposta sobre FARMA ONE.** Se as vendas daquelas 6 lojas estiverem em `CONCORRENTES`,
+  esta tela pode oferecer como oportunidade item que a rede vende sob outra bandeira.
