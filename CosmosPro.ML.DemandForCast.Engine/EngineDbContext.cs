@@ -22,6 +22,7 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
     public DbSet<MercadoObservacao> MercadoObservacoes => Set<MercadoObservacao>();
     public DbSet<MercadoProduto> MercadoProdutos => Set<MercadoProduto>();
     public DbSet<MercadoBrickPdv> MercadoBrickPdvs => Set<MercadoBrickPdv>();
+    public DbSet<RedeCatalogoEan> RedeCatalogoEans => Set<RedeCatalogoEan>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -361,6 +362,25 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.Property(x => x.Brick).HasMaxLength(80);
             b.Property(x => x.Cnpj).HasMaxLength(14).IsUnicode(false);
             b.Property(x => x.Bandeira).IsRequired().HasMaxLength(60);
+
+            b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
+             .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<RedeCatalogoEan>(b =>
+        {
+            b.ToTable("RedeCatalogoEans");
+
+            // PK (RedeId, Ean) e não Ean: duas redes vendem o mesmo produto, e um EAN global
+            // faria o import da segunda estourar violação de chave.
+            b.HasKey(x => new { x.RedeId, x.Ean });
+
+            // varchar e não nvarchar, espelhando MercadoProduto.Ean — que é o outro lado do
+            // anti-join da tela de oportunidades. Tipo ou collation divergente aqui produz
+            // conversão implícita e table scan, sem erro nenhum.
+            b.Property(x => x.Ean).HasMaxLength(14).IsUnicode(false);
+            b.Property(x => x.Sku).IsRequired().HasMaxLength(30);
+            b.Property(x => x.Nome).HasMaxLength(200);
 
             b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
              .OnDelete(DeleteBehavior.Restrict);
