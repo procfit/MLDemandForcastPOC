@@ -21,6 +21,16 @@ public interface IMercadoApi
     Task<IApiResponse<List<MercadoCoberturaResposta>>> CoberturaAsync(
         [Query] int redeId, CancellationToken ct = default);
 
+    [Get("/api/mercado/oportunidades")]
+    Task<IApiResponse<OportunidadesResposta>> OportunidadesAsync(
+        [Query] int redeId,
+        [Query] decimal? corteMinimo = null,
+        [Query] string? brick = null,
+        [Query] string? areaFarmacia = null,
+        [Query] int? skip = null,
+        [Query] int? take = null,
+        CancellationToken ct = default);
+
     [Delete("/api/mercado/uploads/{id}")]
     Task<IApiResponse> ExcluirEnvioAsync(
         Guid id, [Query] int redeId, CancellationToken ct = default);
@@ -47,3 +57,19 @@ public sealed record MercadoCargaResposta(
     string? ResumoJson);
 
 public sealed record MercadoCoberturaResposta(DateOnly Mes, string Brick, int Observacoes, decimal Unidades);
+
+public sealed record OportunidadesResposta(
+    List<OportunidadeResposta> Itens,
+    int Total,
+    DateOnly? Mes,
+    int EansNoCatalogo);
+
+public sealed record OportunidadeResposta(
+    string Ean,
+    string Brick,
+    string? Descricao,
+    string? Laboratorio,
+    string? AreaFarmacia,
+    string? Classe4,
+    decimal UnidadesConcorrentes,
+    decimal ValorCpp);

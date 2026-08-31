@@ -23,6 +23,7 @@ namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 public sealed class OportunidadesIntegrationTests(AppHostFixture fixture)
 {
     private const string Slug = "oportunidades";
+    private const string Brick = "528-RJ VOLTA REDONDA RETIRO";
 
     [Fact]
     public async Task O_catalogo_faz_round_trip_e_a_recarga_substitui_a_rede_inteira()
@@ -202,6 +203,200 @@ public sealed class OportunidadesIntegrationTests(AppHostFixture fixture)
             + "com lixo do outro lado do join");
     }
 
+
+    // ================= regras A1 e A2, contra banco real =============================
+
+    [Fact]
+    public async Task A1_traz_o_que_o_mercado_vende_e_o_cadastro_nao_tem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var redeId = await SemearMercadoAsync(Slug + "-a1",
+            mercado: [("111", 500m), ("222", 300m), ("333", 50m)],
+            catalogo: ["111"]);
+
+                var resposta = await fixture.MercadoApi.OportunidadesAsync(
+            redeId, corteMinimo: 0m, take: 100, ct: ct);
+        resposta.IsSuccessStatusCode.Should().BeTrue();
+        var pagina = resposta.Content!;
+
+        pagina.Itens.Select(i => i.Ean).Should().BeEquivalentTo(["222", "333"],
+            "o EAN que está no catálogo não é oportunidade");
+        pagina.EansNoCatalogo.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A2_o_corte_de_relevancia_reduz_a_lista_e_o_total()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var redeId = await SemearMercadoAsync(Slug + "-a2",
+            mercado: [("111", 500m), ("222", 300m), ("333", 50m)],
+            catalogo: ["999"]);
+
+                var resposta = await fixture.MercadoApi.OportunidadesAsync(
+            redeId, corteMinimo: 200m, take: 100, ct: ct);
+        resposta.IsSuccessStatusCode.Should().BeTrue();
+        var pagina = resposta.Content!;
+
+        pagina.Itens.Select(i => i.Ean).Should().BeEquivalentTo(["111", "222"]);
+        pagina.Total.Should().Be(2, "o total acompanha o corte, não a população");
+    }
+
+    [Fact]
+    public async Task So_conta_a_venda_dos_concorrentes()
+    {
+        // Bandeira própria não entra na conta. Somar as duas faria o corte inflar e a tela
+        // ofereceria itens que o bairro quase não vende, por causa de venda da própria rede.
+        var ct = TestContext.Current.CancellationToken;
+        var redeId = await SemearMercadoAsync(Slug + "-band",
+            mercado: [("111", 100m)],
+            catalogo: ["999"],
+            unidadesDaRede: 900m);
+
+                var resposta = await fixture.MercadoApi.OportunidadesAsync(
+            redeId, corteMinimo: 500m, take: 100, ct: ct);
+        resposta.IsSuccessStatusCode.Should().BeTrue();
+        var pagina = resposta.Content!;
+
+        pagina.Itens.Should().BeEmpty(
+            "só 100 unidades são de concorrente, e o corte é 500 — as 900 da rede não contam");
+    }
+
+    [Fact]
+    public async Task Sem_catalogo_a_consulta_recusa_em_vez_de_devolver_o_mercado_inteiro()
+    {
+        // O caso em que a tela mais pode mentir. Catálogo vazio significa "o comprador não
+        // enviou o arquivo", NUNCA "a rede não tem produto nenhum" -- e devolver tudo seria a
+        // tela errando em 100% das linhas.
+        var ct = TestContext.Current.CancellationToken;
+        var redeId = await SemearMercadoAsync(Slug + "-nocat",
+            mercado: [("111", 500m), ("222", 300m)],
+            catalogo: []);
+
+                var resposta = await fixture.MercadoApi.OportunidadesAsync(
+            redeId, corteMinimo: 0m, take: 100, ct: ct);
+        resposta.IsSuccessStatusCode.Should().BeTrue();
+        var pagina = resposta.Content!;
+
+        pagina.EansNoCatalogo.Should().Be(0);
+        pagina.Itens.Should().BeEmpty("sem catálogo não há como afirmar ausência");
+        pagina.Total.Should().Be(0);
+        pagina.Mes.Should().BeNull("nem o mês faz sentido declarar aqui");
+    }
+
+    [Fact]
+    public async Task Usa_o_mes_mais_recente_coberto()
+    {
+        // Regra diferente do grupo B, e de propósito: a pergunta aqui é "o que devo incluir
+        // agora", não "o que o comprador poderia ter sabido quando decidiu".
+        var ct = TestContext.Current.CancellationToken;
+        var redeId = await SemearMercadoAsync(Slug + "-mes",
+            mercado: [("111", 500m)],
+            catalogo: ["999"],
+            mes: new DateOnly(2025, 6, 1));
+
+        await SemearObservacaoAsync(redeId, new DateOnly(2026, 6, 1), "111", 700m);
+
+                var resposta = await fixture.MercadoApi.OportunidadesAsync(
+            redeId, corteMinimo: 0m, take: 100, ct: ct);
+        resposta.IsSuccessStatusCode.Should().BeTrue();
+        var pagina = resposta.Content!;
+
+        pagina.Mes.Should().Be(new DateOnly(2026, 6, 1));
+        pagina.Itens.Should().ContainSingle()
+            .Which.UnidadesConcorrentes.Should().Be(700m, "as unidades são as do mês escolhido");
+    }
+
+    [Fact]
+    public async Task Produto_sem_linha_de_dimensao_entra_com_descricao_nula()
+    {
+        // A tela mostra o próprio EAN nesse caso. Descartar a linha esconderia uma
+        // oportunidade real por falta de um dado de exibição.
+        var ct = TestContext.Current.CancellationToken;
+        var redeId = await SemearMercadoAsync(Slug + "-dim",
+            mercado: [("111", 500m)],
+            catalogo: ["999"],
+            comDimensao: false);
+
+                var resposta = await fixture.MercadoApi.OportunidadesAsync(
+            redeId, corteMinimo: 0m, take: 100, ct: ct);
+        resposta.IsSuccessStatusCode.Should().BeTrue();
+        var pagina = resposta.Content!;
+
+        var item = pagina.Itens.Should().ContainSingle().Subject;
+        item.Ean.Should().Be("111");
+        item.Descricao.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task O_total_fala_da_populacao_e_o_take_e_limitado()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var mercado = Enumerable.Range(1, 30)
+            .Select(i => ($"90000{i:D3}", 1000m - i))
+            .ToArray();
+        var redeId = await SemearMercadoAsync(Slug + "-pag", mercado, catalogo: ["999"]);
+
+                var resposta = await fixture.MercadoApi.OportunidadesAsync(
+            redeId, corteMinimo: 0m, take: 5000, ct: ct);
+        resposta.IsSuccessStatusCode.Should().BeTrue();
+        var pagina = resposta.Content!;
+
+        pagina.Total.Should().Be(30);
+        pagina.Itens.Count.Should().BeLessThanOrEqualTo(200, "o take é limitado no servidor");
+        pagina.Itens.Should().BeInDescendingOrder(i => i.UnidadesConcorrentes);
+    }
+
+
+    [Fact]
+    public async Task Uma_rede_nao_ve_o_mercado_nem_o_catalogo_da_outra()
+    {
+        // O endpoint e' interno (a apiservice nao tem rota externa) e recebe redeId na query;
+        // na Web ele sai do IRedeContext. O que se afirma aqui e' que o escopo existe: sem
+        // ele, a lista de oportunidades de uma rede sairia montada com o cadastro da outra --
+        // e um item cadastrado no vizinho apareceria como oportunidade aqui, ou vice-versa.
+        var ct = TestContext.Current.CancellationToken;
+        var comDado = await SemearMercadoAsync(Slug + "-t1",
+            mercado: [("111", 500m)], catalogo: ["999"]);
+        var vizinha = await EnsureRedeAsync("Oportunidades vizinha", Slug + "-t2");
+        await LimparCatalogoAsync(vizinha);
+
+        var minha = await fixture.MercadoApi.OportunidadesAsync(comDado, corteMinimo: 0m, ct: ct);
+        minha.IsSuccessStatusCode.Should().BeTrue();
+        minha.Content!.Itens.Should().ContainSingle();
+
+        var dela = await fixture.MercadoApi.OportunidadesAsync(vizinha, corteMinimo: 0m, ct: ct);
+        dela.IsSuccessStatusCode.Should().BeTrue();
+        dela.Content!.EansNoCatalogo.Should().Be(0);
+        dela.Content.Itens.Should().BeEmpty("a rede vizinha nao tem mercado nem catalogo proprio");
+    }
+
+    [Fact]
+    public async Task Rede_inexistente_nao_devolve_lista()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var resp = await fixture.MercadoApi.OportunidadesAsync(redeId: 999_999, ct: ct);
+
+        resp.IsSuccessStatusCode.Should().BeFalse(
+            "rede inexistente e' recusada antes da consulta, como nas demais rotas de mercado");
+    }
+
+    [Fact]
+    public async Task O_corte_padrao_do_endpoint_e_o_da_regra()
+    {
+        // Sem corteMinimo na query, o endpoint aplica CorteMinimoPadrao (200). Um default
+        // divergente aqui faria a tela mostrar volume diferente do calibrado, sem nada
+        // denunciando.
+        var ct = TestContext.Current.CancellationToken;
+        var redeId = await SemearMercadoAsync(Slug + "-def",
+            mercado: [("111", 500m), ("222", 150m)], catalogo: ["999"]);
+
+        var resp = await fixture.MercadoApi.OportunidadesAsync(redeId, ct: ct);
+
+        resp.Content!.Itens.Select(i => i.Ean).Should().BeEquivalentTo(["111"],
+            "222 tem 150 unidades e o corte padrao e' 200");
+    }
+
     // --- apoio -----------------------------------------------------------------------
 
     /// <summary>
@@ -296,6 +491,84 @@ public sealed class OportunidadesIntegrationTests(AppHostFixture fixture)
         var ct = TestContext.Current.CancellationToken;
         await using var db = await AbrirEngineAsync(ct);
         await db.RedeCatalogoEans.Where(c => c.RedeId == redeId).ExecuteDeleteAsync(ct);
+    }
+
+    /// <summary>
+    /// Semeia mercado e catálogo direto no engine. Direto, e não pelo XLSX de import, porque o
+    /// que se afirma aqui é a consulta — o caminho do arquivo já tem os seus próprios testes.
+    /// </summary>
+    private async Task<int> SemearMercadoAsync(
+        string slug,
+        IReadOnlyList<(string Ean, decimal Unidades)> mercado,
+        IReadOnlyList<string> catalogo,
+        decimal unidadesDaRede = 0m,
+        DateOnly? mes = null,
+        bool comDimensao = true)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var redeId = await EnsureRedeAsync($"Oportunidades {slug}", slug);
+        var mesUsado = mes ?? new DateOnly(2026, 6, 1);
+
+        await using var db = await AbrirEngineAsync(ct);
+
+        await db.MercadoObservacoes.Where(o => o.RedeId == redeId).ExecuteDeleteAsync(ct);
+        await db.MercadoProdutos.Where(x => x.RedeId == redeId).ExecuteDeleteAsync(ct);
+        await db.RedeCatalogoEans.Where(c => c.RedeId == redeId).ExecuteDeleteAsync(ct);
+
+        foreach (var (ean, unidades) in mercado)
+        {
+            db.MercadoObservacoes.Add(new MercadoObservacao
+            {
+                RedeId = redeId, Mes = mesUsado, Brick = Brick, Bandeira = "CONCORRENTES",
+                Ean = ean, Unidades = unidades, ValorCpp = unidades * 10m,
+            });
+
+            if (unidadesDaRede > 0m)
+            {
+                db.MercadoObservacoes.Add(new MercadoObservacao
+                {
+                    RedeId = redeId, Mes = mesUsado, Brick = Brick, Bandeira = "DROGARIA RETIRO",
+                    Ean = ean, Unidades = unidadesDaRede, ValorCpp = unidadesDaRede * 10m,
+                });
+            }
+
+            if (comDimensao)
+            {
+                db.MercadoProdutos.Add(new MercadoProduto
+                {
+                    RedeId = redeId, Ean = ean, DescricaoLonga = $"PRODUTO {ean}",
+                    Laboratorio = "LAB", AreaFarmacia = "MIP", Classe4 = "N02B0",
+                });
+            }
+        }
+
+        foreach (var ean in catalogo)
+        {
+            db.RedeCatalogoEans.Add(new RedeCatalogoEan
+            {
+                RedeId = redeId, Ean = ean, Sku = $"SKU-{ean}", Nome = $"CADASTRADO {ean}",
+            });
+        }
+
+        await db.SaveChangesAsync(ct);
+        return redeId;
+    }
+
+    private async Task SemearObservacaoAsync(int redeId, DateOnly mes, string ean, decimal unidades)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var db = await AbrirEngineAsync(ct);
+
+        db.MercadoObservacoes.Add(new MercadoObservacao
+        {
+            RedeId = redeId, Mes = mes, Brick = Brick, Bandeira = "CONCORRENTES",
+            Ean = ean, Unidades = unidades, ValorCpp = unidades * 10m,
+        });
+        db.MercadoProdutos.Add(new MercadoProduto
+        {
+            RedeId = redeId, Ean = ean + "-x", DescricaoLonga = "IRRELEVANTE",
+        });
+        await db.SaveChangesAsync(ct);
     }
 
 }

@@ -43,6 +43,10 @@ internal static class MercadoEndpoints
              .WithName("GetMercadoCobertura")
              .Produces<IReadOnlyList<MercadoCoberturaView>>();
 
+        group.MapGet("/oportunidades", OportunidadesAsync)
+             .WithName("GetMercadoOportunidades")
+             .Produces<OportunidadesPagina>();
+
         group.MapDelete("/cobertura", ExcluirCoberturaAsync)
              .WithName("DeleteMercadoCobertura")
              .Produces(StatusCodes.Status204NoContent)
@@ -176,6 +180,41 @@ internal static class MercadoEndpoints
     /// linha por (mês, brick) com contagem de observações. É a resposta que separa
     /// "zero" de "não coberto" para quem olha a tela.
     /// </summary>
+    /// <summary>
+    /// Regras A1 e A2: o que o mercado vende nos bricks da rede e não existe no cadastro
+    /// dela, filtrado por relevância.
+    ///
+    /// <para>
+    /// <c>decimal?</c> e <c>int?</c> nos parâmetros, nunca <c>= default</c>: o hábito nasceu da
+    /// armadilha de <c>Guid</c> documentada em CLAUDE.md, em que o default literal derruba a
+    /// tabela de rotas inteira — inclusive <c>/health</c>.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> OportunidadesAsync(
+        EngineDbContext db,
+        CancellationToken ct,
+        [FromQuery] int redeId = 1,
+        [FromQuery] decimal? corteMinimo = null,
+        [FromQuery] string? brick = null,
+        [FromQuery] string? areaFarmacia = null,
+        [FromQuery] int? skip = null,
+        [FromQuery] int? take = null)
+    {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
+        var pagina = await MercadoOportunidadesQuery.ConsultarAsync(
+            db,
+            redeId,
+            corteMinimo ?? MercadoOportunidadesQuery.CorteMinimoPadrao,
+            brick,
+            areaFarmacia,
+            skip ?? 0,
+            take ?? 50,
+            ct);
+
+        return Results.Ok(pagina);
+    }
+
     private static async Task<IResult> CoberturaAsync(
         EngineDbContext db,
         CancellationToken ct,
