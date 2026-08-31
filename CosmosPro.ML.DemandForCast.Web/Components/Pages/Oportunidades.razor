@@ -1,0 +1,276 @@
+@page "/mercado/oportunidades"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject MercadoApiClient MercadoApi
+@inject ILogger<Oportunidades> Logger
+
+<PageTitle>Oportunidades de sortimento</PageTitle>
+
+@* Regras A1, A2 e A3 do documento de controle da IQVIA. A tela responde "o que o bairro
+   vende e eu não tenho" — o contrário da tabela de itens da comparação, que fala do que a
+   rede já vende. *@
+
+<RadzenStack Orientation="Orientation.Vertical" Gap="1.5rem">
+
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Oportunidades de sortimento</RadzenText>
+        <HelpTip Position="TooltipPosition.Bottom"
+                 Text="Produtos que os concorrentes vendem nos seus bairros e que não existem no seu cadastro. Sai do cruzamento entre o relatório da IQVIA e a lista de códigos de barras do seu cadastro, que vem no arquivo do extrator. Não é previsão de venda: diz quanto o bairro move, não quanto você venderia." />
+        <div style="flex: 1"></div>
+        <RadzenLink Path="/mercado" Text="Dados de mercado" Icon="arrow_back" Style="font-size: 0.85rem" />
+    </RadzenStack>
+
+    @if (_erro is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter"
+                     AllowClose="false" data-test="oportunidades-erro">@_erro</RadzenAlert>
+    }
+
+    @if (_pagina is { EansNoCatalogo: 0 })
+    {
+        @* O estado em que esta tela mais poderia mentir: sem catálogo, TODO produto do
+           mercado parece ausente do cadastro. A consulta devolve vazio de propósito, e aqui
+           se diz o que falta e como conseguir. *@
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter"
+                     AllowClose="false" data-test="aviso-sem-catalogo">
+            <strong>Falta a lista de códigos de barras do seu cadastro.</strong>
+            <div style="margin-top: 0.5rem">
+                Esta tela compara o que o mercado vende com o que existe no seu cadastro — e o
+                cadastro ainda não chegou. Ele vem junto do arquivo que o
+                <strong>extrator</strong> gera, a partir da versão <strong>0.18.0</strong>:
+                baixe o extrator novo, gere um envio e a lista aparece aqui.
+            </div>
+            <div style="margin-top: 0.5rem">
+                Enquanto isso, a lista fica <strong>vazia de propósito</strong>. Sem o cadastro,
+                todo produto do mercado pareceria uma oportunidade — inclusive os milhares que
+                você já vende.
+            </div>
+        </RadzenAlert>
+    }
+    else
+    {
+        @* --- painel de contexto ------------------------------------------------------ *@
+        <RadzenCard Variant="Variant.Filled" data-test="painel-oportunidades">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
+                         Gap="0.4rem" Style="margin-bottom: 0.75rem">
+                <RadzenIcon Icon="insights" Style="font-size: 1.1rem; color: var(--rz-text-secondary-color)" />
+                <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Sobre o que esta lista foi apurada</RadzenText>
+            </RadzenStack>
+
+            <RadzenStack Orientation="Orientation.Horizontal" Wrap="FlexWrap.Wrap" Gap="2rem">
+                <div>
+                    <Totalizador Rotulo="Mês do mercado"
+                                 Valor="@(_pagina?.Mes is { } m ? m.ToString("MM/yyyy") : "—")"
+                                 Nota="o mais recente carregado"
+                                 Ajuda="@AjudaDoMes" />
+                </div>
+                <div data-test="tamanho-do-catalogo">
+                    <Totalizador Rotulo="Seu cadastro"
+                                 Valor="@Codigos(_pagina?.EansNoCatalogo ?? 0)"
+                                 Nota="a base da comparação"
+                                 Ajuda="@AjudaDoCatalogo" />
+                </div>
+                <div data-test="total-de-oportunidades">
+                    <Totalizador Rotulo="Oportunidades"
+                                 Valor="@($"{_pagina?.Total ?? 0:N0}")"
+                                 Nota="@($"com o corte de {_corte:N0} unidades")"
+                                 Ajuda="@AjudaDoCorte" />
+                </div>
+            </RadzenStack>
+        </RadzenCard>
+
+        @* --- a ressalva que muda como o comprador age --------------------------------- *@
+        <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-text-tertiary-color)"
+                    data-test="ressalva-codigo-de-barras">
+            A comparação é por <strong>código de barras</strong>. Produto que você tem cadastrado
+            <strong>sem</strong> código aparece aqui como se não existisse no seu mix. Num cadastro
+            de PBS medido, 99% dos produtos ativos de medicamento, MIP e perfumaria têm código —
+            então isso é raro, mas não é zero. Confira no seu cadastro antes de incluir.
+        </RadzenText>
+
+        @* --- controles --------------------------------------------------------------- *@
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
+                     Wrap="FlexWrap.Wrap" Gap="1rem">
+            <RadzenFormField Text="Vende no bairro, por mês" Variant="Variant.Outlined" Style="width: 230px">
+                <RadzenDropDown TValue="decimal" Value="@_corte" Data="@Cortes"
+                                TextProperty="Rotulo" ValueProperty="Valor"
+                                Change="@(v => AplicarCorteAsync((decimal)v))" />
+            </RadzenFormField>
+            <HelpTip Text="Quantas unidades os concorrentes precisam vender no bairro para o item entrar na lista. Sem filtro, a regra devolve 44.874 avisos — 95% deles de produtos que vendem menos de uma unidade por loja por mês. O rótulo diz 'no bairro' e não 'por loja' porque o relatório da IQVIA não informa quantas lojas concorrentes existem em cada bairro." />
+
+            @if (_bricks.Count > 1)
+            {
+                <RadzenFormField Text="Bairro" Variant="Variant.Outlined" Style="width: 260px">
+                    <RadzenDropDown TValue="string" Value="@_brick" Data="@_bricks" AllowClear="true"
+                                    Placeholder="todos" Change="@(v => AplicarBrickAsync((string?)v))" />
+                </RadzenFormField>
+            }
+
+            @if (_areas.Count > 1)
+            {
+                <RadzenFormField Text="Área da farmácia" Variant="Variant.Outlined" Style="width: 240px">
+                    <RadzenDropDown TValue="string" Value="@_area" Data="@_areas" AllowClear="true"
+                                    Placeholder="todas" Change="@(v => AplicarAreaAsync((string?)v))" />
+                </RadzenFormField>
+            }
+
+            <div style="flex: 1"></div>
+            <RadzenButton Click="@CarregarAsync" Icon="refresh" Variant="Variant.Text" Disabled="@_loading" />
+        </RadzenStack>
+
+        @* --- a lista ----------------------------------------------------------------- *@
+        <div data-test="tabela-oportunidades">
+            <RadzenDataGrid TItem="OportunidadeDeSortimento" Data="@(_pagina?.Itens ?? [])"
+                            Count="@(_pagina?.Total ?? 0)" AllowPaging="true" PageSize="50"
+                            AllowSorting="false" IsLoading="@_loading"
+                            EmptyText="Nenhuma oportunidade com este corte. Baixe o corte para ver itens de menor giro."
+                            RowRender="@MarcarLinha">
+                <Columns>
+                    <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="Descricao"
+                                          Title="Produto (nome na IQVIA)" Width="300px">
+                        <Template Context="o">
+                            @if (o.Descricao is { Length: > 0 } nome)
+                            {
+                                <span>@nome</span>
+                            }
+                            else
+                            {
+                                @* Descartar a linha esconderia oportunidade real por falta de um
+                                   dado de exibição. Mostra o código, que identifica o produto. *@
+                                <span style="color: var(--rz-text-tertiary-color)">
+                                    código @o.Ean (sem nome no relatório)
+                                </span>
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="Ean"
+                                          Title="Código de barras" Width="150px" />
+                    <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="Laboratorio"
+                                          Title="Laboratório" Width="150px" />
+                    <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="AreaFarmacia"
+                                          Title="Área" Width="150px" />
+                    <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="Brick"
+                                          Title="Bairro" Width="220px" />
+                    <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="UnidadesConcorrentes"
+                                          Title="Concorrentes venderam" Width="180px" TextAlign="TextAlign.Right">
+                        <Template Context="o">
+                            <strong>@o.UnidadesConcorrentes.ToString("N0")</strong>
+                            <span style="color: var(--rz-text-tertiary-color)"> un.</span>
+                        </Template>
+                    </RadzenDataGridColumn>
+                </Columns>
+            </RadzenDataGrid>
+        </div>
+
+        <RadzenText TextStyle="TextStyle.Caption" Style="color: var(--rz-text-tertiary-color)">
+            As unidades são do <strong>bairro</strong>, não uma previsão do que você venderia. Quanto
+            este item venderia na sua loja depende do seu fluxo, e não há como prever a venda de um
+            produto que você nunca vendeu.
+        </RadzenText>
+    }
+</RadzenStack>
+
+@code {
+    private const string AjudaDoMes =
+        "O mês mais recente que você carregou na tela Dados de mercado. Diferente das colunas de "
+        + "mercado na comparação, que usam sempre um mês ANTERIOR à sugestão: lá a pergunta é o "
+        + "que o comprador poderia ter sabido quando decidiu; aqui é o que convém incluir agora.";
+
+    private const string AjudaDoCatalogo =
+        "Quantos códigos de barras do seu cadastro chegaram no último envio do extrator. É contra "
+        + "esta lista que o mercado é comparado — produto do mercado cujo código não está aqui "
+        + "vira oportunidade. Cadastro sem código de barras não entra, e é por isso que a ressalva "
+        + "abaixo existe.";
+
+    private const string AjudaDoCorte =
+        "Quantas oportunidades sobraram depois do corte de relevância. Sem corte a regra devolve "
+        + "dezenas de milhares de avisos, quase todos de produtos que o bairro quase não vende — "
+        + "e uma lista assim não é olhada por ninguém.";
+
+    /// <summary>Plural do contador. "1 códigos" numa tela de comprador é desleixo visível.</summary>
+    private static string Codigos(int quantos) =>
+        quantos == 1 ? "1 código" : $"{quantos:N0} códigos";
+
+    private sealed record OpcaoDeCorte(decimal Valor, string Rotulo);
+
+    /// <summary>
+    /// Cortes calibrados em junho/2026: 50 dá 1.331 avisos, 150 dá 250, 200 dá 156 e 300 dá 72.
+    /// O padrão de 200 é o do servidor — repetido aqui só como valor inicial do controle.
+    /// </summary>
+    private static readonly OpcaoDeCorte[] Cortes =
+    [
+        new(50m, "pelo menos 50 unidades"),
+        new(150m, "pelo menos 150 unidades"),
+        new(200m, "pelo menos 200 unidades (padrão)"),
+        new(300m, "pelo menos 300 unidades"),
+        new(1000m, "pelo menos 1.000 unidades"),
+    ];
+
+    private OportunidadesPagina? _pagina;
+    private bool _loading;
+    private string? _erro;
+
+    private decimal _corte = 200m;
+    private string? _brick;
+    private string? _area;
+
+    private List<string> _bricks = [];
+    private List<string> _areas = [];
+
+    protected override Task OnInitializedAsync() => CarregarAsync();
+
+    private async Task CarregarAsync()
+    {
+        _loading = true;
+        try
+        {
+            _pagina = await MercadoApi.OportunidadesAsync(_corte, _brick, _area, take: 200);
+            _erro = null;
+
+            // Opções de filtro saem do que a página trouxe. Consultar a base inteira para
+            // montar dropdown daria uma lista de bairros que o corte já excluiu — o comprador
+            // escolheria um filtro que devolve nada.
+            if (_brick is null && _area is null)
+            {
+                _bricks = [.. _pagina.Itens.Select(i => i.Brick).Distinct().Order()];
+                _areas = [.. _pagina.Itens.Where(i => i.AreaFarmacia is not null)
+                                          .Select(i => i.AreaFarmacia!).Distinct().Order()];
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Falha ao buscar oportunidades de sortimento.");
+            _erro = "Não deu para buscar as oportunidades agora. Tente novamente em alguns instantes; "
+                  + "se continuar acontecendo, procure o suporte.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private Task AplicarCorteAsync(decimal corte)
+    {
+        _corte = corte;
+        return CarregarAsync();
+    }
+
+    private Task AplicarBrickAsync(string? brick)
+    {
+        _brick = brick;
+        return CarregarAsync();
+    }
+
+    private Task AplicarAreaAsync(string? area)
+    {
+        _area = area;
+        return CarregarAsync();
+    }
+
+    /// <summary>
+    /// <c>data-test</c> por linha, para o E2E contar linhas sem depender da estrutura interna
+    /// do grid — que muda com a versão do Radzen.
+    /// </summary>
+    private static void MarcarLinha(RowRenderEventArgs<OportunidadeDeSortimento> args) =>
+        args.Attributes["data-test"] = "linha-oportunidade";
+}

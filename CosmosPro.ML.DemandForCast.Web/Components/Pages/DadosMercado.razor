@@ -23,6 +23,8 @@
                       Disabled="@_uploading"
                       data-test="mercado-upload-button"
                       MouseEnter="@(a => ShowTip(a, "Sobe o .xlsx da IQVIA. O arquivo é conferido (formato + aba de dados) antes de entrar na fila de processamento."))" />
+        <RadzenLink Path="/mercado/oportunidades" Text="Ver oportunidades" Icon="lightbulb"
+                    Style="font-size: 0.85rem; margin-right: 0.5rem" />
         <RadzenButton Click="@RefreshAsync" Icon="refresh" Variant="Variant.Text" Disabled="@_loading"
                       MouseEnter="@(a => ShowTip(a, "Atualiza agora. A tela também atualiza sozinha a cada 3 segundos."))" />
     </RadzenStack>

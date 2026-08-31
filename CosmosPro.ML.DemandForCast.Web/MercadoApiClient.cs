@@ -45,6 +45,33 @@ public class MercadoApiClient(HttpClient httpClient, IRedeContext redeContext)
         return result ?? [];
     }
 
+    /// <summary>
+    /// Oportunidades de sortimento: o que o mercado vende nos bairros da rede e não existe no
+    /// cadastro dela (regras A1 e A2).
+    /// </summary>
+    /// <param name="corteMinimo">
+    /// Nulo deixa o servidor aplicar o padrão calibrado. Passar zero é "sem filtro de
+    /// relevância", que devolve dezenas de milhares de linhas — só para inspeção.
+    /// </param>
+    public async Task<OportunidadesPagina> OportunidadesAsync(
+        decimal? corteMinimo = null,
+        string? brick = null,
+        string? areaFarmacia = null,
+        int skip = 0,
+        int take = 50,
+        CancellationToken ct = default)
+    {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+
+        var q = $"/api/mercado/oportunidades?redeId={redeId}&skip={skip}&take={take}";
+        if (corteMinimo is { } corte) q += $"&corteMinimo={corte.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        if (!string.IsNullOrWhiteSpace(brick)) q += $"&brick={Uri.EscapeDataString(brick)}";
+        if (!string.IsNullOrWhiteSpace(areaFarmacia)) q += $"&areaFarmacia={Uri.EscapeDataString(areaFarmacia)}";
+
+        var pagina = await httpClient.GetFromJsonAsync<OportunidadesPagina>(q, ct);
+        return pagina ?? new OportunidadesPagina([], 0, null, 0);
+    }
+
     public async Task<IReadOnlyList<MercadoCoberturaView>> CoberturaAsync(CancellationToken ct = default)
     {
         var redeId = await redeContext.GetRedeIdAtualAsync();
@@ -128,3 +155,33 @@ public sealed record MercadoCoberturaView(
     string Brick,
     int Observacoes,
     decimal Unidades);
+
+/// <param name="EansNoCatalogo">
+/// Tamanho do catálogo de códigos de barras da rede. <b>Zero significa "o catálogo não foi
+/// enviado", nunca "a rede não tem produto nenhum"</b> — e aí a lista vem vazia de propósito,
+/// porque sem catálogo não há como afirmar ausência. A tela explica em vez de listar.
+/// </param>
+/// <param name="Mes">
+/// Mês da IQVIA usado: o mais recente carregado. Nulo quando não há mês nenhum, ou quando o
+/// catálogo está vazio — nos dois casos não há o que declarar.
+/// </param>
+public sealed record OportunidadesPagina(
+    IReadOnlyList<OportunidadeDeSortimento> Itens,
+    int Total,
+    DateOnly? Mes,
+    int EansNoCatalogo);
+
+/// <param name="Descricao">
+/// Nome no catálogo da <b>IQVIA</b>, e não no da rede — por definição a rede não tem cadastro
+/// deste produto. Nulo quando o relatório trouxe medida sem a linha de dimensão; aí a tela
+/// mostra o próprio código, nunca célula vazia.
+/// </param>
+public sealed record OportunidadeDeSortimento(
+    string Ean,
+    string Brick,
+    string? Descricao,
+    string? Laboratorio,
+    string? AreaFarmacia,
+    string? Classe4,
+    decimal UnidadesConcorrentes,
+    decimal ValorCpp);
