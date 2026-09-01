@@ -143,6 +143,13 @@
                             }
                         </Template>
                     </RadzenDataGridColumn>
+                    <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="UnidadesConcorrentes"
+                                          Title="Concorrentes venderam" Width="180px" TextAlign="TextAlign.Right">
+                        <Template Context="o">
+                            <strong>@o.UnidadesConcorrentes.ToString("N0")</strong>
+                            <span style="color: var(--rz-text-tertiary-color)"> un.</span>
+                        </Template>
+                    </RadzenDataGridColumn>
                     <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="Ean"
                                           Title="Código de barras" Width="150px" />
                     <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="Laboratorio"
@@ -151,13 +158,6 @@
                                           Title="Área" Width="150px" />
                     <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="Brick"
                                           Title="Bairro" Width="220px" />
-                    <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="UnidadesConcorrentes"
-                                          Title="Concorrentes venderam" Width="180px" TextAlign="TextAlign.Right">
-                        <Template Context="o">
-                            <strong>@o.UnidadesConcorrentes.ToString("N0")</strong>
-                            <span style="color: var(--rz-text-tertiary-color)"> un.</span>
-                        </Template>
-                    </RadzenDataGridColumn>
                 </Columns>
             </RadzenDataGrid>
         </div>
