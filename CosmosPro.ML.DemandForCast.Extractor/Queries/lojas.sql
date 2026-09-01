@@ -16,7 +16,19 @@ SELECT
     Ativo              = CAST(CASE WHEN E.ATIVO = 'S' THEN 1 ELSE 0 END AS bit),
     -- Sem máscara: o Stage guarda só dígitos, e é por eles que a loja casa com o
     -- painel de PDVs do relatório IQVIA (F16).
-    Cnpj               = CONVERT(varchar(14), REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ENT.CGC)), '.', ''), '/', ''), '-', ''))
+    --
+    -- INSCRICAO_FEDERAL, e não CGC. A versão anterior lia ENT.CGC, coluna que NÃO
+    -- EXISTE em instalação nenhuma do PBS — o extrator 0.18.0 morreu na Retiro com
+    -- "Invalid column name 'CGC'" (SQL 207) na primeira etapa. O nome tinha sido
+    -- escrito por suposição e nunca exercitado: os testes do extrator são unitários
+    -- e esta consulta só roda contra banco real.
+    --
+    -- Conferido em 2026-09-01 na instância da Natusfarma: das 139 lojas de
+    -- EMPRESAS_USUARIAS, 138 têm INSCRICAO_FEDERAL com 18 caracteres no bruto e
+    -- exatamente 14 dígitos depois da máscara — que é o CNPJ, e é a máscara que a
+    -- cadeia de REPLACE abaixo remove. A que falta não tem inscrição cadastrada, e
+    -- cai como CNPJ nulo (a loja importa normalmente e fica fora do sinal de mercado).
+    Cnpj               = CONVERT(varchar(14), REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ENT.INSCRICAO_FEDERAL)), '.', ''), '/', ''), '-', ''))
 FROM dbo.EMPRESAS_USUARIAS E
 LEFT JOIN dbo.ENTIDADES ENT ON ENT.ENTIDADE = E.ENTIDADE
 OUTER APPLY (
