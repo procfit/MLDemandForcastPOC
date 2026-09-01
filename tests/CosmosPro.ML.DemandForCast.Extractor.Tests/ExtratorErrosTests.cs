@@ -13,8 +13,16 @@ public sealed class ExtratorErrosTests
 {
     private static readonly Etapa Qualquer = new("contagens do catálogo", "catalogo_sugestoes_contagens.sql");
 
-    private static FalhaBruta Sql(int numero, bool conexaoJaAberta = true) =>
-        new(typeof(InvalidOperationException), $"erro sql {numero}", numero, conexaoJaAberta, "detalhe completo");
+    private static FalhaBruta Sql(int numero, bool conexaoJaAberta = true, byte? severidade = null) =>
+        new(typeof(InvalidOperationException), $"erro sql {numero}", numero, conexaoJaAberta, "detalhe completo", severidade);
+
+    /// <summary>
+    /// Erro que o servidor <b>processou e recusou</b>: nome de objeto inválido, sintaxe,
+    /// permissão. No SQL Server, severidade até 16 significa exatamente isso — a conexão
+    /// está intacta e a resposta chegou.
+    /// </summary>
+    private static FalhaBruta ErroDeConsulta(int numero, byte severidade = 16) =>
+        Sql(numero, conexaoJaAberta: true, severidade: severidade);
 
     private static ExtratorErro Classificar(FalhaBruta falha) =>
         ClassificadorDeFalha.Classificar(falha, Qualquer, TimeSpan.FromSeconds(129));
@@ -264,4 +272,86 @@ public sealed class ExtratorErrosTests
         erro.Should().BeOfType<InesperadoErro>();
         erro.Message.Should().Contain("erro genérico de outra origem");
     }
+    /// <summary>
+    /// <b>O caso que quebrou na Retiro em 2026-09-01.</b> O extrator 0.18.0 morreu com
+    /// <c>Invalid column name 'CGC'</c> — SQL 207, severidade 16 — e o operador leu "a conexão
+    /// caiu... a rede desistiu no meio da consulta". Mandou conferir a rede, quando o problema
+    /// era a consulta.
+    ///
+    /// <para>
+    /// O <c>ConexaoJaAberta</c> era verdadeiro (a conexão estava aberta, e certa), então o
+    /// fallback do classificador — "qualquer número SQL não listado + conexão aberta = conexão
+    /// perdida" — pegava. O default seguro é o oposto: número desconhecido com severidade de
+    /// erro de usuário NÃO é queda de rede, e não pode ser transitório.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Nome_de_coluna_invalido_nao_e_conexao_perdida()
+    {
+        var erro = Classificar(ErroDeConsulta(207));
+
+        erro.Should().NotBeOfType<ConexaoPerdidaErro>(
+            "o servidor respondeu; quem está errada é a consulta");
+        erro.Message.Should().NotContain("conexão caiu");
+        erro.Message.Should().NotContain("rede desistiu");
+    }
+
+    [Fact]
+    public void Erro_de_consulta_nunca_e_transitorio()
+    {
+        // Retentar um nome de coluna inválido é inútil por definição -- e CatalogoService
+        // retenta 3 vezes tudo que for transitório, gastando o tempo do operador para chegar
+        // à mesma recusa.
+        Classificar(ErroDeConsulta(207)).Transitorio.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(207)]   // nome de coluna inválido
+    [InlineData(208)]   // nome de objeto inválido
+    [InlineData(102)]   // sintaxe incorreta
+    [InlineData(229)]   // permissão negada
+    [InlineData(4145)]  // expressão de tipo não booleano
+    public void Erros_que_o_servidor_processou_e_recusou_apontam_a_etapa_e_a_query(int numero)
+    {
+        var erro = Classificar(ErroDeConsulta(numero));
+
+        erro.Should().BeOfType<EtapaErro>();
+        erro.Message.Should().Contain("catalogo_sugestoes_contagens.sql",
+            "sem o nome do arquivo, quem lê não sabe qual consulta corrigir");
+        erro.Transitorio.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Severidade_alta_com_conexao_aberta_continua_sendo_conexao_perdida()
+    {
+        // Severidade 20+ é fatal: o SQL Server encerra a conexão. Aí "a conexão caiu" é a
+        // leitura certa, e transitório é o tratamento certo. A correção não pode levar este
+        // caso embora junto.
+        var erro = Classificar(Sql(4014, conexaoJaAberta: true, severidade: 20));
+
+        erro.Should().BeOfType<ConexaoPerdidaErro>();
+        erro.Transitorio.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Sem_severidade_conhecida_o_comportamento_antigo_vale()
+    {
+        // FalhaBruta pode nascer de uma cadeia sem SqlException com Class utilizável. A
+        // ausência de severidade não pode mudar a classificação dos casos que já funcionavam.
+        var erro = Classificar(Sql(4014, conexaoJaAberta: true, severidade: null));
+
+        erro.Should().BeOfType<ConexaoPerdidaErro>();
+    }
+
+    [Fact]
+    public void A_severidade_vai_para_a_metadata_do_erro()
+    {
+        // O log do operador já traz sqlNumber; a severidade é o que distingue 207 de uma queda
+        // real, e sem ela o diagnóstico seguinte recomeça do zero.
+        var erro = Classificar(ErroDeConsulta(207, severidade: 16));
+
+        erro.Metadata.Should().ContainKey(ExtratorErro.ChaveSqlSeveridade);
+        erro.Metadata[ExtratorErro.ChaveSqlSeveridade].Should().Be((byte)16);
+    }
+
 }

@@ -88,4 +88,25 @@ public sealed class CliExitCodeMapTests
 
         CliExitCodeMap.De(erro).Should().Be(CliExitCode.FalhaNaExtracao);
     }
+    /// <summary>
+    /// O lado legível por máquina do bug de 2026-09-01. Antes da correção, um
+    /// <c>Invalid column name</c> (SQL 207) era classificado como conexão perdida e saía com
+    /// <see cref="CliExitCode.FalhaDeConexao"/> — código que um script de automação trata
+    /// retentando. Erro de consulta não melhora com retentativa.
+    /// </summary>
+    [Fact]
+    public void Erro_de_consulta_nao_sai_como_falha_de_conexao()
+    {
+        var erro = ClassificadorDeFalha.Classificar(
+            new FalhaBruta(typeof(InvalidOperationException), "Invalid column name 'CGC'.",
+                           SqlNumber: 207, ConexaoJaAberta: true, DetalheCompleto: "detalhe",
+                           SqlSeveridade: 16),
+            new Etapa("lojas.csv", "lojas.sql"),
+            TimeSpan.FromSeconds(1));
+
+        CliExitCodeMap.De(erro).Should().NotBe(CliExitCode.FalhaDeConexao,
+            "quem dirige o CLI retenta em falha de conexão, e retentar 207 chega à mesma recusa");
+        CliExitCodeMap.De(erro).Should().Be(CliExitCode.FalhaNaExtracao);
+    }
+
 }

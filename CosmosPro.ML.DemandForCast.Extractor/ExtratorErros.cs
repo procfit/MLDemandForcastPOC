@@ -20,12 +20,20 @@ internal sealed record Etapa(string Nome, string? QueryFile)
 /// <see cref="SqlException"/> não tem construtor público: sem este intermediário a
 /// classificação só seria exercitável com um SQL Server vivo.
 /// </summary>
+/// <param name="SqlSeveridade">
+/// <c>SqlException.Class</c> — a severidade que o SQL Server atribuiu. É ela, e não o
+/// número, que separa "o servidor processou e recusou" de "a conexão morreu": até <b>16</b> é
+/// erro corrigível pelo usuário (objeto inexistente, sintaxe, permissão) e a conexão segue
+/// intacta; de 20 em diante o servidor encerra a conexão. Nula quando a cadeia não traz
+/// <c>SqlException</c> com <c>Class</c> utilizável.
+/// </param>
 internal sealed record FalhaBruta(
     Type Tipo,
     string Mensagem,
     int? SqlNumber,
     bool ConexaoJaAberta,
-    string DetalheCompleto)
+    string DetalheCompleto,
+    byte? SqlSeveridade = null)
 {
     public static FalhaBruta De(Exception ex, bool conexaoJaAberta)
     {
@@ -36,14 +44,16 @@ internal sealed record FalhaBruta(
         // como inner do SqlException — então "raiz" (o inner, quando existe) quase
         // nunca É o SqlException. O número tem que vir de onde o driver realmente o
         // coloca: no próprio ex, ou no inner, tanto faz qual dos dois é SqlException.
-        var sqlNumber = (ex as SqlException)?.Number ?? (ex.InnerException as SqlException)?.Number;
+        var sqlException = ex as SqlException ?? ex.InnerException as SqlException;
+        var sqlNumber = sqlException?.Number;
 
         return new FalhaBruta(
             raiz.GetType(),
             raiz.Message,
             sqlNumber,
             conexaoJaAberta,
-            ex.ToString());
+            ex.ToString(),
+            sqlException?.Class);
     }
 }
 
@@ -52,6 +62,7 @@ internal abstract class ExtratorErro : Error
     public const string ChaveEtapa = "etapa";
     public const string ChaveQuery = "query";
     public const string ChaveSqlNumber = "sqlNumber";
+    public const string ChaveSqlSeveridade = "sqlSeveridade";
     public const string ChaveDuracao = "duracaoSegundos";
     public const string ChaveDetalhe = "detalhe";
 
@@ -140,6 +151,15 @@ internal static class ClassificadorDeFalha
     private const int LogonFalhou = 18456;
     private const int BancoInacessivel = 4060;
 
+    /// <summary>
+    /// Teto da faixa que o SQL Server documenta como "erros que o usuário pode corrigir":
+    /// objeto inexistente, sintaxe, permissão, tipo incompatível. Nessa faixa o servidor
+    /// respondeu e a conexão segue de pé. De 17 a 19 são problemas de recurso do servidor;
+    /// de 20 em diante são fatais e a conexão é encerrada — e aí "a conexão caiu" é a
+    /// leitura certa.
+    /// </summary>
+    private const byte MaiorSeveridadeCorrigivelPeloUsuario = 16;
+
     public static ExtratorErro Classificar(FalhaBruta falha, Etapa etapa, TimeSpan duracao)
     {
         var erro = Escolher(falha, etapa, duracao);
@@ -149,6 +169,9 @@ internal static class ClassificadorDeFalha
         erro.Metadata[ExtratorErro.ChaveDetalhe] = falha.DetalheCompleto;
         if (etapa.QueryFile is { } query) erro.Metadata[ExtratorErro.ChaveQuery] = query;
         if (falha.SqlNumber is { } numero) erro.Metadata[ExtratorErro.ChaveSqlNumber] = numero;
+        // A severidade acompanha o número porque é ela que distingue 207 de uma queda real.
+        // Sem ela no log, o diagnóstico seguinte recomeça do zero.
+        if (falha.SqlSeveridade is { } severidade) erro.Metadata[ExtratorErro.ChaveSqlSeveridade] = severidade;
 
         return erro;
     }
@@ -161,11 +184,46 @@ internal static class ClassificadorDeFalha
             VitimaDeDeadlock => new ConcorrenciaErro(etapa),
             LogonFalhou or BancoInacessivel => new ConexaoErro(falha.Mensagem),
 
+            // O SERVIDOR PROCESSOU E RECUSOU. Vem antes do fallback de conexão perdida, e
+            // essa ordem é a correção: o fallback tratava qualquer número não listado como
+            // queda de rede desde que a conexão estivesse aberta -- que é justamente o estado
+            // de um erro de consulta. Em 2026-09-01 o extrator morreu na Retiro com
+            // "Invalid column name 'CGC'" (207, severidade 16) e o operador leu "a rede
+            // desistiu no meio da consulta": foi conferir a rede em vez da query.
+            not null when EhErroDeConsulta(falha) => ErroDeConsulta(falha, etapa),
+
             not null when falha.ConexaoJaAberta => new ConexaoPerdidaErro(etapa, duracao),
             not null => new ConexaoErro(falha.Mensagem),
 
             null => SemNumeroSql(falha, etapa),
         };
+
+    /// <summary>
+    /// Severidade até <see cref="MaiorSeveridadeCorrigivelPeloUsuario"/> significa que o SQL
+    /// Server <b>respondeu</b>: ele processou o comando e o recusou. A conexão está intacta, e
+    /// nada aqui é transitório — retentar um nome de coluna inválido chega à mesma recusa.
+    ///
+    /// <para>
+    /// O discriminador é a severidade, e não uma lista de números, de propósito: uma lista
+    /// cobriria o 207 e deixaria 208, 102, 229 e as centenas de outros caírem no mesmo balde
+    /// errado. Sem severidade disponível o comportamento antigo vale — não dá para afirmar de
+    /// que lado está a falha.
+    /// </para>
+    /// </summary>
+    private static bool EhErroDeConsulta(FalhaBruta falha) =>
+        falha.SqlSeveridade is { } severidade
+        && severidade is > 0 and <= MaiorSeveridadeCorrigivelPeloUsuario;
+
+    /// <summary>
+    /// Mensagem do servidor <b>sem paráfrase</b>, mais a etapa e o arquivo da consulta. A
+    /// mensagem do SQL Server para esta classe de erro já é precisa ("Invalid column name
+    /// 'CGC'"); o que faltava era dizer <b>onde</b> — e não inventar uma causa de rede.
+    /// </summary>
+    private static ExtratorErro ErroDeConsulta(FalhaBruta falha, Etapa etapa) =>
+        new EtapaErro(etapa,
+            $"{falha.Mensagem} — o servidor respondeu e recusou a consulta; a conexão está "
+            + "normal. Isto é defeito da consulta ou do schema desta instalação do PBS, "
+            + "não da rede, e não adianta tentar de novo.");
 
     private static ExtratorErro SemNumeroSql(FalhaBruta falha, Etapa etapa)
     {
