@@ -121,17 +121,28 @@ public static class ComparacaoItensExcelExporter
         Par("→ apurada sobre", $"{totais.ItensComCompraMl:N0} item(ns) com cálculo do ML");
         Par("Vendido no período (un.)", totais.VendidoNaJanela);
         Par("Sobra PBS (un.)", totais.SobraPbsUnidades);
-        Par("Sobra ML (un.)", Numero(totais.SobraMlUnidades));
-        Par("→ apurada sobre", $"{totais.ItensComSobraMl:N0} item(ns) com cálculo do ML");
-        Par("Diferença de sobra ML − PBS (un.)", Numero(totais.DiferencaSobraUnidades));
         Par("R$ parado PBS", Numero(totais.SobraPbsValor));
+        l++;
+
+        // Bloco proprio, e com o lado do PBS recalculado: a planilha tem de trazer a mesma
+        // separacao da tela. Enquanto a diferenca saia do total do PBS contra a soma do ML,
+        // quem abrisse o Excel levava o numero errado para dentro de uma apresentacao.
+        ws.Cell(l, 1).Value = $"Comparação PBS × ML — {totais.ItensComSobraMl:N0} item(ns)";
+        ws.Cell(l, 1).Style.Font.Bold = true;
+        l++;
+        Par("Sobra PBS (un.) — mesmos itens", Numero(totais.SobraPbsComparavelUnidades));
+        Par("Sobra ML (un.)", Numero(totais.SobraMlUnidades));
+        Par("Diferença de sobra ML − PBS (un.)", Numero(totais.DiferencaSobraUnidades));
+        Par("R$ parado PBS — mesmos itens", Numero(totais.SobraPbsComparavelValor));
         Par("R$ parado ML", Numero(totais.SobraMlValor));
         Par("Diferença em R$", Numero(totais.DiferencaSobraValor));
         l++;
 
         ws.Cell(l, 1).Value =
-            "As somas do braço de ML falam apenas dos itens em que ele pôde ser calculado — o "
-            + "número logo abaixo de cada uma. Célula com \"" + SemCalculoMl + "\" não é zero: é "
+            "As somas do braço de ML falam apenas dos itens em que ele pôde ser calculado. Por "
+            + "isso a comparação tem bloco próprio, com o PBS recalculado sobre esses mesmos "
+            + "itens: subtrair a soma do ML do total geral do PBS mediria a diferença de "
+            + "população, não a dos métodos. Célula com \"" + SemCalculoMl + "\" não é zero: é "
             + "ausência de cálculo, e somá-la como zero inverteria a leitura.";
         ws.Cell(l, 1).Style.Font.Italic = true;
 
@@ -144,7 +155,8 @@ public static class ComparacaoItensExcelExporter
         var ws = wb.Worksheets.Add("Itens");
         string[] cabecalhos =
         [
-            "Loja", "SKU", "Produto", "Categoria", "Curva",
+            "Loja", "SKU", "Produto", "EAN", "Fabricante", "Categoria", "Curva",
+            "Estoque na sugestão (un.)", "Estoque no fim (un.)",
             "Comprado (PBS un.)", "Compraria (ML un.)", "Vendido no período (un.)",
             "Sobrou (PBS un.)", "Sobraria (ML un.)",
             "R$ parado (PBS)", "R$ parado (ML)", "Quem ficou mais perto", "Ressalva",
@@ -165,30 +177,38 @@ public static class ComparacaoItensExcelExporter
             ws.Cell(linha, 1).Value = i.LojaId;
             ws.Cell(linha, 2).Value = i.Sku;
             ws.Cell(linha, 3).Value = i.NomeProduto ?? $"(SKU {i.Sku} não encontrado no cadastro do PBS)";
-            ws.Cell(linha, 4).Value = i.Categoria ?? "(sem categoria)";
-            ws.Cell(linha, 5).Value = i.Curva ?? "(sem curva)";
-            ws.Cell(linha, 6).Value = i.CompraSugeridaPbs;
-            ws.Cell(linha, 7).Value = Numero(i.CompraSugeridaMl);
-            ws.Cell(linha, 8).Value = i.VendidoNaJanela;
-            ws.Cell(linha, 9).Value = i.SobraPbsUnidades;
-            ws.Cell(linha, 10).Value = Numero(i.SobraMlUnidades);
-            ws.Cell(linha, 11).Value = Numero(i.SobraPbsValor);
-            ws.Cell(linha, 12).Value = Numero(i.SobraMlValor);
-            ws.Cell(linha, 13).Value = QuemFicouMaisPerto(i);
-            ws.Cell(linha, 14).Value = i.JanelaAlemDoHistorico ? "período incompleto" : "";
+            // Texto, e nao numero: o EAN do PBS tem 14 posicoes com zero a esquerda, e o
+            // Excel converteria para numero comendo o zero -- o codigo deixaria de casar com
+            // a embalagem e com o proprio ERP.
+            ws.Cell(linha, 4).SetValue(i.Ean ?? "");
+            ws.Cell(linha, 5).Value = i.Fabricante ?? "";
+            ws.Cell(linha, 6).Value = i.Categoria ?? "(sem categoria)";
+            ws.Cell(linha, 7).Value = i.Curva ?? "(sem curva)";
+            // Celula VAZIA, nunca zero: zero e prateleira vazia, que e medicao.
+            ws.Cell(linha, 8).Value = i.EstoqueNaSugestao is { } es ? es : Blank;
+            ws.Cell(linha, 9).Value = i.EstoqueNoFimDoPeriodo is { } ef ? ef : Blank;
+            ws.Cell(linha, 10).Value = i.CompraSugeridaPbs;
+            ws.Cell(linha, 11).Value = Numero(i.CompraSugeridaMl);
+            ws.Cell(linha, 12).Value = i.VendidoNaJanela;
+            ws.Cell(linha, 13).Value = i.SobraPbsUnidades;
+            ws.Cell(linha, 14).Value = Numero(i.SobraMlUnidades);
+            ws.Cell(linha, 15).Value = Numero(i.SobraPbsValor);
+            ws.Cell(linha, 16).Value = Numero(i.SobraMlValor);
+            ws.Cell(linha, 17).Value = QuemFicouMaisPerto(i);
+            ws.Cell(linha, 18).Value = i.JanelaAlemDoHistorico ? "período incompleto" : "";
 
             // Célula VAZIA, nunca zero, quando não houve medição de mercado. A planilha é
             // ordenada pelo comprador: zero no índice colocaria o item sem medição junto
             // dos piores, e zero em unidades afirmaria que o bairro não vende o item.
-            ws.Cell(linha, 15).Value = i.MercadoMes is { } m
+            ws.Cell(linha, 19).Value = i.MercadoMes is { } m
                 ? m.ToString("MM/yyyy", CultureInfo.InvariantCulture)
                 : "";
-            ws.Cell(linha, 16).Value = i.MercadoBrick ?? "";
-            ws.Cell(linha, 17).Value = i.MercadoUnidadesRede is { } ur ? ur : Blank;
-            ws.Cell(linha, 18).Value = i.MercadoUnidadesConcorrentes is { } uc ? uc : Blank;
-            ws.Cell(linha, 19).Value = i.MercadoIndiceDesempenho is { } ix ? ix : Blank;
-            ws.Cell(linha, 20).Value = i.MercadoDiasSemEstoque is { } de ? de : Blank;
-            ws.Cell(linha, 21).Value = i.AlertaDeMercadoLegivel
+            ws.Cell(linha, 20).Value = i.MercadoBrick ?? "";
+            ws.Cell(linha, 21).Value = i.MercadoUnidadesRede is { } ur ? ur : Blank;
+            ws.Cell(linha, 22).Value = i.MercadoUnidadesConcorrentes is { } uc ? uc : Blank;
+            ws.Cell(linha, 23).Value = i.MercadoIndiceDesempenho is { } ix ? ix : Blank;
+            ws.Cell(linha, 24).Value = i.MercadoDiasSemEstoque is { } de ? de : Blank;
+            ws.Cell(linha, 25).Value = i.AlertaDeMercadoLegivel
                 ?? (i.TemDadoDeMercado ? "dentro do esperado" : "sem dado de mercado");
             linha++;
         }

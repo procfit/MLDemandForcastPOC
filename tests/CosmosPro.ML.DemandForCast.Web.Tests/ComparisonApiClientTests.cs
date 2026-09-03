@@ -154,6 +154,15 @@ public sealed class ComparisonApiClientTests
     /// <summary>
     /// <b>Diferença de sobra é nula, não zero, quando o ML não foi apurado.</b> Zero afirmaria
     /// que os dois métodos empataram — o contrário de "não há como comparar".
+    ///
+    /// <para>
+    /// <b>As igualdades daqui já afirmaram o defeito.</b> Elas subtraíam a soma do ML do
+    /// <i>total geral</i> do PBS (280 un., 54.584,18) — e era isso que a tela fazia: o PBS
+    /// somava os 20.153 itens do recorte e o ML os 2.106 em que foi calculado. A subtração
+    /// não media método nenhum, media população, e a tela a rotulava "diferença de sobra".
+    /// Agora o lado do PBS é o do <b>mesmo subconjunto</b> (250 un., 50.000), e as duas
+    /// asserções de desigualdade abaixo existem para a versão antiga não voltar em silêncio.
+    /// </para>
     /// </summary>
     [Fact]
     public void Diferenca_de_sobra_e_nula_quando_o_ml_nao_foi_apurado()
@@ -162,8 +171,13 @@ public sealed class ComparisonApiClientTests
         Totais(sobraMl: null, valorMl: null).DiferencaSobraValor.Should().BeNull();
 
         var comMl = Totais(sobraMl: 294m, valorMl: 45_012.95m);
-        comMl.DiferencaSobraUnidades.Should().Be(294m - 280m);
-        comMl.DiferencaSobraValor.Should().Be(45_012.95m - 54_584.18m);
+
+        comMl.DiferencaSobraUnidades.Should().Be(294m - 250m);
+        comMl.DiferencaSobraValor.Should().Be(45_012.95m - 50_000m);
+
+        comMl.DiferencaSobraUnidades.Should().NotBe(294m - 280m,
+            "subtrair do total geral do PBS mede tamanho de população, não método");
+        comMl.DiferencaSobraValor.Should().NotBe(45_012.95m - 54_584.18m);
     }
 
     /// <summary>
@@ -189,10 +203,12 @@ public sealed class ComparisonApiClientTests
             ItensComCompraMl: itensComSobraMl,
             VendidoNaJanela: 1_542m,
             SobraPbsUnidades: 4_194m,
+            SobraPbsComparavelUnidades: 3_800m,
             SobraMlUnidades: 3_693m,
             ItensComSobraMl: itensComSobraMl,
             SobraPbsValor: 261_235.11m,
             ItensComValorPbs: 20_153,
+            SobraPbsComparavelValor: 240_000m,
             SobraMlValor: 222_215.79m,
             ItensComValorMl: itensComValorMl);
 
@@ -212,10 +228,12 @@ public sealed class ComparisonApiClientTests
         ItensComCompraMl: sobraMl is null ? 0 : 398,
         VendidoNaJanela: 177m,
         SobraPbsUnidades: 280m,
+        SobraPbsComparavelUnidades: sobraMl is null ? null : 250m,
         SobraMlUnidades: sobraMl,
         ItensComSobraMl: sobraMl is null ? 0 : 398,
         SobraPbsValor: 54_584.18m,
         ItensComValorPbs: 2031,
+        SobraPbsComparavelValor: valorMl is null ? null : 50_000m,
         SobraMlValor: valorMl,
         ItensComValorMl: valorMl is null ? 0 : 398);
 

@@ -200,8 +200,19 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         corpo.Should().Contain("Apurado sobre 1 de 3 item(ns) da sugestão",
             "a métrica não fala da população inteira, e a tela precisa dizer sobre quanto ela fala");
         corpo.Should().Contain("WAPE");
-        corpo.Should().Contain("Abertura por curva e por loja");
+        // "por giro" no titulo: giro e a PRIMEIRA aba e a dimensao em que o resultado do ML de
+        // fato varia, e o rotulo antigo ("por curva e por loja") a omitia -- prometia menos do
+        // que a tela entrega, justamente na abertura que importa.
+        corpo.Should().Contain("Abertura por giro, por curva e por loja");
         corpo.Should().Contain("ML perde aqui?");
+
+        // A explicacao dos dois indicadores tem de ser TEXTO na pagina, e nao balaozinho de
+        // ajuda: e em print e em apresentacao que este quadro e lido, e tooltip nao sai em
+        // nenhum dos dois. A frase final declara quem errou menos NESTA execucao.
+        corpo.Should().Contain("Como interpretar WAPE e MAE");
+        corpo.Should().Contain("erro percentual absoluto ponderado");
+        corpo.Should().Contain("Nesta execução",
+            "a explicacao fecha com os numeros da execucao, e nao so com a definicao");
 
         corpo.Should().Contain("Venda perdida em reais não é exibida em lugar nenhum desta tela");
         corpo.Should().Contain("o método que prevê mais alto compra mais",
@@ -298,6 +309,66 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             resposta!.Status.Should().Be(404,
                 "a rota tem de alcançar o armazenamento; 500 aqui significa que ela caiu antes, "
                 + "ao resolver usuário ou rede — foi assim que o caminho quebrou em produção");
+        }
+        finally
+        {
+            await page.CloseAsync();
+        }
+    }
+
+    /// <summary>
+    /// O ZIP enviado é insumo bruto da rede inteira — cadastro, vendas, compras, a sugestão
+    /// do ERP — e passou a ser exclusivo do <see cref="Papeis.PowerUser"/>.
+    ///
+    /// <para>
+    /// O caso que importa é o da <b>rota</b>, não o do botão: <c>BaixarDados</c> navega com
+    /// <c>forceLoad</c> para uma URL do próprio Web, então esconder o botão sem fechar a rota
+    /// deixaria o arquivo a um endereço digitado de distância.
+    /// </para>
+    ///
+    /// <para>
+    /// O usuário é vinculado à <b>mesma</b> rede da sessão semeada de propósito: numa rede
+    /// diferente a resposta seria 404 por inquilino, e este teste passaria sem provar nada
+    /// sobre papel.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Usuario_da_rede_nao_baixa_o_ZIP_nem_ve_o_botao()
+    {
+        await ResultadoRenderizadoAsync();
+
+        var redeId = await fixture.PrimeiraRedeAtivaAsync(TestContext.Current.CancellationToken);
+        await fixture.GarantirUsuarioRedeAsync(redeId, TestContext.Current.CancellationToken);
+
+        var page = await fixture.NovaPaginaLogadaAsync(
+            email: AppHostFixture.UsuarioRedeEmail, senha: AppHostFixture.UsuarioRedeSenha);
+        try
+        {
+            var baseUrl = fixture.WebfrontendUrl.TrimEnd('/');
+            await page.GotoAsync($"{baseUrl}/comparacoes/{_sessaoId}");
+            await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+            // A sessão tem de ter aberto para o usuário da rede — sem isso, a ausência do
+            // botão abaixo não diria nada sobre papel.
+            await page.Locator("[data-test='interpretar-wape-mae'], .rz-tabview")
+                .First.WaitForAsync(new() { Timeout = 60_000 });
+
+            (await page.Locator("[data-test='baixar-zip-enviado']").CountAsync())
+                .Should().Be(0, "o botão do ZIP é exclusivo do PowerUser");
+
+            var resposta = await page.GotoAsync($"{baseUrl}/comparacoes/{_sessaoId}/dados/download");
+
+            // Não se afirma 403 aqui: o cookie do Identity trata Forbid redirecionando para
+            // AccessDeniedPath, então o navegador termina numa página, não num status. O que
+            // prova o controle é o par abaixo — não veio ZIP, e o destino é a recusa.
+            resposta.Should().NotBeNull();
+            resposta!.Headers.GetValueOrDefault("content-type", string.Empty)
+                .Should().NotContain("zip", "a recusa não pode entregar o arquivo mesmo assim");
+
+            page.Url.Should().NotContain("/dados/download");
+            (await page.Locator("[data-test='acesso-negado']").CountAsync())
+                .Should().Be(1, "negar tem de dizer 'não pode', e não terminar num 404 que diz "
+                             + "'não existe' — AccessDeniedPath estava configurado sem página");
         }
         finally
         {

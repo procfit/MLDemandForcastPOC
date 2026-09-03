@@ -435,6 +435,33 @@ public sealed class SessaoResultadoMontadorTests
     /// <summary>
     /// Linha da sugestão do ERP com os números do <see cref="Sobra_do_braco_pbs_bate_com_o_SobraCalculator"/>:
     /// 30 comprados, 10 em estoque, 5 pendentes, R$ 3,50 de custo, cobertura de 5 dias.
+    /// <summary>
+    /// Cadastro e estoque atravessam a materializacao, e o <b>estoque na sugestao vem do
+    /// Stage</b> — nao e derivado da sobra nem da compra.
+    /// </summary>
+    [Fact]
+    public void Materializacao_copia_cadastro_e_os_dois_estoques_do_stage()
+    {
+        var item = Montar([Linha(vendido: 20m, estoqueNoFim: 4m)]).Itens.Single();
+
+        item.Fabricante.Should().Be("Laboratorio Teste");
+        item.Ean.Should().Be("07891234567890", "o EAN e gravado como o PBS grava, com o zero a esquerda");
+        item.EstoqueNaSugestao.Should().Be(10m, "vem de SugestoesCompraItens.EstoqueSaldo");
+        item.EstoqueNoFimDoPeriodo.Should().Be(4m);
+    }
+
+    /// <summary>
+    /// <b>Sem snapshot de estoque no fim, a coluna fica nula — nunca zero.</b> Zero ali e uma
+    /// medicao ("o item terminou o periodo zerado") e nulo e ausencia de medida; o comprador
+    /// le as duas de formas opostas. Mesmo contrato das colunas do braco de ML.
+    /// </summary>
+    [Fact]
+    public void Estoque_no_fim_sem_snapshot_fica_nulo_e_nao_zero()
+    {
+        Montar([Linha(vendido: 20m, estoqueNoFim: null)])
+            .Itens.Single().EstoqueNoFimDoPeriodo.Should().BeNull();
+    }
+
     /// </summary>
     private static ItemDoStage Linha(
         string sku = Sku,
@@ -443,7 +470,8 @@ public sealed class SessaoResultadoMontadorTests
         int diasSemEstoque = 0,
         int diasComSnapshot = 5,
         bool alemDoHistorico = false,
-        decimal? precoCompra = 3.5m)
+        decimal? precoCompra = 3.5m,
+        decimal? estoqueNoFim = 4m)
         => new(
             Item: new SugestaoItemStage(
                 SugestaoId: SugestaoId,
@@ -463,9 +491,12 @@ public sealed class SessaoResultadoMontadorTests
                 Falteiro: false),
             NomeProduto: $"Produto {sku}",
             Categoria: "Analgesico",
+            Fabricante: "Laboratorio Teste",
+            Ean: "07891234567890",
             VendidoNaJanela: vendido,
             DiasSemEstoque: diasSemEstoque,
             DiasComSnapshot: diasComSnapshot,
+            EstoqueNoFimDoPeriodo: estoqueNoFim,
             JanelaAlemDoHistorico: alemDoHistorico);
 
     private static ParComparado Pares(

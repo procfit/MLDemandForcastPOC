@@ -466,10 +466,12 @@ public sealed record TotaisDosItens(
     int ItensComCompraMl,
     decimal VendidoNaJanela,
     decimal SobraPbsUnidades,
+    decimal? SobraPbsComparavelUnidades,
     decimal? SobraMlUnidades,
     int ItensComSobraMl,
     decimal? SobraPbsValor,
     int ItensComValorPbs = 0,
+    decimal? SobraPbsComparavelValor = null,
     decimal? SobraMlValor = null,
     int ItensComValorMl = 0,
     // Itens do recorte com medição de mercado. Vem do servidor, e não de contagem na página
@@ -481,12 +483,24 @@ public sealed record TotaisDosItens(
     /// Diferença de sobra entre os braços, ou <c>null</c> quando o ML não foi apurado em
     /// nenhum item do recorte. Zero aqui afirmaria "os dois métodos empataram", que é o
     /// contrário de "não há como comparar".
+    ///
+    /// <para>
+    /// O lado do PBS é <see cref="SobraPbsComparavelUnidades"/>, e <b>nunca</b>
+    /// <see cref="SobraPbsUnidades"/>. Já foi o total geral, e o resultado era um número que
+    /// não media método nenhum: o PBS somava os 20.153 itens do recorte e o ML os 2.106 em
+    /// que foi calculado, então a subtração media 18 mil itens a menos na conta e a tela a
+    /// chamava de "diferença de sobra". Ver a nota de <c>TotalizarAsync</c>.
+    /// </para>
     /// </summary>
     public decimal? DiferencaSobraUnidades =>
-        SobraMlUnidades is { } ml ? ml - SobraPbsUnidades : null;
+        SobraMlUnidades is { } ml && SobraPbsComparavelUnidades is { } pbs ? ml - pbs : null;
 
+    /// <summary>
+    /// Idem em reais, sobre o subconjunto mais estreito ainda: item sem preço de compra fica
+    /// fora dos dois lados.
+    /// </summary>
     public decimal? DiferencaSobraValor =>
-        SobraMlValor is { } ml && SobraPbsValor is { } pbs ? ml - pbs : null;
+        SobraMlValor is { } ml && SobraPbsComparavelValor is { } pbs ? ml - pbs : null;
 }
 
 /// <param name="TemItemSemCategoria">
@@ -522,7 +536,14 @@ public sealed record SessaoItem(
     decimal? MercadoUnidadesConcorrentes = null,
     decimal? MercadoIndiceDesempenho = null,
     int? MercadoDiasSemEstoque = null,
-    string? MercadoAlerta = null)
+    string? MercadoAlerta = null,
+    // Cadastro e estoque (itens 2, 3 e 4 do patrocinador). Nulo em qualquer uma e "nao ha
+    // dado", e nas de estoque isso e diferente de zero: zero e prateleira vazia, que e
+    // medicao. A tela mostra travessao para nulo.
+    string? Fabricante = null,
+    string? Ean = null,
+    decimal? EstoqueNaSugestao = null,
+    decimal? EstoqueNoFimDoPeriodo = null)
 {
     /// <summary>
     /// Rotulo do alerta em portugues de comprador. Devolve <c>null</c> quando nao ha alerta
@@ -630,6 +651,45 @@ public sealed record SessaoFatia(
     /// (CLAUDE.md §6) — é justamente esta marca que um número único apagaria.
     /// </summary>
     public bool MlPerde => WapePbs is { } pbs && WapeMl is { } ml && ml > pbs;
+
+    /// <summary>
+    /// Fecha a explicação do WAPE com os números desta execução. Existe como texto visível, e
+    /// não como tooltip, porque é numa apresentação e num print que o comprador lê o
+    /// indicador — e tooltip não sai em nenhum dos dois.
+    /// </summary>
+    public string LeituraDoWape => Leitura(WapePbs, WapeMl, v => v.ToString("P1"), "menor erro global");
+
+    /// <summary>Idem para o MAE, na unidade do indicador (unidades por dia).</summary>
+    public string LeituraDoMae =>
+        Leitura(MaePbs, MaeMl, v => $"{v:N2} un./dia", "menor erro médio");
+
+    /// <summary>
+    /// Os dois desfechos que não são "alguém ganhou" existem porque são afirmações
+    /// diferentes entre si e diferentes de vitória: <b>não apurado</b> é ausência de medida
+    /// (WAPE sem venda real no denominador, MAE sem item medido) e <b>empate</b> é medida
+    /// igual. Eleger vencedor em qualquer um dos dois faria a tela afirmar, com a autoridade
+    /// de um número, o que ninguém calculou.
+    /// </summary>
+    private static string Leitura(
+        double? pbs, double? ml, Func<double, string> formatar, string qualificacao)
+    {
+        if (pbs is not { } p || ml is not { } m)
+        {
+            return "Nesta execução este indicador não foi apurado para os dois métodos, " +
+                   "então não há comparação a fazer aqui.";
+        }
+
+        var numeros = $"Nesta execução: PBS {formatar(p)} e ML {formatar(m)}";
+
+        // Igualdade exata, sem tolerância, pelo mesmo critério de MlPerde: inventar um
+        // epsilon aqui criaria um empate que a coluna "ML perde aqui?" não reconhece, e as
+        // duas leituras da mesma tela passariam a discordar.
+        if (p == m) return $"{numeros} — empate, nenhum dos dois apresentou {qualificacao}.";
+
+        return p < m
+            ? $"{numeros}; portanto, o seu ERP apresentou {qualificacao}."
+            : $"{numeros}; portanto, o ML apresentou {qualificacao}.";
+    }
 }
 
 public sealed record ItemPior(

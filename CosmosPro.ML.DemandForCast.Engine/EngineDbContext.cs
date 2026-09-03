@@ -192,6 +192,10 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             // SugestoesCompraItens.Curva CHAR(1) no Stage.
             b.Property(x => x.NomeProduto).HasMaxLength(200);
             b.Property(x => x.Categoria).HasMaxLength(80);
+            // Espelham o cadastro do Stage: Produtos.Fabricante NVARCHAR(120) e Ean VARCHAR(14).
+            // O EAN do PBS tem 14 posicoes com zero a esquerda -- truncar aqui mudaria o codigo.
+            b.Property(x => x.Fabricante).HasMaxLength(120);
+            b.Property(x => x.Ean).HasMaxLength(14);
             b.Property(x => x.Curva).HasMaxLength(1);
 
             // Precisão declarada porque o default do EF é decimal(18,2), que truncaria em
@@ -206,6 +210,11 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.Property(x => x.DemandaDiaPbs).HasPrecision(12, 4);
             b.Property(x => x.DemandaDiaMl).HasPrecision(12, 4);
             b.Property(x => x.DemandaDiaReal).HasPrecision(12, 4);
+            // Espelham SugestoesCompraItens.EstoqueSaldo e EstoquesDiarios.QuantidadeEmEstoque,
+            // as duas DECIMAL(15,3) e DECIMAL(12,3) no Stage. O default do EF seria (18,2) e
+            // truncaria a terceira casa em silencio.
+            b.Property(x => x.EstoqueNaSugestao).HasPrecision(15, 3);
+            b.Property(x => x.EstoqueNoFimDoPeriodo).HasPrecision(12, 3);
             b.Property(x => x.SobraPbsUnidades).HasPrecision(15, 3);
             b.Property(x => x.SobraMlUnidades).HasPrecision(15, 3);
             b.Property(x => x.SobraPbsValor).HasPrecision(14, 4);

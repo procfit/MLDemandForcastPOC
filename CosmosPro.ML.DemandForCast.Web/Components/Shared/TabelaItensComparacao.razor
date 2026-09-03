@@ -161,17 +161,44 @@
             <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap" class="rz-mt-2">
                 <Totalizador Rotulo="Itens analisados" Valor="@($"{t.Itens:N0}")" />
                 <Totalizador Rotulo="Compra PBS (un.)" Valor="@Unidades(t.CompraPbsUnidades)" />
-                <Totalizador Rotulo="Compra ML (un.)" Valor="@UnidadesOuSemMl(t.CompraMlUnidades)"
-                             Nota="@ApuradoSobre(t.ItensComCompraMl)" />
                 <Totalizador Rotulo="Sobra PBS (un.)" Valor="@Unidades(t.SobraPbsUnidades)" />
-                <Totalizador Rotulo="Sobra ML (un.)" Valor="@UnidadesOuSemMl(t.SobraMlUnidades)"
-                             Nota="@ApuradoSobre(t.ItensComSobraMl)" />
-                <Totalizador Rotulo="Diferença de sobra (un.)" Valor="@DiferencaUnidades(t.DiferencaSobraUnidades)" />
                 <Totalizador Rotulo="R$ parado PBS" Valor="@Dinheiro(t.SobraPbsValor)"
                              Nota="@SemPrecoDeCompra(t.ItensComValorPbs, t.Itens)" />
-                <Totalizador Rotulo="R$ parado ML" Valor="@Dinheiro(t.SobraMlValor)"
-                             Nota="@ApuradoSobreValorMl(t)" />
             </RadzenStack>
+
+            @* Os números do ML vivem numa faixa própria, e os do PBS aparecem aqui de novo
+               recalculados sobre os MESMOS itens. Enquanto os dois grupos dividiam uma faixa
+               só, a tela punha o total do PBS (todos os itens) ao lado da soma do ML (os que
+               ele calculou) e chamava a subtração de "diferença de sobra" — um número que
+               media população, não método. *@
+            @if (t.SobraMlUnidades is not null || t.CompraMlUnidades is not null)
+            {
+                <div class="rz-mt-4" data-test="totalizadores-comparaveis">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">
+                            Comparação PBS &times; ML &mdash; @ItensComparaveis(t).ToString("N0") item(ns)
+                        </RadzenText>
+                        <HelpTip Text="@TipComparavel" />
+                    </RadzenStack>
+
+                    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0.25rem 0 0">
+                        Só os itens em que o ML pôde ser calculado. O PBS aparece aqui recalculado
+                        sobre esses mesmos itens — é a única forma de a diferença falar de método
+                        em vez de falar de quantos itens entraram em cada lado.
+                    </RadzenText>
+
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap" class="rz-mt-2">
+                        <Totalizador Rotulo="Compra PBS (un.)" Valor="@UnidadesOuSemMl(t.CompraMlUnidades is null ? null : t.CompraPbsUnidades)" />
+                        <Totalizador Rotulo="Compra ML (un.)" Valor="@UnidadesOuSemMl(t.CompraMlUnidades)" />
+                        <Totalizador Rotulo="Sobra PBS (un.)" Valor="@UnidadesOuSemMl(t.SobraPbsComparavelUnidades)" />
+                        <Totalizador Rotulo="Sobra ML (un.)" Valor="@UnidadesOuSemMl(t.SobraMlUnidades)" />
+                        <Totalizador Rotulo="Diferença de sobra (un.)" Valor="@DiferencaUnidades(t.DiferencaSobraUnidades)" />
+                        <Totalizador Rotulo="R$ parado PBS" Valor="@Dinheiro(t.SobraPbsComparavelValor)"
+                                     Nota="@ApuradoSobreValorMl(t)" />
+                        <Totalizador Rotulo="R$ parado ML" Valor="@Dinheiro(t.SobraMlValor)" />
+                    </RadzenStack>
+                </div>
+            }
         </RadzenCard>
     }
 
@@ -213,6 +240,16 @@
                         @i.NomeProduto
                     }
                 </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="Ean" Title="EAN" Width="150px" Sortable="false">
+                <HeaderTemplate>
+                    <span>EAN</span>
+                    <HelpTip Text="Código de barras do cadastro do PBS, copiado quando a comparação foi processada, exatamente como o ERP o grava. Comparações anteriores a esta coluna não têm o dado." Size="0.85rem" />
+                </HeaderTemplate>
+                <Template Context="i">@Texto(i.Ean)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="Fabricante" Title="Fabricante" Width="170px" Sortable="false">
+                <Template Context="i">@Texto(i.Fabricante)</Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="LojaId" Title="Loja" Width="90px" TextAlign="TextAlign.Right" />
             <RadzenDataGridColumn TItem="SessaoItem" Property="Curva" Title="Curva" Width="90px">
@@ -263,6 +300,26 @@
                         @i.Categoria
                     }
                 </Template>
+            </RadzenDataGridColumn>
+            @* As duas colunas de estoque, lado a lado, como o patrocinador pediu: a primeira
+               julga a DECISAO ("ja tinha produto e mandou comprar mais?") e a segunda mostra o
+               RESULTADO ("quanto sobrou depois"). Nao sao a mesma pergunta, e por isso nenhuma
+               das duas substitui a outra. *@
+            <RadzenDataGridColumn TItem="SessaoItem" Property="EstoqueNaSugestao"
+                                  Title="Estoque na sugestão" Width="160px" TextAlign="TextAlign.Right">
+                <HeaderTemplate>
+                    <span>Estoque na sugestão</span>
+                    <HelpTip Text="O que o ERP tinha registrado no dia em que gerou a sugestão. Serve para julgar a decisão de compra: comprar muito com a prateleira cheia é diferente de comprar muito com ela vazia." Size="0.85rem" />
+                </HeaderTemplate>
+                <Template Context="i">@UnidadesOuTraco(i.EstoqueNaSugestao)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="EstoqueNoFimDoPeriodo"
+                                  Title="Estoque no fim" Width="150px" TextAlign="TextAlign.Right">
+                <HeaderTemplate>
+                    <span>Estoque no fim</span>
+                    <HelpTip Text="Estoque medido no último dia do período que a compra deveria cobrir. É medição, não estimativa — diferente de 'Sobrou', que é calculado. Zero aqui significa que o item terminou o período zerado; travessão significa que não há registro de estoque naquele dia." Size="0.85rem" />
+                </HeaderTemplate>
+                <Template Context="i">@UnidadesOuTraco(i.EstoqueNoFimDoPeriodo)</Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="CompraSugeridaPbs" Title="Comprado (PBS)" Width="140px" TextAlign="TextAlign.Right">
                 <Template Context="i">@Unidades(i.CompraSugeridaPbs)</Template>
@@ -620,6 +677,21 @@
     /// <summary>Mês da IQVIA que esta sessão comparou, do primeiro item que o declara.</summary>
     private DateOnly? MesDeMercado => _itens.FirstOrDefault(i => i.MercadoMes is not null)?.MercadoMes;
 
+    /// <summary>
+    /// Texto de cadastro ausente. Travessao, e nao vazio: celula em branco parece falha de
+    /// renderizacao, e o comprador precisa saber que o dado nao existe no cadastro dele.
+    /// </summary>
+    private static string Texto(string? valor) =>
+        string.IsNullOrWhiteSpace(valor) ? "—" : valor;
+
+    /// <summary>
+    /// Unidades, ou travessao quando nao ha medida. <b>Nunca zero para ausencia:</b> nestas
+    /// colunas zero e uma medicao — prateleira vazia —, e trocar uma coisa pela outra inverte
+    /// a leitura da linha.
+    /// </summary>
+    private static string UnidadesOuTraco(decimal? valor) =>
+        valor is { } v ? Unidades(v) : "—";
+
     private static string UnidadesOuSemMl(decimal? valor) =>
         valor is { } v ? Unidades(v) : SemCalculoDoMl;
 
@@ -634,6 +706,19 @@
         valor is { } v ? (v > 0 ? "+" : "") + Unidades(v) : SemCalculoDoMl;
 
     private static string ApuradoSobre(int itens) => $"sobre {itens:N0} item(ns) com cálculo do ML";
+
+    private const string TipComparavel =
+        "O braço de ML não alcança todos os itens da sugestão (cobertura além do horizonte, série " +
+        "incompleta, SKU fora do orçamento do treino). Comparar a soma dele com o total do PBS " +
+        "mediria essa diferença de população, e não a qualidade dos dois métodos — por isso os dois " +
+        "lados desta faixa somam exatamente os mesmos itens.";
+
+    /// <summary>
+    /// Quantos itens sustentam a faixa comparável. Sai da contagem de sobra, e não da de
+    /// compra: é a sobra que alimenta a diferença exibida ao lado.
+    /// </summary>
+    private static int ItensComparaveis(TotaisDosItens t) =>
+        t.ItensComSobraMl > 0 ? t.ItensComSobraMl : t.ItensComCompraMl;
 
     /// <summary>
     /// Nota da coluna em reais <b>do PBS</b>. Aqui o valor é nulo por um motivo só — o item não

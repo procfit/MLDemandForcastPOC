@@ -33,9 +33,12 @@ internal sealed record ItemDoStage(
     SugestaoItemStage Item,
     string? NomeProduto,
     string? Categoria,
+    string? Fabricante,
+    string? Ean,
     decimal VendidoNaJanela,
     int DiasSemEstoque,
     int DiasComSnapshot,
+    decimal? EstoqueNoFimDoPeriodo,
     bool JanelaAlemDoHistorico);
 
 /// <summary>Linhas a gravar e os agregados que as acompanham.</summary>
@@ -265,6 +268,12 @@ internal static class SessaoResultadoMontador
                 Sku = item.Sku,
                 NomeProduto = linha.NomeProduto,
                 Categoria = linha.Categoria,
+                Fabricante = linha.Fabricante,
+                Ean = linha.Ean,
+                // EstoqueSaldo e NOT NULL no Stage, entao aqui ele sempre existe; a coluna e
+                // anulavel para as sessoes materializadas antes dela, e nao para esta.
+                EstoqueNaSugestao = item.EstoqueSaldo,
+                EstoqueNoFimDoPeriodo = linha.EstoqueNoFimDoPeriodo,
                 Curva = string.IsNullOrWhiteSpace(item.Curva) ? null : item.Curva,
                 CompraSugeridaPbs = item.CompraSugerida,
                 CompraSugeridaMl = ml?.Compra,

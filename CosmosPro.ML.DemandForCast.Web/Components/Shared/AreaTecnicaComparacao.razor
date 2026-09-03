@@ -64,7 +64,7 @@
         </RadzenText>
 
         <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
-            <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Abertura por curva e por loja</RadzenText>
+            <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Abertura por giro, por curva e por loja</RadzenText>
             <HelpTip Text="@TipRegressao" />
         </RadzenStack>
 
@@ -129,6 +129,41 @@
                 }
             </Tabs>
         </RadzenTabs>
+
+        @* Os dois indicadores já têm tooltip nas colunas, mas tooltip não sai em print nem
+           em apresentação — que é onde este quadro é lido. O texto fica visível de propósito. *@
+        <RadzenCard Variant="Variant.Outlined">
+            <div data-test="interpretar-wape-mae">
+                <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0 0 0.75rem 0">
+                    Como interpretar WAPE e MAE
+                </RadzenText>
+
+                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0 0 0.25rem 0">
+                    <strong>WAPE — erro percentual absoluto ponderado.</strong>
+                    Soma dos erros absolutos dividida pela soma da venda real. Dá mais peso ao item de maior
+                    volume e permite ler o erro do conjunto em percentual. Quanto menor, melhor a precisão.
+                    É mais robusto que o MAPE numa grade de farmácia, onde muito item tem giro baixo ou zero
+                    e o MAPE estoura.
+                </RadzenText>
+                <div data-test="leitura-wape" style="margin-bottom: 0.75rem">
+                    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                        @Analise.Global.LeituraDoWape
+                    </RadzenText>
+                </div>
+
+                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0 0 0.25rem 0">
+                    <strong>MAE — erro absoluto médio.</strong>
+                    Diferença média entre o previsto e o realizado, na unidade do indicador — aqui, unidades
+                    por dia. É fácil de ler, mas não é comparável entre itens de giro muito diferente: para
+                    isso serve o WAPE.
+                </RadzenText>
+                <div data-test="leitura-mae">
+                    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                        @Analise.Global.LeituraDoMae
+                    </RadzenText>
+                </div>
+            </div>
+        </RadzenCard>
     }
 
     <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">

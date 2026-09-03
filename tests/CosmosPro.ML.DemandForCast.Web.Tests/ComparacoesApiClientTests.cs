@@ -262,6 +262,136 @@ public sealed class ComparacoesApiClientTests
         fatia.MlPerde.Should().BeFalse("sem métrica não há como afirmar que alguém perdeu");
     }
 
+    // --- Totais: a comparacao so vale sobre a mesma populacao -----------------
+
+    /// <summary>
+    /// A diferenca de sobra sai do <b>subconjunto comparavel</b>, nunca do total geral do PBS
+    /// contra a soma do ML.
+    ///
+    /// <para>
+    /// Este era o defeito: o PBS somava os 20.153 itens do recorte e o ML somava os 2.106 em
+    /// que ele foi calculado, e a tela chamava a subtracao de "diferenca de sobra". O numero
+    /// nao media metodo nenhum — media 18 mil itens a menos na conta —, e a leitura natural
+    /// dele ("o ML deixaria 501 unidades a menos encalhadas") era falsa.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Diferenca_de_sobra_compara_o_PBS_e_o_ML_sobre_o_mesmo_subconjunto()
+    {
+        var t = Totais(sobraPbsTotal: 4194m, sobraPbsComparavel: 3800m, sobraMl: 3693m);
+
+        t.DiferencaSobraUnidades.Should().Be(3693m - 3800m,
+            "o lado do PBS tem de ser o do subconjunto em que o ML foi calculado");
+        t.DiferencaSobraUnidades.Should().NotBe(3693m - 4194m,
+            "somar o total geral do PBS contra o subconjunto do ML foi exatamente o defeito");
+    }
+
+    [Fact]
+    public void Sem_braco_de_ML_nao_existe_diferenca_a_declarar()
+    {
+        var t = Totais(sobraPbsTotal: 4194m, sobraPbsComparavel: null, sobraMl: null);
+
+        t.DiferencaSobraUnidades.Should().BeNull("zero afirmaria que os dois metodos empataram");
+        t.DiferencaSobraValor.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Em reais o subconjunto e mais estreito ainda: so entra item que tenha preco de compra
+    /// nos <b>dois</b> bracos. Reaproveitar o comparavel de unidades traria itens sem preco
+    /// para um lado da conta e nao para o outro.
+    /// </summary>
+    [Fact]
+    public void Diferenca_em_reais_usa_o_subconjunto_com_preco_nos_dois_bracos()
+    {
+        var t = Totais(
+            sobraPbsTotal: 4194m, sobraPbsComparavel: 3800m, sobraMl: 3693m,
+            valorPbsTotal: 261235.11m, valorPbsComparavel: 240000m, valorMl: 222215.79m);
+
+        t.DiferencaSobraValor.Should().Be(222215.79m - 240000m);
+        t.DiferencaSobraValor.Should().NotBe(222215.79m - 261235.11m);
+    }
+
+    private static TotaisDosItens Totais(
+        decimal sobraPbsTotal,
+        decimal? sobraPbsComparavel,
+        decimal? sobraMl,
+        decimal? valorPbsTotal = null,
+        decimal? valorPbsComparavel = null,
+        decimal? valorMl = null) => new(
+        Itens: 20153,
+        CompraPbsUnidades: 207m,
+        CompraMlUnidades: sobraMl is null ? null : 68m,
+        ItensComCompraMl: sobraMl is null ? 0 : 2106,
+        VendidoNaJanela: 1000m,
+        SobraPbsUnidades: sobraPbsTotal,
+        SobraPbsComparavelUnidades: sobraPbsComparavel,
+        SobraMlUnidades: sobraMl,
+        ItensComSobraMl: sobraMl is null ? 0 : 2106,
+        SobraPbsValor: valorPbsTotal,
+        ItensComValorPbs: valorPbsTotal is null ? 0 : 18000,
+        SobraPbsComparavelValor: valorPbsComparavel,
+        SobraMlValor: valorMl,
+        ItensComValorMl: valorMl is null ? 0 : 2106);
+
+    // --- Leitura de WAPE e MAE ------------------------------------------------
+
+    /// <summary>
+    /// A explicação de WAPE e MAE fecha com os números desta execução, e o veredito sai
+    /// desses números. O risco que estes casos cobrem não é a redação: é a frase declarar um
+    /// vencedor quando não há métrica apurada, ou quando os dois erraram igual.
+    /// </summary>
+    [Fact]
+    public void Leitura_do_wape_nomeia_quem_errou_menos_com_os_numeros_da_execucao()
+    {
+        var fatia = Global(somaDemanda: 20m, erroPbs: 2m, erroMl: 6m);
+
+        fatia.LeituraDoWape.Should()
+            .Contain(0.10.ToString("P1")).And.Contain(0.30.ToString("P1"))
+            .And.Contain("seu ERP");
+    }
+
+    [Fact]
+    public void Leitura_do_mae_nomeia_quem_errou_menos_em_unidades_por_dia()
+    {
+        var fatia = Global(somaDemanda: 20m, erroPbs: 6m, erroMl: 2m);
+
+        fatia.LeituraDoMae.Should()
+            .Contain(1.50.ToString("N2")).And.Contain(0.50.ToString("N2"))
+            .And.Contain("ML");
+    }
+
+    /// <summary>
+    /// Erro igual é empate, e empate não é vitória de ninguém — a mesma regra que
+    /// <c>SessaoItem.Empate</c> já segue para a sobra.
+    /// </summary>
+    [Fact]
+    public void Leitura_de_erro_empatado_nao_declara_vencedor()
+    {
+        var fatia = Global(somaDemanda: 20m, erroPbs: 4m, erroMl: 4m);
+
+        fatia.LeituraDoWape.Should().Contain("empate")
+            .And.NotContain("portanto");
+    }
+
+    /// <summary>
+    /// Sem métrica apurada a frase não pode eleger vencedor: "não apurado" e "empate" são
+    /// afirmações diferentes, e nenhuma das duas é "o ML ganhou".
+    /// </summary>
+    [Fact]
+    public void Leitura_sem_metrica_apurada_nao_declara_vencedor()
+    {
+        var fatia = Global(somaDemanda: 0m, erroPbs: 0m, erroMl: 0m, medidos: 0);
+
+        fatia.LeituraDoWape.Should().NotContain("portanto").And.NotContain("empate");
+        fatia.LeituraDoMae.Should().NotContain("portanto").And.NotContain("empate");
+    }
+
+    private static SessaoFatia Global(
+        decimal somaDemanda, decimal erroPbs, decimal erroMl, int medidos = 4) => new(
+        Chave: null, Itens: 10, ItensComPrevisaoMl: medidos,
+        SomaDemandaRealDiaria: somaDemanda, SomaErroAbsPbs: erroPbs, SomaErroAbsMl: erroMl,
+        VitoriasMl: 1, VitoriasPbs: 3);
+
     /// <summary>
     /// O global sai da soma das fatias por curva, e não de uma consulta à parte: cada item
     /// cai em exatamente uma curva, então a soma é o total — e dois caminhos para o mesmo

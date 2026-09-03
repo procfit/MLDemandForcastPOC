@@ -47,6 +47,67 @@ public sealed class ComparacaoSessaoItem
     /// </summary>
     public string? Categoria { get; set; }
 
+    /// <summary>
+    /// Fabricante do produto, copiado de <c>Produtos.Fabricante</c> na materialização — pelo
+    /// mesmo motivo de <see cref="NomeProduto"/> e <see cref="Categoria"/>: o Stage da rede é
+    /// apagado no import seguinte, então resolvê-lo por consulta na hora de exibir devolveria
+    /// o cadastro do envio seguinte, ou nada.
+    ///
+    /// <para>
+    /// Nulo significa <b>"o cadastro do PBS não tem fabricante para este SKU"</b> ou "sessão
+    /// materializada antes desta coluna existir". Não é "sem fabricante" no sentido de o
+    /// produto não ter um.
+    /// </para>
+    /// </summary>
+    public string? Fabricante { get; set; }
+
+    /// <summary>
+    /// Código de barras do produto, copiado de <c>Produtos.Ean</c>.
+    ///
+    /// <para>
+    /// <b>Guardado como o PBS grava</b> — 14 caracteres, com zero à esquerda —, e não
+    /// normalizado: esta coluna existe para o comprador conferir contra a embalagem e contra o
+    /// próprio ERP dele, então ela tem de mostrar o que o ERP mostra. Quem cruza com a IQVIA
+    /// continua passando por <c>Engine.Mercado.Ean.Normalizar</c>, que é a única regra de
+    /// normalização do repositório — não normalize na gravação, ou os dois lados do join
+    /// deixam de ser comparáveis com o que a tela exibe.
+    /// </para>
+    /// </summary>
+    public string? Ean { get; set; }
+
+    /// <summary>
+    /// Estoque que o ERP tinha registrado <b>no dia em que gerou a sugestão</b>, copiado de
+    /// <c>SugestoesCompraItens.EstoqueSaldo</c>. Responde "ele já tinha produto e mandou
+    /// comprar mais?", que é a pergunta sobre a <i>decisão</i>.
+    ///
+    /// <para>
+    /// <b>Anulável embora a origem no Stage seja NOT NULL</b>, e isso não é descuido: sessão
+    /// materializada antes desta coluna existir não tem o dado, e gravar zero ali afirmaria
+    /// que a loja estava sem estoque quando comprou — a leitura mais grave possível desta
+    /// coluna, e exatamente o contrário de "não se sabe".
+    /// </para>
+    /// </summary>
+    public decimal? EstoqueNaSugestao { get; set; }
+
+    /// <summary>
+    /// Estoque observado no <b>último dia da cobertura</b> que a compra deveria atender — o
+    /// último snapshot de <c>EstoquesDiarios</c> dentro da janela do item. Responde "quanto
+    /// sobrou depois", que é a pergunta sobre o <i>resultado</i>.
+    ///
+    /// <para>
+    /// <b>Não confundir com <see cref="SobraPbsUnidades"/>:</b> aquela é contrafactual
+    /// (comprado + estoque + pendentes − vendido) e existe para os dois braços; esta é
+    /// medição, existe uma só, e é a que o comprador confere contra a prateleira.
+    /// </para>
+    ///
+    /// <para>
+    /// Nulo é "não há snapshot de estoque nesse dia" — série incompleta, janela além do
+    /// histórico importado, ou sessão anterior à coluna. Nunca zero: zero aqui é uma medição,
+    /// e significa que o item terminou o período zerado.
+    /// </para>
+    /// </summary>
+    public decimal? EstoqueNoFimDoPeriodo { get; set; }
+
     public decimal CompraSugeridaPbs { get; set; }
 
     /// <summary>

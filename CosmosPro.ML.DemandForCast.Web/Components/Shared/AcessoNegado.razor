@@ -1,14 +1,27 @@
+@* Dois usos, um componente. O Router (Routes.razor) o renderiza inline quando uma PÁGINA
+   Blazor nega por papel; a rota abaixo existe para os endpoints que NÃO são Blazor — o
+   download do ZIP, por exemplo —, porque neles quem trata a recusa é o cookie do Identity,
+   que redireciona para AccessDeniedPath. Esse caminho estava configurado no Program.cs e
+   não tinha página: a recusa terminava em 404, e "não pode" virava "não existe".
+
+   Sem Click e sem @@rendermode: alcançada por redirecionamento, esta página é renderizada
+   estaticamente, e um botão com handler não teria a quem chamar. Link comum funciona nos
+   dois modos. *@
+@page "/acesso-negado"
+@attribute [AllowAnonymous]
+
+<PageTitle>Acesso negado — DemandForCast</PageTitle>
+
 <RadzenStack Gap="1rem" class="rz-p-8">
     <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
-        <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">Acesso negado</RadzenText>
-        <RadzenText TextStyle="TextStyle.Body1">
-            Sua conta não tem permissão para esta área. Se você precisa de acesso,
-            peça ao administrador do sistema.
-        </RadzenText>
+        <div data-test="acesso-negado">
+            <RadzenText TextStyle="TextStyle.H6" class="rz-mb-2">Acesso negado</RadzenText>
+            <RadzenText TextStyle="TextStyle.Body1">
+                Sua conta não tem permissão para esta área. Se você precisa de acesso,
+                peça ao administrador do sistema.
+            </RadzenText>
+        </div>
     </RadzenAlert>
 
-    <RadzenButton Text="Voltar ao início" Icon="home" ButtonStyle="ButtonStyle.Light"
-                  Click="@(() => Nav.NavigateTo("/"))" Style="align-self: flex-start" />
+    <RadzenLink Path="/" Text="Voltar ao início" Icon="home" Style="align-self: flex-start" />
 </RadzenStack>
-
-@inject NavigationManager Nav

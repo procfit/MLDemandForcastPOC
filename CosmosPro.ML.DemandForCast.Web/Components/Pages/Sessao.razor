@@ -26,10 +26,14 @@
                o fundo real (#f5f5f5): Light reprovava, Secondary dá 4,17 (abaixo do mínimo de
                4,5 do WCAG AA) e Primary dá 6,64. Base/Dark contrastam mais ainda, mas cinza é
                o que faz um botão parecer inerte, que era exatamente o defeito. *@
-            <RadzenButton Click="@BaixarDados" Icon="folder_zip" Text="Baixar ZIP enviado"
-                          ButtonStyle="ButtonStyle.Primary" Variant="Variant.Outlined" Size="ButtonSize.Small"
-                          data-test="baixar-zip-enviado" />
-            <HelpTip Position="TooltipPosition.Bottom" Text="Baixa o arquivo exatamente como foi enviado nesta comparação. Serve para repetir a comparação sobre o mesmo envio: cada importação substitui os dados da rede, então uma extração nova traria outra janela de vendas e os números das duas execuções não seriam comparáveis. Para repetir, crie uma comparação nova e envie este arquivo nela." />
+            @* Some para quem não pode baixar, em vez de aparecer e recusar no clique. Quem
+               impede é a rota (ComparacoesDownloadEndpoints), não este bloco. *@
+            <AuthorizeView Roles="@Papeis.PowerUser" Context="zip">
+                <RadzenButton Click="@BaixarDados" Icon="folder_zip" Text="Baixar ZIP enviado"
+                              ButtonStyle="ButtonStyle.Primary" Variant="Variant.Outlined" Size="ButtonSize.Small"
+                              data-test="baixar-zip-enviado" />
+                <HelpTip Position="TooltipPosition.Bottom" Text="Baixa o arquivo exatamente como foi enviado nesta comparação. Serve para repetir a comparação sobre o mesmo envio: cada importação substitui os dados da rede, então uma extração nova traria outra janela de vendas e os números das duas execuções não seriam comparáveis. Para repetir, crie uma comparação nova e envie este arquivo nela." />
+            </AuthorizeView>
         }
     </RadzenStack>
 
@@ -161,13 +165,8 @@
             }
             else
             {
-                <ManchetesComparacao Resultado="@resultado" ItensSemVendaNoPeriodo="@ItensSemVendaNoPeriodo" />
-
-                @* Bloco fixo, acima das abas: a notícia ruim não pode depender de um clique. *@
-                <OndeOMlFoiPior Analise="@_analise" Resultado="@resultado" />
-
-                @* Acima das abas, e depois das manchetes: o comprador avalia o que acabou de ler,
-                   e a pendência não pode ficar escondida atrás de um clique numa aba. *@
+                @* No topo do resultado, acima de tudo: a pendência não pode ficar escondida
+                   atrás de um clique numa aba nem no fim de uma página longa. *@
                 @if (_sessao.Status == "AguardandoQuestionario")
                 {
                     <RadzenCard Variant="Variant.Filled" data-test="chamada-questionario">
@@ -196,6 +195,12 @@
                     </RadzenStack>
                 }
 
+                @* Ordem pedida pelo patrocinador (item 5): o comprador entra pelo detalhe,
+                   depois lê os quadros-resumo e por último a análise PBS × ML. O atalho do
+                   questionário CONTINUA aqui: hoje ele é o único caminho para o instrumento em
+                   toda a aplicação, e retirá-lo antes da tela de conclusão existir deixaria a
+                   sessão parada em AguardandoQuestionario sem ninguém conseguir respondê-la —
+                   condição que o próprio patrocinador pôs ao aprovar a mudança. *@
                 <RadzenCard Variant="Variant.Outlined">
                     <RadzenTabs RenderMode="TabRenderMode.Client">
                         <Tabs>
@@ -208,6 +213,11 @@
                         </Tabs>
                     </RadzenTabs>
                 </RadzenCard>
+
+                <ManchetesComparacao Resultado="@resultado" ItensSemVendaNoPeriodo="@ItensSemVendaNoPeriodo" />
+
+                @* Continua fora de aba: a notícia ruim não pode depender de um clique. *@
+                <OndeOMlFoiPior Analise="@_analise" Resultado="@resultado" />
             }
         }
     }

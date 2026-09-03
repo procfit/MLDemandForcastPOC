@@ -702,10 +702,18 @@ internal static class ComparacoesEndpoints
                 SobraPbs = g.Sum(i => i.SobraPbsUnidades),
                 SobraMl = g.Sum(i => i.SobraMlUnidades),
                 ComSobraMl = g.Count(i => i.SobraMlUnidades != null),
+                // O mesmo PBS, restrito aos itens em que o ML foi calculado. E este lado —
+                // nunca o total geral — que pode ser subtraido do ML: comparar 20.153 itens
+                // contra 2.106 nao mede metodo, mede tamanho de populacao.
+                SobraPbsComparavel = g.Sum(i => i.SobraMlUnidades != null ? i.SobraPbsUnidades : 0m),
                 ValorPbs = g.Sum(i => i.SobraPbsValor),
                 ComValorPbs = g.Count(i => i.SobraPbsValor != null),
                 ValorMl = g.Sum(i => i.SobraMlValor),
                 ComValorMl = g.Count(i => i.SobraMlValor != null),
+                // Em reais o subconjunto e mais estreito: item sem PrecoCompra fica de fora
+                // dos dois lados, senao um braco levaria itens que o outro nao tem.
+                ValorPbsComparavel = g.Sum(i =>
+                    i.SobraMlValor != null && i.SobraPbsValor != null ? i.SobraPbsValor : 0m),
                 ComMercado = g.Count(i => i.MercadoAlerta != null),
             })
             .FirstOrDefaultAsync(ct);
@@ -713,7 +721,7 @@ internal static class ComparacoesEndpoints
         // Recorte vazio: GroupBy não devolve linha nenhuma.
         if (b is null)
         {
-            return new TotaisDosItens(0, 0m, null, 0, 0m, 0m, null, 0, null, 0, null, 0);
+            return new TotaisDosItens(0, 0m, null, 0, 0m, 0m, null, null, 0, null, 0, null, null, 0);
         }
 
         return new TotaisDosItens(
@@ -723,10 +731,12 @@ internal static class ComparacoesEndpoints
             b.ComCompraMl,
             b.Vendido,
             b.SobraPbs,
+            b.ComSobraMl == 0 ? null : b.SobraPbsComparavel,
             b.ComSobraMl == 0 ? null : b.SobraMl,
             b.ComSobraMl,
             b.ComValorPbs == 0 ? null : b.ValorPbs,
             b.ComValorPbs,
+            b.ComValorMl == 0 ? null : b.ValorPbsComparavel,
             b.ComValorMl == 0 ? null : b.ValorMl,
             b.ComValorMl,
             b.ComMercado);
@@ -930,7 +940,11 @@ internal static class ComparacoesEndpoints
             i.MercadoUnidadesConcorrentes,
             i.MercadoIndiceDesempenho,
             i.MercadoDiasSemEstoque,
-            i.MercadoAlerta);
+            i.MercadoAlerta,
+            i.Fabricante,
+            i.Ean,
+            i.EstoqueNaSugestao,
+            i.EstoqueNoFimDoPeriodo);
 
     private static readonly Expression<Func<ComparacaoSessao, SessaoView>> ProjectToView =
         s => new SessaoView(
@@ -1022,10 +1036,12 @@ internal sealed record TotaisDosItens(
     int ItensComCompraMl,
     decimal VendidoNaJanela,
     decimal SobraPbsUnidades,
+    decimal? SobraPbsComparavelUnidades,
     decimal? SobraMlUnidades,
     int ItensComSobraMl,
     decimal? SobraPbsValor,
     int ItensComValorPbs,
+    decimal? SobraPbsComparavelValor,
     decimal? SobraMlValor,
     int ItensComValorMl,
     // Itens do recorte com medição de mercado. Sai daqui, e não da página carregada, porque
@@ -1081,7 +1097,14 @@ internal sealed record SessaoItemView(
     decimal? MercadoUnidadesConcorrentes = null,
     decimal? MercadoIndiceDesempenho = null,
     int? MercadoDiasSemEstoque = null,
-    string? MercadoAlerta = null);
+    string? MercadoAlerta = null,
+    // Cadastro e estoque, pedidos pelo patrocinador (itens 2, 3 e 4). Anulaveis: nulo e
+    // "o cadastro do PBS nao traz" ou "sessao materializada antes da coluna", e nas duas de
+    // estoque zero seria uma medicao -- prateleira vazia -- e nao ausencia de medida.
+    string? Fabricante = null,
+    string? Ean = null,
+    decimal? EstoqueNaSugestao = null,
+    decimal? EstoqueNoFimDoPeriodo = null);
 
 /// <param name="Itens">População inteira da sessão — o denominador de todo o resto.</param>
 /// <param name="SobraExtraMlUnidades">

@@ -197,9 +197,12 @@ internal sealed class SessaoResultadoMaterializador(
                     Item: item,
                     NomeProduto: venda.Nome,
                     Categoria: venda.Categoria,
+                    Fabricante: venda.Fabricante,
+                    Ean: venda.Ean,
                     VendidoNaJanela: venda.Unidades,
                     DiasSemEstoque: estoque.DiasSemEstoque,
                     DiasComSnapshot: estoque.DiasComSnapshot,
+                    EstoqueNoFimDoPeriodo: estoque.EstoqueNoFim,
                     JanelaAlemDoHistorico: item.DiasEstoque >= 1
                         && (fimDoHistorico is null || corte.AddDays(item.DiasEstoque - 1) > fimDoHistorico)));
             }
@@ -208,7 +211,8 @@ internal sealed class SessaoResultadoMaterializador(
         return populacao;
     }
 
-    private readonly record struct VendaDoItem(string? Nome, string? Categoria, decimal Unidades);
+    private readonly record struct VendaDoItem(
+        string? Nome, string? Categoria, string? Fabricante, string? Ean, decimal Unidades);
 
     /// <summary>
     /// Venda de cada item na própria cobertura dele, agregada no servidor.
@@ -233,7 +237,8 @@ internal sealed class SessaoResultadoMaterializador(
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT i.LojaId, i.Sku, p.Nome, p.Categoria, ISNULL(SUM(v.Quantidade), 0) AS Vendido
+            SELECT i.LojaId, i.Sku, p.Nome, p.Categoria, p.Fabricante, p.Ean,
+                   ISNULL(SUM(v.Quantidade), 0) AS Vendido
             FROM dbo.SugestoesCompraItens i
             INNER JOIN dbo.SugestoesCompra s
                 ON s.RedeId = i.RedeId AND s.SugestaoId = i.SugestaoId
@@ -245,7 +250,7 @@ internal sealed class SessaoResultadoMaterializador(
                 AND v.Data < DATEADD(day, i.DiasEstoque, CAST(s.DataHora AS date))
             WHERE i.RedeId = @redeId AND s.TipoCalculo = @tipo
               AND s.DataHora >= @inicio AND s.DataHora < @fim
-            GROUP BY i.LojaId, i.Sku, p.Nome, p.Categoria
+            GROUP BY i.LojaId, i.Sku, p.Nome, p.Categoria, p.Fabricante, p.Ean
             """;
         cmd.Parameters.AddWithValue("@redeId", redeId);
         cmd.Parameters.AddWithValue("@tipo", tipoCalculo);
@@ -260,12 +265,20 @@ internal sealed class SessaoResultadoMaterializador(
             resultado[(r.GetInt32(0), r.GetString(1))] = new VendaDoItem(
                 r.IsDBNull(2) ? null : r.GetString(2),
                 r.IsDBNull(3) ? null : r.GetString(3),
-                r.GetDecimal(4));
+                r.IsDBNull(4) ? null : r.GetString(4),
+                r.IsDBNull(5) ? null : r.GetString(5),
+                r.GetDecimal(6));
         }
         return resultado;
     }
 
-    private readonly record struct EstoqueDoItem(int DiasSemEstoque, int DiasComSnapshot);
+    /// <param name="EstoqueNoFim">
+    /// Ultimo snapshot de estoque dentro da cobertura. <b>Nulo</b> quando nao ha snapshot
+    /// nenhum -- serie incompleta ou janela alem do historico importado. Nulo e zero dizem
+    /// coisas opostas aqui: zero e medicao ("terminou zerado").
+    /// </param>
+    private readonly record struct EstoqueDoItem(
+        int DiasSemEstoque, int DiasComSnapshot, decimal? EstoqueNoFim);
 
     /// <summary>
     /// Dias sem estoque na cobertura de cada item, e quantos dias dela têm snapshot.
@@ -284,7 +297,8 @@ internal sealed class SessaoResultadoMaterializador(
         cmd.CommandText = """
             SELECT i.LojaId, i.Sku,
                    SUM(CASE WHEN e.QuantidadeEmEstoque <= 0 THEN 1 ELSE 0 END) AS DiasSemEstoque,
-                   COUNT(e.Data) AS DiasComSnapshot
+                   COUNT(e.Data) AS DiasComSnapshot,
+                   MAX(ultimo.QuantidadeEmEstoque) AS EstoqueNoFim
             FROM dbo.SugestoesCompraItens i
             INNER JOIN dbo.SugestoesCompra s
                 ON s.RedeId = i.RedeId AND s.SugestaoId = i.SugestaoId
@@ -292,6 +306,19 @@ internal sealed class SessaoResultadoMaterializador(
                 ON e.RedeId = i.RedeId AND e.LojaId = i.LojaId AND e.Sku = i.Sku
                 AND e.Data >= CAST(s.DataHora AS date)
                 AND e.Data < DATEADD(day, i.DiasEstoque, CAST(s.DataHora AS date))
+            -- O ultimo snapshot DENTRO da cobertura, que e o "estoque no fim do periodo" da
+            -- tela. MAX sobre o APPLY e inofensivo: ele devolve uma linha por item, entao o
+            -- valor e constante dentro do grupo -- serve so para caber no GROUP BY sem
+            -- repetir a subconsulta. Sem linha nenhuma o resultado e NULL, e NULL aqui
+            -- significa "nao ha snapshot", nunca "terminou zerado".
+            OUTER APPLY (
+                SELECT TOP 1 e2.QuantidadeEmEstoque
+                FROM dbo.EstoquesDiarios e2
+                WHERE e2.RedeId = i.RedeId AND e2.LojaId = i.LojaId AND e2.Sku = i.Sku
+                  AND e2.Data >= CAST(s.DataHora AS date)
+                  AND e2.Data < DATEADD(day, i.DiasEstoque, CAST(s.DataHora AS date))
+                ORDER BY e2.Data DESC
+            ) ultimo
             WHERE i.RedeId = @redeId AND s.TipoCalculo = @tipo
               AND s.DataHora >= @inicio AND s.DataHora < @fim
             GROUP BY i.LojaId, i.Sku
@@ -307,7 +334,9 @@ internal sealed class SessaoResultadoMaterializador(
         while (await r.ReadAsync(ct))
         {
             resultado[(r.GetInt32(0), r.GetString(1))] = new EstoqueDoItem(
-                r.IsDBNull(2) ? 0 : r.GetInt32(2), r.GetInt32(3));
+                r.IsDBNull(2) ? 0 : r.GetInt32(2),
+                r.GetInt32(3),
+                r.IsDBNull(4) ? null : r.GetDecimal(4));
         }
         return resultado;
     }
@@ -439,6 +468,8 @@ internal sealed class SessaoResultadoMaterializador(
         tabela.Columns.Add("Sku", typeof(string));
         tabela.Columns.Add("NomeProduto", typeof(string));
         tabela.Columns.Add("Categoria", typeof(string));
+        tabela.Columns.Add("Fabricante", typeof(string));
+        tabela.Columns.Add("Ean", typeof(string));
         tabela.Columns.Add("Curva", typeof(string));
         tabela.Columns.Add("CompraSugeridaPbs", typeof(decimal));
         tabela.Columns.Add("CompraSugeridaMl", typeof(decimal));
@@ -450,6 +481,8 @@ internal sealed class SessaoResultadoMaterializador(
         tabela.Columns.Add("SobraMlUnidades", typeof(decimal));
         tabela.Columns.Add("SobraPbsValor", typeof(decimal));
         tabela.Columns.Add("SobraMlValor", typeof(decimal));
+        tabela.Columns.Add("EstoqueNaSugestao", typeof(decimal));
+        tabela.Columns.Add("EstoqueNoFimDoPeriodo", typeof(decimal));
         tabela.Columns.Add("JanelaAlemDoHistorico", typeof(bool));
         tabela.Columns.Add("MercadoMes", typeof(DateTime));
         tabela.Columns.Add("MercadoBrick", typeof(string));
@@ -467,6 +500,8 @@ internal sealed class SessaoResultadoMaterializador(
                 item.Sku,
                 item.NomeProduto ?? (object)DBNull.Value,
                 item.Categoria ?? (object)DBNull.Value,
+                item.Fabricante ?? (object)DBNull.Value,
+                item.Ean ?? (object)DBNull.Value,
                 item.Curva ?? (object)DBNull.Value,
                 item.CompraSugeridaPbs,
                 item.CompraSugeridaMl ?? (object)DBNull.Value,
@@ -478,6 +513,10 @@ internal sealed class SessaoResultadoMaterializador(
                 item.SobraMlUnidades ?? (object)DBNull.Value,
                 item.SobraPbsValor ?? (object)DBNull.Value,
                 item.SobraMlValor ?? (object)DBNull.Value,
+                // DBNull, nunca 0: "nao ha snapshot" e "terminou zerado" sao leituras opostas
+                // para o comprador, e o bulk e a ultima ponta onde a diferenca se perde calada.
+                item.EstoqueNaSugestao ?? (object)DBNull.Value,
+                item.EstoqueNoFimDoPeriodo ?? (object)DBNull.Value,
                 item.JanelaAlemDoHistorico,
                 // DBNull e nunca 0/"": as sete colunas distinguem "nao deu para calcular"
                 // de "a IQVIA mediu zero", e o bulk e a ultima ponta onde isso pode ser

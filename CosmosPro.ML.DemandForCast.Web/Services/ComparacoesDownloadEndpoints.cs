@@ -1,5 +1,7 @@
 using System.Net;
 
+using CosmosPro.ML.DemandForCast.Engine.Entities;
+
 namespace CosmosPro.ML.DemandForCast.Web.Services;
 
 /// <summary>
@@ -25,7 +27,14 @@ internal static class ComparacoesDownloadEndpoints
 {
     public static IEndpointRouteBuilder MapComparacoesDownloadEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/comparacoes/{id:guid}/dados/download", DownloadDadosAsync).RequireAuthorization();
+        // Papel, e não só autenticação: o ZIP é o insumo bruto da rede inteira — cadastro,
+        // vendas, compras e a sugestão do ERP — enquanto a tela entrega o resultado já
+        // apurado. A rota é onde a regra tem de morar, porque BaixarDados navega com
+        // forceLoad para cá: fechar só o botão deixaria o arquivo a uma URL digitada de
+        // distância. 403 (e não 404) porque quem chega aqui já vê a sessão e já sabe que ela
+        // tem envio — a recusa não revela nada que a tela dele não mostre.
+        app.MapGet("/comparacoes/{id:guid}/dados/download", DownloadDadosAsync)
+           .RequireAuthorization(politica => politica.RequireRole(Papeis.PowerUser));
         return app;
     }
 

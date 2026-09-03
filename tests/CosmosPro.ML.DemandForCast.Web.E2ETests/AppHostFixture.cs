@@ -150,6 +150,28 @@ public sealed class AppHostFixture : IAsyncLifetime
     /// reexecutar o teste tem de reencontrar a mesma rede em lugar de estourar na constraint.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// A rede em que os semeadores daqui gravam e para a qual o PowerUser cai sem escolha:
+    /// a primeira ativa por id. Exposta porque um cenário que precise vincular um
+    /// <see cref="Papeis.UsuarioRede"/> à mesma rede da sessão semeada tem de perguntar qual
+    /// é — vinculá-lo a outra faria a tela responder 404 por inquilino, e um teste de papel
+    /// passaria pelo motivo errado.
+    /// </summary>
+    public async Task<int> PrimeiraRedeAtivaAsync(CancellationToken ct = default)
+    {
+        var connectionString = await App.GetConnectionStringAsync("engine", ct)
+            ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT TOP 1 Id FROM dbo.Redes WHERE Ativo = 1 ORDER BY Id;";
+
+        return (int?)await cmd.ExecuteScalarAsync(ct)
+            ?? throw new InvalidOperationException("Nenhuma rede ativa no banco engine.");
+    }
+
     public async Task<int> GarantirRedeAtivaAsync(
         string slug, string nome, CancellationToken ct = default)
     {
@@ -509,19 +531,28 @@ public sealed class AppHostFixture : IAsyncLifetime
                      VendidoNaJanela, DemandaDiaPbs, DemandaDiaMl, DemandaDiaReal,
                      SobraPbsUnidades, SobraMlUnidades, SobraPbsValor, SobraMlValor, JanelaAlemDoHistorico,
                      MercadoMes, MercadoBrick, MercadoUnidadesRede, MercadoUnidadesConcorrentes,
-                     MercadoIndiceDesempenho, MercadoDiasSemEstoque, MercadoAlerta)
+                     MercadoIndiceDesempenho, MercadoDiasSemEstoque, MercadoAlerta,
+                     Fabricante, Ean, EstoqueNaSugestao, EstoqueNoFimDoPeriodo)
                 VALUES
                     (@sessaoId, @lojaId, @sku, @nomeProduto, @curva, @compraPbs, @compraMl,
                      @vendido, @demandaPbs, @demandaMl, @demandaReal,
                      @sobraPbsUn, @sobraMlUn, @sobraPbsVl, @sobraMlVl, @alemDoHistorico,
                      @mercadoMes, @mercadoBrick, @mercadoUnRede, @mercadoUnConc,
-                     @mercadoIndice, @mercadoDiasSemEstoque, @mercadoAlerta);
+                     @mercadoIndice, @mercadoDiasSemEstoque, @mercadoAlerta,
+                     @fabricante, @ean, @estoqueNaSugestao, @estoqueNoFim);
                 """;
             insertItem.Parameters.AddWithValue("@sessaoId", id);
             insertItem.Parameters.AddWithValue("@lojaId", item.LojaId);
             insertItem.Parameters.AddWithValue("@sku", item.Sku);
             insertItem.Parameters.AddWithValue("@nomeProduto", (object?)item.NomeProduto ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@curva", (object?)item.Curva ?? DBNull.Value);
+            // Coluna nova em ComparacaoSessaoItens entra aqui tambem: esta lista e escrita a
+            // mao, e esquece-la faz o E2E afirmar "sem dado" sem que nada no caminho da tela
+            // esteja errado.
+            insertItem.Parameters.AddWithValue("@fabricante", (object?)item.Fabricante ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@ean", (object?)item.Ean ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@estoqueNaSugestao", (object?)item.EstoqueNaSugestao ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@estoqueNoFim", (object?)item.EstoqueNoFimDoPeriodo ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@compraPbs", item.CompraSugeridaPbs);
             insertItem.Parameters.AddWithValue("@compraMl", (object?)item.CompraSugeridaMl ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@vendido", item.VendidoNaJanela);
