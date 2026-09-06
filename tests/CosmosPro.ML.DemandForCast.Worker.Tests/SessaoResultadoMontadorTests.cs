@@ -455,6 +455,28 @@ public sealed class SessaoResultadoMontadorTests
     /// medicao ("o item terminou o periodo zerado") e nulo e ausencia de medida; o comprador
     /// le as duas de formas opostas. Mesmo contrato das colunas do braco de ML.
     /// </summary>
+    /// <summary>
+    /// A media de venda dos 120 dias atravessa a materializacao. <b>Zero e medicao</b> — nao
+    /// vendeu nada no periodo — e nulo e ausencia de historico para medir; a cobertura le os
+    /// dois de formas opostas, e o zero e o caso mais grave, nao o mais tranquilo.
+    /// </summary>
+    [Theory]
+    [InlineData(0.25)]
+    [InlineData(0.0)]
+    public void Venda_media_diaria_atravessa_inclusive_quando_e_zero(double media)
+    {
+        var item = Montar([Linha(vendido: 20m, vendaMediaDiaria: (decimal)media)]).Itens.Single();
+
+        item.VendaMediaDiaria.Should().Be((decimal)media);
+    }
+
+    [Fact]
+    public void Sem_historico_para_medir_a_venda_media_fica_nula_e_nao_zero()
+    {
+        Montar([Linha(vendido: 20m, vendaMediaDiaria: null)])
+            .Itens.Single().VendaMediaDiaria.Should().BeNull();
+    }
+
     [Fact]
     public void Estoque_no_fim_sem_snapshot_fica_nulo_e_nao_zero()
     {
@@ -471,8 +493,10 @@ public sealed class SessaoResultadoMontadorTests
         int diasComSnapshot = 5,
         bool alemDoHistorico = false,
         decimal? precoCompra = 3.5m,
-        decimal? estoqueNoFim = 4m)
+        decimal? estoqueNoFim = 4m,
+        decimal? vendaMediaDiaria = 0.25m)
         => new(
+            VendaMediaDiaria: vendaMediaDiaria,
             Item: new SugestaoItemStage(
                 SugestaoId: SugestaoId,
                 LojaId: LojaId,

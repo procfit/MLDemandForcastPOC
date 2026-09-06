@@ -532,14 +532,14 @@ public sealed class AppHostFixture : IAsyncLifetime
                      SobraPbsUnidades, SobraMlUnidades, SobraPbsValor, SobraMlValor, JanelaAlemDoHistorico,
                      MercadoMes, MercadoBrick, MercadoUnidadesRede, MercadoUnidadesConcorrentes,
                      MercadoIndiceDesempenho, MercadoDiasSemEstoque, MercadoAlerta,
-                     Fabricante, Ean, EstoqueNaSugestao, EstoqueNoFimDoPeriodo)
+                     Fabricante, Ean, EstoqueNaSugestao, EstoqueNoFimDoPeriodo, VendaMediaDiaria)
                 VALUES
                     (@sessaoId, @lojaId, @sku, @nomeProduto, @curva, @compraPbs, @compraMl,
                      @vendido, @demandaPbs, @demandaMl, @demandaReal,
                      @sobraPbsUn, @sobraMlUn, @sobraPbsVl, @sobraMlVl, @alemDoHistorico,
                      @mercadoMes, @mercadoBrick, @mercadoUnRede, @mercadoUnConc,
                      @mercadoIndice, @mercadoDiasSemEstoque, @mercadoAlerta,
-                     @fabricante, @ean, @estoqueNaSugestao, @estoqueNoFim);
+                     @fabricante, @ean, @estoqueNaSugestao, @estoqueNoFim, @vendaMedia);
                 """;
             insertItem.Parameters.AddWithValue("@sessaoId", id);
             insertItem.Parameters.AddWithValue("@lojaId", item.LojaId);
@@ -553,6 +553,7 @@ public sealed class AppHostFixture : IAsyncLifetime
             insertItem.Parameters.AddWithValue("@ean", (object?)item.Ean ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@estoqueNaSugestao", (object?)item.EstoqueNaSugestao ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@estoqueNoFim", (object?)item.EstoqueNoFimDoPeriodo ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@vendaMedia", (object?)item.VendaMediaDiaria ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@compraPbs", item.CompraSugeridaPbs);
             insertItem.Parameters.AddWithValue("@compraMl", (object?)item.CompraSugeridaMl ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@vendido", item.VendidoNaJanela);

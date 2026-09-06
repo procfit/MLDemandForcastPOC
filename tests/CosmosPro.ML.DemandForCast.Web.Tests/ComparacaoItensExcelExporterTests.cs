@@ -213,6 +213,7 @@ public sealed class ComparacaoItensExcelExporterTests
             totais: new TotaisDosItens(
                 Itens: itens.Count,
                 CompraPbsUnidades: 5m,
+                CompraPbsComparavelUnidades: 4m,
                 CompraMlUnidades: 3m,
                 ItensComCompraMl: 1,
                 VendidoNaJanela: 4m,

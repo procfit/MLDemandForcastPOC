@@ -59,6 +59,18 @@
             <HelpTip Text="Mostra só os itens em que a rede vendeu abaixo do que costuma vender naquele bairro, segundo a IQVIA. Item sem dado de mercado NÃO entra neste recorte: ausência de medição não é alerta, e tratá-la como alerta encheria a lista de itens que ninguém mediu." />
         </RadzenStack>
 
+        @if (_filtro.SomenteMlPior)
+        {
+            @* Este recorte chega por link, e nao por um controle que o comprador tenha mexido.
+               Sem dizer isso, a tabela pareceria estar mostrando a sugestao inteira com um
+               numero de itens inexplicavelmente pequeno. *@
+            <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter"
+                         AllowClose="false" Style="margin: 0" data-test="recorte-ml-pior">
+                Mostrando apenas os itens em que o <strong>ML deixaria mais sobra que o seu ERP</strong>.
+                É o recorte do bloco "Onde o ML foi pior", agora inteiro.
+            </RadzenAlert>
+        }
+
         @if (_filtro.Algum)
         {
             <RadzenButton Click="@(() => AplicarAsync(FiltroDeItens.Nenhum))" Icon="filter_alt_off"
@@ -188,8 +200,9 @@
                     </RadzenText>
 
                     <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap" class="rz-mt-2">
-                        <Totalizador Rotulo="Compra PBS (un.)" Valor="@UnidadesOuSemMl(t.CompraMlUnidades is null ? null : t.CompraPbsUnidades)" />
+                        <Totalizador Rotulo="Compra PBS (un.)" Valor="@UnidadesOuSemMl(t.CompraPbsComparavelUnidades)" />
                         <Totalizador Rotulo="Compra ML (un.)" Valor="@UnidadesOuSemMl(t.CompraMlUnidades)" />
+                        <Totalizador Rotulo="Diferença de compra (un.)" Valor="@DiferencaUnidades(t.DiferencaCompraUnidades)" />
                         <Totalizador Rotulo="Sobra PBS (un.)" Valor="@UnidadesOuSemMl(t.SobraPbsComparavelUnidades)" />
                         <Totalizador Rotulo="Sobra ML (un.)" Valor="@UnidadesOuSemMl(t.SobraMlUnidades)" />
                         <Totalizador Rotulo="Diferença de sobra (un.)" Valor="@DiferencaUnidades(t.DiferencaSobraUnidades)" />
@@ -320,6 +333,39 @@
                     <HelpTip Text="Estoque medido no último dia do período que a compra deveria cobrir. É medição, não estimativa — diferente de 'Sobrou', que é calculado. Zero aqui significa que o item terminou o período zerado; travessão significa que não há registro de estoque naquele dia." Size="0.85rem" />
                 </HeaderTemplate>
                 <Template Context="i">@UnidadesOuTraco(i.EstoqueNoFimDoPeriodo)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="Cobertura"
+                                  Title="Cobertura" Width="130px" TextAlign="TextAlign.Right">
+                <HeaderTemplate>
+                    <span>Cobertura</span>
+                    <HelpTip Text="Quantos dias o estoque que sobrou duraria, no ritmo de venda dos últimos 120 dias. Travessão quando não há estoque medido, não há histórico para a média, ou o item não vendeu nada em 120 dias — neste último caso a coluna ao lado explica." Size="0.85rem" />
+                </HeaderTemplate>
+                <Template Context="i">
+                    @(i.Cobertura is { } d ? $"{d:N0} dias" : "—")
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="AnaliseRapida"
+                                  Title="Análise rápida" Width="180px" Sortable="false">
+                <HeaderTemplate>
+                    <span>Análise rápida</span>
+                    <HelpTip Text="Vermelho: 60 dias de cobertura ou mais. Amarelo: de 30 a 59. Verde: abaixo de 30. Cinza: o item tem estoque parado e não vendeu nada em 120 dias — não há cobertura a calcular, e é o caso mais grave. Vazio significa que não deu para avaliar, e não que está tudo bem." Size="0.85rem" />
+                </HeaderTemplate>
+                <Template Context="i">
+                    @if (SinalDaAnalise(i.AnaliseRapida) is { } sinal)
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.4rem">
+                            <span data-test="analise-rapida" title="@sinal.Titulo"
+                                  style="display:inline-block; width:0.7rem; height:0.7rem; border-radius:50%; background:@sinal.Cor; flex:none"></span>
+                            <span style="color: var(--rz-text-secondary-color)">@sinal.Rotulo</span>
+                        </RadzenStack>
+                    }
+                    else
+                    {
+                        @* Sem cor NAO e uma quinta categoria boa: e ausencia de avaliacao, e a
+                           tela precisa dizer isso em vez de deixar a celula muda. *@
+                        <span style="color: var(--rz-text-tertiary-color)" title="Falta estoque medido no fim do período ou histórico de venda para calcular a média.">não avaliado</span>
+                    }
+                </Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="CompraSugeridaPbs" Title="Comprado (PBS)" Width="140px" TextAlign="TextAlign.Right">
                 <Template Context="i">@Unidades(i.CompraSugeridaPbs)</Template>
@@ -472,7 +518,15 @@
     private bool _loading;
     private string? _erro;
 
+    /// <summary>
+    /// Recorte pedido de fora — hoje só o bloco "Onde o ML foi pior". Trocar o valor reaplica o
+    /// filtro; é a única forma de um componente irmão recortar esta tabela sem os dois
+    /// compartilharem estado.
+    /// </summary>
+    [Parameter] public bool SomenteMlPior { get; set; }
+
     private FiltroDeItens _filtro = FiltroDeItens.Nenhum;
+    private bool _mlPiorAplicado;
     private TotaisDosItens? _totais;
     private IReadOnlyList<int> _lojas = [];
     private IReadOnlyList<OpcaoDeFiltro> _categoriasDisponiveis = [];
@@ -493,6 +547,20 @@
     private string ContagemDoRecorte => _filtro.Algum
         ? $"{_total:N0} de {_totalSemFiltro:N0} itens"
         : $"{_total:N0} itens";
+
+    /// <summary>
+    /// Aplica o recorte pedido de fora. Guarda o que já foi aplicado para não sobrescrever o
+    /// filtro toda vez que o pai renderiza — sem isso, mexer em qualquer outro filtro seria
+    /// desfeito no render seguinte.
+    /// </summary>
+    protected override async Task OnParametersSetAsync()
+    {
+        if (SomenteMlPior && !_mlPiorAplicado)
+        {
+            _mlPiorAplicado = true;
+            await AplicarAsync(_filtro with { SomenteMlPior = true });
+        }
+    }
 
     private async Task AplicarAsync(FiltroDeItens novo)
     {
@@ -681,6 +749,21 @@
     /// Texto de cadastro ausente. Travessao, e nao vazio: celula em branco parece falha de
     /// renderizacao, e o comprador precisa saber que o dado nao existe no cadastro dele.
     /// </summary>
+    /// <summary>
+    /// Traduz o estado da análise rápida para cor, rótulo e explicação. <b>Cinza não é uma cor
+    /// mais fraca que o vermelho</b> — é outro problema: o vermelho diz "sobrou demais para o
+    /// giro", o cinza diz "não há giro nenhum", e o segundo costuma ser pior.
+    /// </summary>
+    private static (string Cor, string Rotulo, string Titulo)? SinalDaAnalise(string? estado) => estado switch
+    {
+        "Vermelho" => ("var(--rz-danger)", "encalhado", "60 dias de cobertura ou mais."),
+        "Amarelo" => ("var(--rz-warning)", "atenção", "Entre 30 e 59 dias de cobertura."),
+        "Verde" => ("var(--rz-success)", "ok", "Menos de 30 dias de cobertura."),
+        "SemGiro" => ("var(--rz-text-tertiary-color)", "sem giro",
+            "Tem estoque parado e não vendeu nada nos últimos 120 dias. Não há cobertura a calcular."),
+        _ => null,
+    };
+
     private static string Texto(string? valor) =>
         string.IsNullOrWhiteSpace(valor) ? "—" : valor;
 

@@ -78,7 +78,19 @@
                             </RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                }
+                
+                    @* O bloco continua com dez linhas — decisao do patrocinador (opcao a): ele
+                       existe para o comprador RECONHECER o tipo de erro, nao para virar uma
+                       segunda tabela paginada ao lado da primeira. Quem quer conferir item a
+                       item vai pela tabela grande, ja recortada. *@
+                    @if (OnVerTodos.HasDelegate && Analise.ItensComSobraMlMaior > piores.Count)
+                    {
+                        <RadzenButton Text="@($"Ver todos os {Analise.ItensComSobraMlMaior:N0} itens")"
+                                      Icon="filter_alt" Variant="Variant.Text" Size="ButtonSize.Small"
+                                      data-test="ver-todos-os-piores"
+                                      Click="@(() => OnVerTodos.InvokeAsync())" />
+                    }
+}
             }
 
             @* --- Arma da previsão: onde a estimativa de venda do ML errou mais --------- *@
@@ -145,6 +157,12 @@
 </RadzenCard>
 
 @code {
+    /// <summary>
+    /// Pedido de "ver todos os piores". Nulo em telas que não têm a tabela grande ao lado — o
+    /// link só aparece quando há para onde ir.
+    /// </summary>
+    [Parameter] public EventCallback OnVerTodos { get; set; }
+
     [Parameter] public SessaoAnalise? Analise { get; set; }
 
     /// <summary>

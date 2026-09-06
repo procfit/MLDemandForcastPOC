@@ -108,6 +108,27 @@ public sealed class ComparacaoSessaoItem
     /// </summary>
     public decimal? EstoqueNoFimDoPeriodo { get; set; }
 
+    /// <summary>
+    /// Venda média por dia nos <b>120 dias anteriores à sugestão</b>, régua definida pelo
+    /// patrocinador em 05/09/2026. É o denominador da cobertura ("este estoque dura quantos
+    /// dias?"), e por isso olha para trás: cobertura calculada sobre a venda do próprio período
+    /// avaliado usaria o futuro da decisão para julgar a decisão.
+    ///
+    /// <para>
+    /// <b>O divisor são os dias de histórico realmente importados</b>, não 120 fixos. O ZIP
+    /// traz uma janela finita: num item com 40 dias de histórico, dividir por 120 faria a média
+    /// sair um terço do real e a cobertura, o triplo — o item apareceria encalhado sem estar.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Zero é medição, e é a mais grave desta coluna:</b> significa que o item não vendeu
+    /// nada em 120 dias. Com estoque na prateleira, é o pior caso que a tela pode mostrar — e
+    /// a cobertura ali não é "boa", é indefinida (divisão por zero). Nulo é outra coisa: não há
+    /// histórico para medir, ou a sessão foi materializada antes desta coluna.
+    /// </para>
+    /// </summary>
+    public decimal? VendaMediaDiaria { get; set; }
+
     public decimal CompraSugeridaPbs { get; set; }
 
     /// <summary>

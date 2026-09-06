@@ -47,14 +47,22 @@ public sealed class QuestionarioE2ETests(AppHostFixture fixture)
         var page = await fixture.NovaPaginaLogadaAsync();
         var baseUrl = fixture.WebfrontendUrl.TrimEnd('/');
 
-        // 1. A tela de resultado tem de renderizar em AguardandoQuestionario — não só em
-        //    Concluida — e oferecer a chamada. Se o gate da tela voltasse a ser
-        //    `Status == "Concluida"`, é aqui que apareceria.
+        // 1. O caminho inteiro até o instrumento, como o comprador o percorre: a tela de
+        //    resultado chama o Quadro Resumo, e é de lá — da seção G, depois da avaliação — que
+        //    se chega ao questionário. O atalho direto saiu quando o Quadro Resumo nasceu, e
+        //    este percurso é agora a ÚNICA porta: se ele quebrar, a sessão fica presa em
+        //    AguardandoQuestionario para sempre, que é a fase que nenhum worker reclama.
+        //
+        //    A tela precisa renderizar em AguardandoQuestionario, e não só em Concluida. Se o
+        //    gate voltasse a ser `Status == "Concluida"`, é aqui que apareceria.
         await page.GotoAsync($"{baseUrl}/comparacoes/{sessaoId}");
-        var chamada = page.Locator("[data-test=chamada-questionario]");
+        var chamada = page.Locator("[data-test=chamada-quadro-resumo]");
         await chamada.WaitForAsync(new() { Timeout = 60_000 });
 
-        await chamada.GetByText("Responder agora").ClickAsync();
+        await chamada.GetByText("Abrir Quadro Resumo").ClickAsync();
+        await page.WaitForURLAsync(u => u.Contains("/resumo"), new() { Timeout = 30_000 });
+
+        await page.Locator("[data-test=ir-para-questionario]").ClickAsync();
         await page.WaitForURLAsync(u => u.Contains("/questionario"), new() { Timeout = 30_000 });
 
         var secoes = QuestionarioCatalogo.Secoes;
@@ -81,7 +89,7 @@ public sealed class QuestionarioE2ETests(AppHostFixture fixture)
                 // Escopo pela pergunta antes de casar o texto da alternativa: as sete afirmações
                 // da Parte B compartilham os mesmos rótulos ("4 – Concordo" etc.), então um
                 // GetByText global casaria sempre com a primeira ocorrência e este laço
-                // responderia a B1 sete vezes, deixando B2..B7 em branco — e o teste passaria a
+                // responderia a B1 doze vezes, deixando B2..B12 em branco — e o teste passaria a
                 // provar o oposto do que afirma.
                 await page.Locator($"[data-test=pergunta-{pergunta.Codigo}]")
                           .GetByText(pergunta.Opcoes[0].Texto, new() { Exact = true })

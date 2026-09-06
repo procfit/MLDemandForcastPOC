@@ -165,25 +165,29 @@
             }
             else
             {
-                @* No topo do resultado, acima de tudo: a pendência não pode ficar escondida
-                   atrás de um clique numa aba nem no fim de uma página longa. *@
-                @if (_sessao.Status == "AguardandoQuestionario")
-                {
-                    <RadzenCard Variant="Variant.Filled" data-test="chamada-questionario">
-                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
-                                     JustifyContent="JustifyContent.SpaceBetween" Gap="1rem" Wrap="FlexWrap.Wrap">
-                            <RadzenStack Gap="0.25rem">
-                                <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Falta sua avaliação</RadzenText>
-                                <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
-                                    Responda algumas perguntas sobre esta comparação para concluí-la.
-                                </RadzenText>
-                            </RadzenStack>
-                            <RadzenButton Text="Responder agora" Icon="assignment" ButtonStyle="ButtonStyle.Primary"
-                                          Click="@(() => Nav.NavigateTo($"/comparacoes/{Id}/questionario"))" />
+                @* O caminho que o patrocinador desenhou: daqui o comprador vai ao Quadro
+                   Resumo, lê tudo por lá, avalia a execução e responde o questionário. O atalho
+                   direto para o questionário saiu junto com a chegada do Quadro Resumo — era a
+                   condição que ele pôs, e agora existe outro caminho até o instrumento. Esta
+                   chamada é a única porta, então ela não pode ficar atrás de uma aba. *@
+                <RadzenCard Variant="Variant.Filled" data-test="chamada-quadro-resumo">
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
+                                 JustifyContent="JustifyContent.SpaceBetween" Gap="1rem" Wrap="FlexWrap.Wrap">
+                        <RadzenStack Gap="0.25rem">
+                            <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">
+                                @(_sessao.Status == "AguardandoQuestionario" ? "Falta sua avaliação" : "Quadro Resumo")
+                            </RadzenText>
+                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                Os resultados desta execução reunidos numa tela só: comparação PBS × ML,
+                                aberturas por giro, curva e loja, mercado e a sua avaliação.
+                            </RadzenText>
                         </RadzenStack>
-                    </RadzenCard>
-                }
-                else
+                        <RadzenButton Text="Abrir Quadro Resumo" Icon="assessment" ButtonStyle="ButtonStyle.Primary"
+                                      Click="@(() => Nav.NavigateTo($"/comparacoes/{Id}/resumo"))" />
+                    </RadzenStack>
+                </RadzenCard>
+
+                @if (_sessao.Status != "AguardandoQuestionario")
                 {
                     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
                         <RadzenIcon Icon="task_alt" Style="color: var(--rz-success)" />
@@ -202,13 +206,13 @@
                    sessão parada em AguardandoQuestionario sem ninguém conseguir respondê-la —
                    condição que o próprio patrocinador pôs ao aprovar a mudança. *@
                 <RadzenCard Variant="Variant.Outlined">
-                    <RadzenTabs RenderMode="TabRenderMode.Client">
+                    <RadzenTabs RenderMode="TabRenderMode.Client" @bind-SelectedIndex="@_abaSelecionada">
                         <Tabs>
                             <RadzenTabsItem Text="Itens comparados">
-                                <TabelaItensComparacao SessaoId="@Id" />
+                                <TabelaItensComparacao SessaoId="@Id" SomenteMlPior="@_verTodosPiores" />
                             </RadzenTabsItem>
                             <RadzenTabsItem Text="Área técnica">
-                                <AreaTecnicaComparacao Analise="@_analise" Resultado="@resultado" />
+                                <AreaTecnicaComparacao Analise="@_analise" Resultado="@resultado" SessaoId="@Id" />
                             </RadzenTabsItem>
                         </Tabs>
                     </RadzenTabs>
@@ -217,7 +221,7 @@
                 <ManchetesComparacao Resultado="@resultado" ItensSemVendaNoPeriodo="@ItensSemVendaNoPeriodo" />
 
                 @* Continua fora de aba: a notícia ruim não pode depender de um clique. *@
-                <OndeOMlFoiPior Analise="@_analise" Resultado="@resultado" />
+                <OndeOMlFoiPior Analise="@_analise" Resultado="@resultado" OnVerTodos="@VerTodosOsPioresAsync" />
             }
         }
     }
@@ -390,6 +394,28 @@
 
     // forceLoad: é um endpoint HTTP comum, não rota Blazor — sem isso o router tentaria
     // resolvê-la no circuito e cairia em "página não encontrada".
+    private int _abaSelecionada;
+    private bool _verTodosPiores;
+
+    /// <summary>
+    /// Abre a tabela grande já recortada nos itens em que o ML ficou pior — a opção (a) que o
+    /// patrocinador escolheu, em vez de transformar o bloco de dez linhas numa segunda tabela
+    /// paginada ao lado da primeira.
+    ///
+    /// <para>
+    /// Troca de aba <b>e</b> aplica o filtro. Só filtrar deixaria o comprador na aba errada
+    /// olhando para nada, e clicar num link que aparentemente não faz coisa nenhuma é pior do
+    /// que não ter o link.
+    /// </para>
+    /// </summary>
+    private async Task VerTodosOsPioresAsync()
+    {
+        _verTodosPiores = true;
+        _abaSelecionada = 0;
+        StateHasChanged();
+        await Task.CompletedTask;
+    }
+
     private void BaixarDados() => Nav.NavigateTo($"/comparacoes/{Id}/dados/download", forceLoad: true);
 
     private async Task TriggerFilePicker() =>

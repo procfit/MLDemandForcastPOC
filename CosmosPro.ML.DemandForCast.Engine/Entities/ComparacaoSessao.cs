@@ -51,6 +51,35 @@ public sealed class ComparacaoSessao
     /// <summary>Agregados da manchete. O detalhe por item vive em ComparacaoSessaoItens.</summary>
     public string? ResultadoJson { get; set; }
 
+    // --- Avaliacao do comprador (secao G do Quadro Resumo) ---------------------------
+    //
+    // Quatro colunas na propria sessao, e nao tabela nova: e 1:1 com a sessao, nao tem filha e
+    // nao tem ciclo de vida proprio. `Questionarios` ganhou tabela porque tem respostas
+    // penduradas; aqui isso seria um join a mais e mais uma pergunta de escopo por rede sem
+    // nada em troca.
+
+    /// <summary>
+    /// Veredito rapido do comprador: <c>Valido</c>, <c>ValidoComRessalvas</c> ou
+    /// <c>NaoValido</c>. Nulo enquanto ele nao avaliou.
+    ///
+    /// <para>
+    /// <b>Nao fecha a sessao.</b> Quem leva a sessao a <see cref="SessaoStatus.Concluida"/>
+    /// continua sendo o envio do questionario — decisao do patrocinador (resposta 4a): a
+    /// avaliacao e um resumo, o questionario e o instrumento da pesquisa. Se esta coluna
+    /// passasse a concluir, o questionario viraria opcional e o dado da dissertacao sumiria.
+    /// </para>
+    /// </summary>
+    public string? AvaliacaoVeredito { get; set; }
+
+    /// <summary>Comentario livre que acompanha o veredito. Opcional, e por isso anulavel.</summary>
+    public string? AvaliacaoComentario { get; set; }
+
+    /// <summary>Quando o comprador registrou. Carimbo, nao situacao — a situacao e o veredito.</summary>
+    public DateTimeOffset? AvaliacaoEm { get; set; }
+
+    /// <summary>Quem registrou, pelo mesmo criterio de <c>Questionarios.UsuarioId</c>.</summary>
+    public string? AvaliacaoUsuarioId { get; set; }
+
     public string? MotivoInviabilidade { get; set; }
     public string? MensagemErro { get; set; }
 

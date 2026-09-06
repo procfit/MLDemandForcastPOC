@@ -1,0 +1,128 @@
+@* Seção G do Quadro Resumo: o veredito rápido do comprador sobre esta execução.
+
+   <b>Isto não conclui a sessão</b>, e a diferença importa. Quem conclui é o envio do
+   questionário — decisão do patrocinador (resposta 4a): a avaliação é o resumo, o questionário é
+   o instrumento da pesquisa. Se o clique aqui fechasse a sessão, o questionário viraria opcional
+   e o dado da dissertação deixaria de ser coletado.
+
+   Nenhuma opção vem pré-selecionada, de propósito: um padrão marcado é uma resposta que a
+   ferramenta dá no lugar do participante, e a pesquisa não pode distinguir isso de uma escolha. *@
+
+<RadzenStack Gap="1rem">
+    <RadzenText TextStyle="TextStyle.Body1" Style="margin: 0">
+        Depois de analisar os resultados desta execução, como você avalia a recomendação de compra
+        apresentada pelo Machine Learning?
+    </RadzenText>
+
+    <div data-test="opcoes-avaliacao">
+        <RadzenRadioButtonList @bind-Value="@_veredito" TValue="string?" Orientation="Orientation.Vertical"
+                               Disabled="@_gravando">
+            <Items>
+                <RadzenRadioButtonListItem Text="Válido" Value="@("Valido")" />
+                <RadzenRadioButtonListItem Text="Válido com ressalvas" Value="@("ValidoComRessalvas")" />
+                <RadzenRadioButtonListItem Text="Não válido" Value="@("NaoValido")" />
+            </Items>
+        </RadzenRadioButtonList>
+    </div>
+
+    <RadzenFormField Text="Comentário (opcional)" Variant="Variant.Outlined" Style="width: 100%">
+        <RadzenTextArea @bind-Value="@_comentario" Rows="4" MaxLength="4000" Disabled="@_gravando"
+                        Style="width: 100%" aria-label="Comentário sobre esta execução" />
+    </RadzenFormField>
+
+    @if (_erro is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false" data-test="erro-avaliacao">@_erro</RadzenAlert>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.75rem" AlignItems="AlignItems.Center" Wrap="FlexWrap.Wrap">
+        <RadzenButton Text="@(_gravando ? "Registrando…" : "Registrar avaliação")" Icon="how_to_vote"
+                      ButtonStyle="ButtonStyle.Primary" Disabled="@(_gravando || _veredito is null)"
+                      Click="@RegistrarAsync" data-test="registrar-avaliacao" />
+
+        @if (Sessao.Status == "AguardandoQuestionario")
+        {
+            <RadzenButton Text="Responder Questionário V5" Icon="assignment" Variant="Variant.Outlined"
+                          data-test="ir-para-questionario"
+                          Click="@(() => Nav.NavigateTo($"/comparacoes/{Sessao.Id}/questionario"))" />
+        }
+        else if (Sessao.Status == "Concluida")
+        {
+            <RadzenButton Text="Ver minhas respostas" Icon="assignment_turned_in" Variant="Variant.Text"
+                          Click="@(() => Nav.NavigateTo($"/comparacoes/{Sessao.Id}/questionario"))" />
+        }
+    </RadzenStack>
+
+    @if (Sessao.FoiAvaliada)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem"
+                     data-test="avaliacao-registrada">
+            <RadzenIcon Icon="task_alt" Style="color: var(--rz-success)" />
+            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                Avaliada como <strong>@Sessao.VereditoLegivel</strong>@(Sessao.AvaliacaoEm is { } q
+                    ? $" em {q.ToLocalTime():dd/MM/yyyy 'às' HH:mm}" : "").
+                Registrar de novo substitui esta resposta.
+            </RadzenText>
+        </RadzenStack>
+    }
+
+    <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+        Esta avaliação se refere a <strong>esta execução</strong>. O Questionário V5 avalia o
+        protótipo como ferramenta, e é ele que encerra a comparação.
+    </RadzenText>
+</RadzenStack>
+
+@code {
+    [Parameter] public required SessaoView Sessao { get; set; }
+
+    /// <summary>Recarrega a página depois de gravar — o estado exibido vem do servidor, não daqui.</summary>
+    [Parameter] public EventCallback OnRegistrada { get; set; }
+
+    [Inject] private ComparacoesApiClient ComparacoesApi { get; set; } = default!;
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+    [Inject] private NotificationService Notifications { get; set; } = default!;
+
+    private string? _veredito;
+    private string? _comentario;
+    private bool _gravando;
+    private string? _erro;
+
+    protected override void OnParametersSet()
+    {
+        // Pré-carrega o que já foi respondido, para reenviar ser uma correção e não um
+        // recomeço. Só quando o campo ainda não foi tocado nesta sessão de tela.
+        _veredito ??= Sessao.AvaliacaoVeredito;
+        _comentario ??= Sessao.AvaliacaoComentario;
+    }
+
+    private async Task RegistrarAsync()
+    {
+        if (_veredito is null) return;
+
+        _gravando = true;
+        _erro = null;
+        try
+        {
+            var (ok, erro) = await ComparacoesApi.RegistrarAvaliacaoAsync(Sessao.Id, _veredito, _comentario);
+            if (ok)
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Avaliação registrada",
+                    Detail = "Obrigado. Para concluir a comparação, responda o questionário.",
+                    Duration = 5000,
+                });
+                await OnRegistrada.InvokeAsync();
+            }
+            else
+            {
+                _erro = erro;
+            }
+        }
+        finally
+        {
+            _gravando = false;
+        }
+    }
+}

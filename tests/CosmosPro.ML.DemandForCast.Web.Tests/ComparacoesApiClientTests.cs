@@ -262,6 +262,105 @@ public sealed class ComparacoesApiClientTests
         fatia.MlPerde.Should().BeFalse("sem métrica não há como afirmar que alguém perdeu");
     }
 
+    /// <summary>
+    /// O recorte "so onde o ML ficou pior" viaja na query string com o mesmo nome que a
+    /// apiservice le. Sao dois processos: um nome divergente aqui devolveria a tabela inteira
+    /// sem erro nenhum, e o link do bloco abriria um recorte que nao recorta nada.
+    /// </summary>
+    [Fact]
+    public void Filtro_de_ml_pior_viaja_na_query_string_e_conta_como_recorte()
+    {
+        var filtro = new FiltroDeItens(SomenteMlPior: true);
+
+        filtro.ParaQueryString().Should().Be("&somenteMlPior=true");
+        filtro.Algum.Should().BeTrue("a tela precisa mostrar que ha um recorte ativo");
+        FiltroDeItens.Nenhum.ParaQueryString().Should().NotContain("somenteMlPior");
+    }
+
+    // --- Cobertura e analise rapida -------------------------------------------
+
+    /// <summary>
+    /// A regua do patrocinador (05/09/2026): vermelho acima de 60 dias de cobertura, amarelo
+    /// entre 30 e 59, verde abaixo de 30. A cobertura divide o <b>estoque do fim do periodo</b>
+    /// — resposta 1A — pela venda media diaria de 120 dias.
+    /// </summary>
+    [Theory]
+    [InlineData(20, 0.25, 80, "Vermelho")]   // 80 dias parados
+    [InlineData(12, 0.25, 48, "Amarelo")]    // 48 dias
+    [InlineData(5, 0.25, 20, "Verde")]       // 20 dias
+    [InlineData(15, 0.25, 60, "Vermelho")]   // exatamente 60 ja e vermelho
+    [InlineData(7.5, 0.25, 30, "Amarelo")]   // exatamente 30 ja e amarelo
+    public void Analise_rapida_segue_a_regua_de_60_e_30_dias(
+        double estoqueFim, double media, double coberturaEsperada, string cor)
+    {
+        var item = Linha(estoqueNoFim: (decimal)estoqueFim, vendaMedia: (decimal)media);
+
+        item.Cobertura.Should().BeApproximately((decimal)coberturaEsperada, 0.01m);
+        item.AnaliseRapida.Should().Be(cor);
+    }
+
+    /// <summary>
+    /// <b>A quarta cor — resposta 2B.</b> Item com estoque na prateleira e venda zero em 120
+    /// dias nao tem cobertura: a divisao nao existe. Mas "nao da conta" nao e "esta tudo bem" —
+    /// e provavelmente o pior item da lista, dinheiro parado que nao gira. Ele ganha estado
+    /// proprio para nao se confundir nem com encalhado nem com sem dado.
+    /// </summary>
+    [Fact]
+    public void Estoque_parado_com_venda_zero_ganha_estado_proprio_e_nao_some()
+    {
+        var item = Linha(estoqueNoFim: 40m, vendaMedia: 0m);
+
+        item.Cobertura.Should().BeNull("nao existe divisao por zero");
+        item.AnaliseRapida.Should().Be("SemGiro");
+    }
+
+    /// <summary>
+    /// Prateleira vazia e o oposto de encalhe: cobertura zero, verde. Nao pode cair no
+    /// <c>SemGiro</c> so porque a venda media tambem e zero — nao ha capital parado nenhum.
+    /// </summary>
+    [Fact]
+    public void Prateleira_vazia_e_verde_mesmo_sem_venda_media()
+    {
+        var item = Linha(estoqueNoFim: 0m, vendaMedia: 0m);
+
+        item.Cobertura.Should().Be(0m);
+        item.AnaliseRapida.Should().Be("Verde");
+    }
+
+    /// <summary>
+    /// Sem estoque medido ou sem historico para medir a media, nao ha cor: a celula diz "sem
+    /// dado", que e diferente das quatro cores. Sessao materializada antes destas colunas cai
+    /// aqui, e pintar de verde afirmaria que esta tudo bem com um item que ninguem avaliou.
+    /// </summary>
+    [Theory]
+    [InlineData(null, 0.25)]
+    [InlineData(40.0, null)]
+    [InlineData(null, null)]
+    public void Sem_estoque_ou_sem_media_nao_ha_cor(double? estoqueFim, double? media)
+    {
+        var item = Linha(
+            estoqueNoFim: (decimal?)estoqueFim,
+            vendaMedia: (decimal?)media);
+
+        item.Cobertura.Should().BeNull();
+        item.AnaliseRapida.Should().BeNull("nulo e ausencia de avaliacao, nao aprovacao");
+    }
+
+    private static SessaoItem Linha(decimal? estoqueNoFim, decimal? vendaMedia) => new(
+        LojaId: 1,
+        Sku: "SKU-1",
+        NomeProduto: "Produto",
+        Curva: "A",
+        CompraSugeridaPbs: 100m,
+        CompraSugeridaMl: null,
+        VendidoNaJanela: 0m,
+        SobraPbsUnidades: 0m,
+        SobraMlUnidades: null,
+        SobraPbsValor: null,
+        JanelaAlemDoHistorico: false,
+        EstoqueNoFimDoPeriodo: estoqueNoFim,
+        VendaMediaDiaria: vendaMedia);
+
     // --- Totais: a comparacao so vale sobre a mesma populacao -----------------
 
     /// <summary>
@@ -311,16 +410,52 @@ public sealed class ComparacoesApiClientTests
         t.DiferencaSobraValor.Should().NotBe(222215.79m - 261235.11m);
     }
 
+    /// <summary>
+    /// <b>A compra tambem tem lado comparavel</b>, e ela ficou de fora quando a sobra e o valor
+    /// ganharam o deles: a faixa de comparacao exibia a compra do PBS somada sobre TODOS os
+    /// itens (207 un.) ao lado da compra do ML sobre os 2.106 calculados (68 un.). Mesmo
+    /// defeito da diferenca de sobra, numa coluna que ninguem tinha olhado — quem revelou foi
+    /// o mockup do patrocinador, que pede "Quantidade de compra — mesmos itens".
+    /// </summary>
+    [Fact]
+    public void Compra_do_PBS_na_faixa_comparavel_soma_apenas_os_itens_com_calculo_do_ML()
+    {
+        var t = Totais(
+            sobraPbsTotal: 4194m, sobraPbsComparavel: 3692m, sobraMl: 3693m,
+            compraPbsTotal: 207m, compraPbsComparavel: 66m, compraMl: 68m);
+
+        t.CompraPbsComparavelUnidades.Should().Be(66m);
+        t.CompraPbsUnidades.Should().Be(207m, "o total da sugestao continua existindo, fora do confronto");
+        t.DiferencaCompraUnidades.Should().Be(68m - 66m);
+        t.DiferencaCompraUnidades.Should().NotBe(68m - 207m,
+            "comparar a compra do ML com o total do PBS mede populacao, nao metodo");
+    }
+
+    [Fact]
+    public void Sem_braco_de_ML_a_compra_comparavel_e_a_diferenca_sao_nulas()
+    {
+        var t = Totais(
+            sobraPbsTotal: 4194m, sobraPbsComparavel: null, sobraMl: null,
+            compraPbsTotal: 207m, compraPbsComparavel: null, compraMl: null);
+
+        t.CompraPbsComparavelUnidades.Should().BeNull();
+        t.DiferencaCompraUnidades.Should().BeNull("zero afirmaria que os dois compraram igual");
+    }
+
     private static TotaisDosItens Totais(
         decimal sobraPbsTotal,
         decimal? sobraPbsComparavel,
         decimal? sobraMl,
         decimal? valorPbsTotal = null,
         decimal? valorPbsComparavel = null,
-        decimal? valorMl = null) => new(
+        decimal? valorMl = null,
+        decimal compraPbsTotal = 207m,
+        decimal? compraPbsComparavel = 66m,
+        decimal? compraMl = 68m) => new(
         Itens: 20153,
-        CompraPbsUnidades: 207m,
-        CompraMlUnidades: sobraMl is null ? null : 68m,
+        CompraPbsUnidades: compraPbsTotal,
+        CompraPbsComparavelUnidades: sobraMl is null ? null : compraPbsComparavel,
+        CompraMlUnidades: sobraMl is null ? null : compraMl,
         ItensComCompraMl: sobraMl is null ? 0 : 2106,
         VendidoNaJanela: 1000m,
         SobraPbsUnidades: sobraPbsTotal,

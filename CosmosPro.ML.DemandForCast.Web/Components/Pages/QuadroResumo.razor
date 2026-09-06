@@ -1,0 +1,184 @@
+@* Quadro Resumo da execução — o layout que o patrocinador desenhou em 05/09/2026.
+
+   É PÁGINA e não aba dentro da sessão de propósito: o pedido nasceu do medo de o comprador não
+   abrir a Área técnica e decidir sem os números. Uma aba a mais teria o mesmo problema. Daqui o
+   caminho é linear e termina: ler A a E, avaliar em G, responder o questionário, fim.
+
+   As aberturas B, C e D MORAM aqui agora (resposta 5a do patrocinador). A Área técnica continua
+   existindo com o detalhamento, mas quem manda no número é esta tela — duas cópias dos mesmos
+   dados divergem com o tempo e a ferramenta passa a dar duas respostas para a mesma pergunta. *@
+
+@page "/comparacoes/{Id:guid}/resumo"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ComparacoesApiClient ComparacoesApi
+@inject NotificationService Notifications
+@inject NavigationManager Nav
+@implements IAsyncDisposable
+
+<PageTitle>Quadro Resumo — @(_sessao?.Nome ?? "Comparação")</PageTitle>
+
+<RadzenStack Gap="1.5rem" class="rz-p-4">
+
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.75rem" Wrap="FlexWrap.Wrap">
+        <RadzenButton Icon="arrow_back" Variant="Variant.Text"
+                      Click="@(() => Nav.NavigateTo($"/comparacoes/{Id}"))" />
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Quadro Resumo</RadzenText>
+        @if (_sessao is not null)
+        {
+            <RadzenBadge Text="@SessaoView.EstadoLabel(_sessao.Status)"
+                         BadgeStyle="@SessaoView.BadgeFor(_sessao.Status)" Shade="Shade.Lighter" />
+        }
+    </RadzenStack>
+
+    @if (!_carregou)
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+            <RadzenText TextStyle="TextStyle.Body2">Carregando…</RadzenText>
+        </RadzenStack>
+    }
+    else if (_sessao is null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">Comparação não encontrada.</RadzenAlert>
+    }
+    else if (Resultado is not { } resultado || _analise is null)
+    {
+        @* Ausência de resultado não é resultado zero — o quadro inteiro depende de números
+           apurados, e um quadro com tudo em branco pareceria uma execução ruim. *@
+        <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">
+            <strong>Esta comparação ainda não tem resultado para resumir.</strong>
+            <div style="margin-top: 0.5rem">
+                O quadro aparece quando a comparação termina de processar. Se ela já terminou e
+                mesmo assim você vê esta mensagem, o resultado não pôde ser lido — envie os dados
+                novamente e, se repetir, procure o suporte.
+            </div>
+        </RadzenAlert>
+    }
+    else
+    {
+        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+            @Cabecalho(resultado)
+        </RadzenText>
+
+        @* Faixa de contexto: o denominador de tudo que vem abaixo. *@
+        <RadzenCard Variant="Variant.Filled" data-test="faixa-resumo">
+            <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap">
+                <Totalizador Rotulo="Registros da sugestão" Valor="@($"{resultado.ItensAvaliados:N0}")" />
+                <Totalizador Rotulo="Lojas" Valor="@($"{(_analise.PorLoja?.Count ?? 0):N0}")" />
+                <Totalizador Rotulo="Vendido no período" Valor="@($"{resultado.VendidoNaJanelaUnidades:N0} un.")" />
+                <Totalizador Rotulo="Base de previsão" Valor="@($"{resultado.ItensComPrevisaoMl:N0} registros")" />
+                <Totalizador Rotulo="Base de compra" Valor="@($"{resultado.ItensComDecisaoMl:N0} registros")" />
+            </RadzenStack>
+        </RadzenCard>
+
+        <SecaoQuadro Letra="A" Titulo="Principais resultados · PBS × ML">
+            <TabelaResultadosPrincipais Resultado="@resultado" Analise="@_analise" />
+        </SecaoQuadro>
+
+        <SecaoQuadro Letra="B" Titulo="Abertura por giro">
+            <AberturaQuadro Fatias="@_analise.PorGiro" Rotulo="Giro (un./dia)"
+                            Leitura="@LeituraDaAbertura(_analise.PorGiro, "faixa")" />
+        </SecaoQuadro>
+
+        <SecaoQuadro Letra="C" Titulo="Abertura por curva do ERP">
+            <AberturaQuadro Fatias="@_analise.PorCurva" Rotulo="Curva"
+                            Leitura="@LeituraDaAbertura(_analise.PorCurva, "curva")" />
+        </SecaoQuadro>
+
+        <SecaoQuadro Letra="D" Titulo="Abertura por loja">
+            <AberturaQuadro Fatias="@_analise.PorLoja" Rotulo="Loja"
+                            Leitura="@LeituraDaAbertura(_analise.PorLoja, "loja")" />
+        </SecaoQuadro>
+
+        <SecaoQuadro Letra="E" Titulo="Inteligência de mercado · IQVIA">
+            <PainelMercadoQuadro SessaoId="@Id" Totais="@_analise.Totais" />
+        </SecaoQuadro>
+
+        <SecaoQuadro Letra="" Titulo="Conclusão desta execução">
+            <ConclusaoQuadro Resultado="@resultado" Analise="@_analise" />
+        </SecaoQuadro>
+
+        <SecaoQuadro Letra="G" Titulo="Sua avaliação desta execução">
+            <AvaliacaoDaExecucao Sessao="@_sessao" OnRegistrada="@RecarregarAsync" />
+        </SecaoQuadro>
+
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.75rem" Wrap="FlexWrap.Wrap">
+            <RadzenButton Text="Ver itens comparados" Icon="table_rows" Variant="Variant.Outlined"
+                          Click="@(() => Nav.NavigateTo($"/comparacoes/{Id}"))" />
+            <RadzenButton Text="Ver detalhes técnicos" Icon="build" Variant="Variant.Outlined"
+                          Click="@(() => Nav.NavigateTo($"/comparacoes/{Id}"))" />
+        </RadzenStack>
+    }
+</RadzenStack>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private SessaoView? _sessao;
+    private SessaoAnalise? _analise;
+    private bool _carregou;
+    private readonly CancellationTokenSource _cts = new();
+
+    private SessaoResultadoView? Resultado => ComparacoesApiClient.ParseResultado(_sessao?.ResultadoJson);
+
+    protected override Task OnInitializedAsync() => RecarregarAsync();
+
+    private async Task RecarregarAsync()
+    {
+        try
+        {
+            _sessao = await ComparacoesApi.GetAsync(Id, _cts.Token);
+            if (_sessao is not null)
+            {
+                _analise = await ComparacoesApi.GetAnaliseAsync(Id, _cts.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Navegação saiu da página; não há tela para avisar.
+        }
+        finally
+        {
+            _carregou = true;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Linha de contexto da execução. Declara <b>sobre o quê</b> o quadro fala — sem isso os
+    /// números abaixo parecem falar da rede inteira, e não de uma sugestão.
+    /// </summary>
+    private string Cabecalho(SessaoResultadoView r)
+    {
+        var partes = new List<string>();
+        if (_sessao?.SugestaoId is { } sug) partes.Add($"Sugestão {sug}");
+        if (r.SugestaoDataHora is { } dh) partes.Add(dh.ToString("dd/MM/yyyy"));
+        partes.Add($"método de cálculo do ERP {r.TipoCalculo}");
+        partes.Add($"execução gerada em {r.GeradoEm.ToLocalTime():dd/MM/yyyy 'às' HH:mm}");
+        return string.Join(" · ", partes);
+    }
+
+    /// <summary>
+    /// A frase que fecha cada abertura. <b>Descreve, não julga</b>: diz em quantos grupos cada
+    /// método errou menos, sem eleger vencedor da execução. O veredito é do comprador, no bloco
+    /// G — é justamente isso que a pesquisa quer medir, e uma sentença da ferramenta ancoraria
+    /// a resposta dele antes de ele olhar os números.
+    /// </summary>
+    private static string LeituraDaAbertura(IReadOnlyList<SessaoFatia>? fatias, string substantivo)
+    {
+        var (ml, medidos) = SessaoAnalise.MenorWape(fatias);
+        if (medidos == 0) return $"Nenhum grupo desta abertura teve métrica apurada nos dois métodos.";
+
+        var pbs = medidos - ml;
+        var plural = medidos == 1 ? substantivo : substantivo + "s";
+        return $"Em {medidos} {plural} com métrica apurada: o ML errou menos em {ml} e o seu ERP em {pbs}. "
+             + "Grupos sem métrica não entram na conta.";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _cts.CancelAsync();
+        _cts.Dispose();
+    }
+}

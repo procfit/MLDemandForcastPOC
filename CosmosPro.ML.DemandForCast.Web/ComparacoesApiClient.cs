@@ -166,6 +166,28 @@ public class ComparacoesApiClient(HttpClient httpClient, IRedeContext redeContex
     /// quando ausente ou ilegível — a tela trata isso como "sem resultado legível", nunca
     /// como zero (mesmo contrato de <c>ComparisonApiClient.ParseResultado</c>).
     /// </summary>
+    /// <summary>
+    /// Registra o veredito rápido da execução. Reenviar substitui o anterior — o comprador pode
+    /// mudar de ideia depois de olhar o detalhe, ao contrário do questionário, que é selado.
+    /// </summary>
+    public async Task<(bool Sucesso, string? Erro)> RegistrarAvaliacaoAsync(
+        Guid id, string veredito, string? comentario, CancellationToken ct = default)
+    {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        var usuarioId = await redeContext.GetUsuarioIdAtualAsync();
+
+        var resp = await httpClient.PostAsJsonAsync(
+            $"/api/comparacoes/{id}/avaliacao?redeId={redeId}&usuarioId={usuarioId}",
+            new { Veredito = veredito, Comentario = comentario }, ct);
+
+        if (resp.IsSuccessStatusCode) return (true, null);
+
+        // O texto do servidor vai para a tela: ele nomeia a causa (sem resultado, veredito
+        // invalido), e uma mensagem generica faria o comprador tentar de novo sem saber o quê.
+        var corpo = await resp.Content.ReadAsStringAsync(ct);
+        return (false, string.IsNullOrWhiteSpace(corpo) ? $"Falha {(int)resp.StatusCode}." : corpo);
+    }
+
     public static SessaoResultadoView? ParseResultado(string? resultadoJson)
     {
         if (string.IsNullOrWhiteSpace(resultadoJson)) return null;
@@ -250,8 +272,27 @@ public sealed record SessaoView(
     string? MensagemErro,
     int? SkusSemCadastro = null,
     string? ResultadoJson = null,
-    bool DadosEnviados = false)
+    bool DadosEnviados = false,
+    string? AvaliacaoVeredito = null,
+    string? AvaliacaoComentario = null,
+    DateTimeOffset? AvaliacaoEm = null)
 {
+    /// <summary>
+    /// Se o comprador já registrou o veredito rápido desta execução. <b>Nulo em
+    /// <c>AvaliacaoVeredito</c> é "ainda não avaliou"</b>, e nunca se confunde com
+    /// <c>NaoValido</c> — a tela precisa distinguir quem não opinou de quem reprovou.
+    /// </summary>
+    public bool FoiAvaliada => !string.IsNullOrWhiteSpace(AvaliacaoVeredito);
+
+    /// <summary>Veredito em português de comprador, ou <c>null</c> quando ainda não houve.</summary>
+    public string? VereditoLegivel => AvaliacaoVeredito switch
+    {
+        "Valido" => "Válido",
+        "ValidoComRessalvas" => "Válido com ressalvas",
+        "NaoValido" => "Não válido",
+        _ => null,
+    };
+
     /// <summary>
     /// Se não há mais nada a esperar do servidor por conta própria, e o poll de 3s pode parar.
     ///
@@ -427,7 +468,13 @@ public sealed record FiltroDeItens(
     int? LojaId = null,
     string? Categoria = null,
     string? Curva = null,
-    bool SomenteComAlerta = false)
+    bool SomenteComAlerta = false,
+    /// <summary>
+    /// Só os itens em que o ML deixaria <b>mais</b> sobra que o ERP — o recorte que o bloco
+    /// "Onde o ML foi pior" resume em dez linhas. Existe para o link daquele bloco abrir a
+    /// tabela inteira já recortada, em vez de o comprador procurar item a item.
+    /// </summary>
+    bool SomenteMlPior = false)
 {
     /// <summary>
     /// Sentinela que casa ausência do atributo. Precisa ser <b>o mesmo</b> string que a
@@ -442,7 +489,8 @@ public sealed record FiltroDeItens(
     public bool Algum => LojaId is not null
         || !string.IsNullOrWhiteSpace(Categoria)
         || !string.IsNullOrWhiteSpace(Curva)
-        || SomenteComAlerta;
+        || SomenteComAlerta
+        || SomenteMlPior;
 
     public string ParaQueryString()
     {
@@ -451,6 +499,7 @@ public sealed record FiltroDeItens(
         if (!string.IsNullOrWhiteSpace(Categoria)) q += $"&categoria={Uri.EscapeDataString(Categoria)}";
         if (!string.IsNullOrWhiteSpace(Curva)) q += $"&curva={Uri.EscapeDataString(Curva)}";
         if (SomenteComAlerta) q += "&somenteComAlerta=true";
+        if (SomenteMlPior) q += "&somenteMlPior=true";
         return q;
     }
 }
@@ -462,6 +511,7 @@ public sealed record FiltroDeItens(
 public sealed record TotaisDosItens(
     int Itens,
     decimal CompraPbsUnidades,
+    decimal? CompraPbsComparavelUnidades,
     decimal? CompraMlUnidades,
     int ItensComCompraMl,
     decimal VendidoNaJanela,
@@ -477,7 +527,8 @@ public sealed record TotaisDosItens(
     // Itens do recorte com medição de mercado. Vem do servidor, e não de contagem na página
     // carregada: a página traz 25 linhas de um recorte que pode ter milhares, então contar
     // aqui diria "20 de 25" onde a resposta é "21 de 43".
-    int ItensComDadoDeMercado = 0)
+    int ItensComDadoDeMercado = 0,
+    int ItensComAlertaDeMercado = 0)
 {
     /// <summary>
     /// Diferença de sobra entre os braços, ou <c>null</c> quando o ML não foi apurado em
@@ -492,6 +543,13 @@ public sealed record TotaisDosItens(
     /// chamava de "diferença de sobra". Ver a nota de <c>TotalizarAsync</c>.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Diferenca de compra entre os bracos, sempre sobre o subconjunto comparavel. Nula sem
+    /// braco de ML: zero afirmaria que os dois metodos mandaram comprar a mesma coisa.
+    /// </summary>
+    public decimal? DiferencaCompraUnidades =>
+        CompraMlUnidades is { } ml && CompraPbsComparavelUnidades is { } pbs ? ml - pbs : null;
+
     public decimal? DiferencaSobraUnidades =>
         SobraMlUnidades is { } ml && SobraPbsComparavelUnidades is { } pbs ? ml - pbs : null;
 
@@ -543,8 +601,58 @@ public sealed record SessaoItem(
     string? Fabricante = null,
     string? Ean = null,
     decimal? EstoqueNaSugestao = null,
-    decimal? EstoqueNoFimDoPeriodo = null)
+    decimal? EstoqueNoFimDoPeriodo = null,
+    decimal? VendaMediaDiaria = null)
 {
+    /// <summary>
+    /// Quantos dias o estoque que sobrou duraria no ritmo de venda dos últimos 120 dias.
+    ///
+    /// <para>
+    /// Usa o <b>estoque do fim do período</b>, e não o do dia da sugestão — decisão do
+    /// patrocinador em 05/09/2026. A diferença não é de detalhe: com o estoque do fim, o
+    /// vermelho acusa <i>uma compra que deixou capital parado</i>; com o da sugestão, acusaria
+    /// <i>a decisão de comprar tendo muito</i>. O mesmo item pode ficar vermelho numa leitura e
+    /// verde na outra, e a régua de 60 dias que ele deu vale para esta.
+    /// </para>
+    ///
+    /// <para>
+    /// Nula quando falta um dos dois lados, e também quando a venda média é zero — aí não há
+    /// divisão, e o caso é tratado por <see cref="AnaliseRapida"/>, que o distingue de "sem
+    /// dado". Estoque zero é cobertura zero, e não ausência: prateleira vazia é uma medição.
+    /// </para>
+    /// </summary>
+    public decimal? Cobertura =>
+        EstoqueNoFimDoPeriodo is not { } estoque || VendaMediaDiaria is not { } media ? null
+        : estoque == 0m ? 0m
+        : media == 0m ? null
+        : estoque / media;
+
+    /// <summary>
+    /// O sinal de cor da coluna "Análise rápida", na régua que o patrocinador definiu em
+    /// 05/09/2026: <b>vermelho</b> a partir de 60 dias de cobertura, <b>amarelo</b> de 30 a 59,
+    /// <b>verde</b> abaixo de 30.
+    ///
+    /// <para>
+    /// <b>Existe um quarto estado, e ele não é enfeite.</b> Item com estoque na prateleira e
+    /// <i>nenhuma</i> venda em 120 dias não tem cobertura — a divisão não existe. Mas "não dá
+    /// conta" está longe de "está tudo bem": é dinheiro parado que não gira, provavelmente o
+    /// pior item da lista. Deixá-lo sem cor o esconderia justamente por ser ruim demais para a
+    /// fórmula. Estado próprio, decidido pelo patrocinador (resposta 2B).
+    /// </para>
+    ///
+    /// <para>
+    /// Nulo é o quinto caso e significa <b>não avaliado</b> — falta estoque medido ou histórico
+    /// para a média. Nunca confundir com verde: um diz "está bem", o outro diz "ninguém olhou".
+    /// </para>
+    /// </summary>
+    public string? AnaliseRapida =>
+        EstoqueNoFimDoPeriodo is not { } estoque || VendaMediaDiaria is not { } media ? null
+        : estoque == 0m ? "Verde"
+        : media == 0m ? "SemGiro"
+        : Cobertura is { } dias
+            ? dias >= 60m ? "Vermelho" : dias >= 30m ? "Amarelo" : "Verde"
+            : null;
+
     /// <summary>
     /// Rotulo do alerta em portugues de comprador. Devolve <c>null</c> quando nao ha alerta
     /// a mostrar -- item sem dado de mercado (<c>MercadoAlerta</c> nulo) ou avaliado e dentro
@@ -595,8 +703,28 @@ public sealed record SessaoAnalise(
     decimal SobraExtraMlValor,
     IReadOnlyList<ItemPior>? PioresNaCompra,
     IReadOnlyList<ItemPior>? PioresNaPrevisao,
-    IReadOnlyList<SessaoFatia>? PorGiro = null)
+    IReadOnlyList<SessaoFatia>? PorGiro = null,
+    TotaisDosItens? Totais = null)
 {
+    /// <summary>
+    /// Quantos grupos desta abertura tiveram <b>menor WAPE do ML</b>, e o total de grupos que
+    /// chegaram a ser medidos. Grupo sem métrica apurada não entra em nenhum dos dois lados:
+    /// contá-lo no denominador diria "o ML perdeu em N grupos" sobre grupos onde ninguém mediu.
+    /// </summary>
+    public static (int Ml, int Medidos) MenorWape(IReadOnlyList<SessaoFatia>? fatias)
+    {
+        var medidos = fatias?.Where(f => f.WapePbs is not null && f.WapeMl is not null).ToList() ?? [];
+        return (medidos.Count(f => f.WapeMl < f.WapePbs), medidos.Count);
+    }
+
+    /// <summary>
+    /// Registros que tiveram venda positiva na previsão medida. Sai das fatias de giro, e não de
+    /// uma consulta nova: as faixas com venda são exatamente as que não são "sem venda no
+    /// período" nem "sem previsão do ML".
+    /// </summary>
+    public int RegistrosComVendaPositiva =>
+        PorGiro?.Where(f => f.SomaDemandaRealDiaria > 0m).Sum(f => f.ItensComPrevisaoMl) ?? 0;
+
     public int ItensComPrevisaoMl => PorCurva?.Sum(f => f.ItensComPrevisaoMl) ?? 0;
 
     public decimal SomaDemandaRealDiaria => PorCurva?.Sum(f => f.SomaDemandaRealDiaria) ?? 0m;

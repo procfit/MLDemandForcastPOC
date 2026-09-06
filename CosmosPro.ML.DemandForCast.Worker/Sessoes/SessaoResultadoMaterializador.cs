@@ -179,6 +179,8 @@ internal sealed class SessaoResultadoMaterializador(
         var fim = job.JanelaFim.AddDays(1).ToDateTime(TimeOnly.MinValue);
 
         var vendas = await LerVendasDaJanelaAsync(conn, redeId, inicio, fim, job.TipoCalculo, ct);
+        var vendaPregressa = await LerVendaPregressaAsync(conn, redeId, inicio, fim, job.TipoCalculo, ct);
+        var inicioDoHistorico = await LerInicioDoHistoricoAsync(conn, redeId, ct);
         var estoques = await LerRupturaDaJanelaAsync(conn, redeId, inicio, fim, job.TipoCalculo, ct);
         var fimDoHistorico = await LerFimDoHistoricoAsync(conn, redeId, ct);
 
@@ -193,7 +195,12 @@ internal sealed class SessaoResultadoMaterializador(
                 vendas.TryGetValue(chave, out var venda);
                 estoques.TryGetValue(chave, out var estoque);
 
+                vendaPregressa.TryGetValue(chave, out var vendido120);
+
+                var diasDeHistorico = DiasDeHistorico(corte, inicioDoHistorico);
+
                 populacao.Add(new ItemDoStage(
+                    VendaMediaDiaria: diasDeHistorico > 0 ? vendido120 / diasDeHistorico : null,
                     Item: item,
                     NomeProduto: venda.Nome,
                     Categoria: venda.Categoria,
@@ -209,6 +216,94 @@ internal sealed class SessaoResultadoMaterializador(
         }
 
         return populacao;
+    }
+
+    /// <summary>
+    /// Quantos dias de historico existem para dividir a venda pregressa, olhando de
+    /// <paramref name="corte"/> (o dia da sugestao) para tras.
+    ///
+    /// <para>
+    /// <b>Nunca 120 fixos.</b> O ZIP traz uma janela finita de vendas: num item cujo historico
+    /// comeca 40 dias antes da sugestao, dividir por 120 faria a media sair um terco do real e
+    /// a cobertura, o triplo — o item apareceria encalhado sem estar, e em vermelho.
+    /// </para>
+    ///
+    /// <para>
+    /// O intervalo e <b>semiaberto</b>: conta os dias de <c>janela</c> ate a vespera do corte,
+    /// exatamente como a consulta filtra (<c>Data &lt; CAST(s.DataHora AS date)</c>). O dia da
+    /// sugestao nao entra dos dois lados, senao a media teria um dia a mais no divisor do que
+    /// no numerador.
+    /// </para>
+    /// </summary>
+    internal static int DiasDeHistorico(DateOnly corte, DateOnly? inicioDoHistorico)
+    {
+        var janela = corte.AddDays(-DiasDaMediaDeVenda);
+        if (inicioDoHistorico is { } inicio && inicio > janela) janela = inicio;
+
+        return Math.Max(0, corte.DayNumber - janela.DayNumber);
+    }
+
+    /// <summary>
+    /// Janela da media de venda que alimenta a cobertura. 120 dias, definido pelo patrocinador
+    /// em 05/09/2026 (documento "Ajustes nas telas do POC — 2o DOC").
+    /// </summary>
+    private const int DiasDaMediaDeVenda = 120;
+
+    /// <summary>
+    /// Venda de cada item nos <see cref="DiasDaMediaDeVenda"/> dias <b>anteriores</b> a
+    /// sugestao. Consulta separada da venda da cobertura porque a janela e outra e olha para o
+    /// outro lado: esta descreve o passado que o comprador tinha ao decidir; aquela pontua o
+    /// desfecho da decisao.
+    ///
+    /// <para>
+    /// <c>LEFT JOIN</c> pelo mesmo motivo da outra: item sem venda nenhuma nos 120 dias precisa
+    /// aparecer com zero, porque zero ali e a medicao mais grave da coluna -- nao vendeu nada.
+    /// Sumir da lista o transformaria em "sem dado".
+    /// </para>
+    /// </summary>
+    private static async Task<Dictionary<(int LojaId, string Sku), decimal>> LerVendaPregressaAsync(
+        SqlConnection conn, int redeId, DateTime inicio, DateTime fim, byte tipoCalculo, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT i.LojaId, i.Sku, ISNULL(SUM(v.Quantidade), 0) AS Vendido
+            FROM dbo.SugestoesCompraItens i
+            INNER JOIN dbo.SugestoesCompra s
+                ON s.RedeId = i.RedeId AND s.SugestaoId = i.SugestaoId
+            LEFT JOIN dbo.Vendas v
+                ON v.RedeId = i.RedeId AND v.LojaId = i.LojaId AND v.Sku = i.Sku
+                AND v.Data >= DATEADD(day, -{DiasDaMediaDeVenda}, CAST(s.DataHora AS date))
+                AND v.Data < CAST(s.DataHora AS date)
+            WHERE i.RedeId = @redeId AND s.TipoCalculo = @tipo
+              AND s.DataHora >= @inicio AND s.DataHora < @fim
+            GROUP BY i.LojaId, i.Sku
+            """;
+        cmd.Parameters.AddWithValue("@redeId", redeId);
+        cmd.Parameters.AddWithValue("@tipo", tipoCalculo);
+        cmd.Parameters.AddWithValue("@inicio", inicio);
+        cmd.Parameters.AddWithValue("@fim", fim);
+        cmd.CommandTimeout = 600;
+
+        var resultado = new Dictionary<(int, string), decimal>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+        {
+            resultado[(r.GetInt32(0), r.GetString(1))] = r.GetDecimal(2);
+        }
+        return resultado;
+    }
+
+    /// <summary>Primeiro dia de venda importado nesta rede — o limite do que da para medir.</summary>
+    private static async Task<DateOnly?> LerInicioDoHistoricoAsync(
+        SqlConnection conn, int redeId, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT MIN(Data) FROM dbo.Vendas WHERE RedeId = @redeId";
+        cmd.Parameters.AddWithValue("@redeId", redeId);
+        cmd.CommandTimeout = 600;
+
+        var valor = await cmd.ExecuteScalarAsync(ct);
+        return valor is DateTime d ? DateOnly.FromDateTime(d) : null;
     }
 
     private readonly record struct VendaDoItem(
@@ -481,6 +576,7 @@ internal sealed class SessaoResultadoMaterializador(
         tabela.Columns.Add("SobraMlUnidades", typeof(decimal));
         tabela.Columns.Add("SobraPbsValor", typeof(decimal));
         tabela.Columns.Add("SobraMlValor", typeof(decimal));
+        tabela.Columns.Add("VendaMediaDiaria", typeof(decimal));
         tabela.Columns.Add("EstoqueNaSugestao", typeof(decimal));
         tabela.Columns.Add("EstoqueNoFimDoPeriodo", typeof(decimal));
         tabela.Columns.Add("JanelaAlemDoHistorico", typeof(bool));
@@ -515,6 +611,7 @@ internal sealed class SessaoResultadoMaterializador(
                 item.SobraMlValor ?? (object)DBNull.Value,
                 // DBNull, nunca 0: "nao ha snapshot" e "terminou zerado" sao leituras opostas
                 // para o comprador, e o bulk e a ultima ponta onde a diferenca se perde calada.
+                item.VendaMediaDiaria ?? (object)DBNull.Value,
                 item.EstoqueNaSugestao ?? (object)DBNull.Value,
                 item.EstoqueNoFimDoPeriodo ?? (object)DBNull.Value,
                 item.JanelaAlemDoHistorico,

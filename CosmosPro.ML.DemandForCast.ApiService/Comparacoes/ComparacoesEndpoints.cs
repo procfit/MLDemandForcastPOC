@@ -64,6 +64,12 @@ internal static class ComparacoesEndpoints
              .Produces<SessaoAnaliseView>()
              .Produces(StatusCodes.Status404NotFound);
 
+        group.MapPost("/{id:guid}/avaliacao", RegistrarAvaliacaoAsync)
+             .WithName("RegistrarAvaliacaoDaExecucao")
+             .Produces<SessaoAvaliacaoView>()
+             .Produces(StatusCodes.Status404NotFound)
+             .Produces<ValidationErrorResponse>(StatusCodes.Status400BadRequest);
+
         group.MapDelete("/{id:guid}", ExcluirAsync)
              .WithName("ExcluirComparacaoSessao")
              .Produces(StatusCodes.Status204NoContent)
@@ -416,7 +422,8 @@ internal static class ComparacoesEndpoints
         [FromQuery] int? lojaId = null,
         [FromQuery] string? categoria = null,
         [FromQuery] string? curva = null,
-        [FromQuery] bool? somenteComAlerta = null)
+        [FromQuery] bool? somenteComAlerta = null,
+        [FromQuery] bool? somenteMlPior = null)
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
 
@@ -426,7 +433,7 @@ internal static class ComparacoesEndpoints
         take = Math.Clamp(take, 1, 200);
         skip = Math.Max(0, skip);
 
-        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta);
+        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta, somenteMlPior);
 
         var totais = await TotalizarAsync(filtrados, ct);
 
@@ -491,13 +498,14 @@ internal static class ComparacoesEndpoints
         [FromQuery] int? lojaId = null,
         [FromQuery] string? categoria = null,
         [FromQuery] string? curva = null,
-        [FromQuery] bool? somenteComAlerta = null)
+        [FromQuery] bool? somenteComAlerta = null,
+        [FromQuery] bool? somenteMlPior = null)
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
         if (await TotalDeItensAsync(db, id, redeId, ct) is null) return Results.NotFound();
 
         var coluna = OrdemItensSessao.Resolver(orderBy);
-        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta);
+        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta, somenteMlPior);
 
         var itens = await OrdemItensSessao
             .Aplicar(filtrados, coluna, desc)
@@ -506,6 +514,73 @@ internal static class ComparacoesEndpoints
 
         return Results.Ok(itens);
     }
+
+    /// <summary>
+    /// Registra o veredito rápido do comprador sobre esta execução (seção G do Quadro Resumo).
+    ///
+    /// <para>
+    /// <b>Não muda o status da sessão</b>, de propósito. Quem conclui continua sendo o envio do
+    /// questionário: a avaliação é o resumo, o questionário é o instrumento da pesquisa. Se este
+    /// endpoint concluísse, o questionário viraria opcional e o dado da dissertação deixaria de
+    /// ser coletado — ver a nota de <c>ComparacaoSessao.AvaliacaoVeredito</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// Reenviar <b>substitui</b> a avaliação anterior, e é assim de propósito: o comprador pode
+    /// mudar de ideia depois de olhar o detalhe, e o carimbo passa a ser o da última vez. Isto
+    /// não é o questionário, que é selado no envio.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> RegistrarAvaliacaoAsync(
+        Guid id,
+        AvaliacaoRequest corpo,
+        EngineDbContext db,
+        ILogger<Program> logger,
+        CancellationToken ct,
+        [FromQuery] int redeId = 1,
+        [FromQuery] Guid? usuarioId = null)
+    {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
+        if (!VereditosDaExecucao.Contains(corpo.Veredito))
+        {
+            return Results.BadRequest(new ValidationErrorResponse(
+                [$"'{corpo.Veredito}' não é um veredito válido. Use: {string.Join(", ", VereditosDaExecucao)}."]));
+        }
+
+        var sessao = await db.ComparacaoSessoes
+            .FirstOrDefaultAsync(x => x.Id == id && x.RedeId == redeId, ct);
+
+        // 404 e não 403 para sessão de outra rede, pelo mesmo motivo do resto deste arquivo:
+        // um 403 confirmaria a quem sondasse que a sessão existe em outro inquilino.
+        if (sessao is null) return Results.NotFound();
+
+        // Avaliar exige resultado na tela: sem ele o comprador estaria opinando sobre nada.
+        if (sessao.Status is not (SessaoStatus.AguardandoQuestionario or SessaoStatus.Concluida))
+        {
+            return Results.BadRequest(new ValidationErrorResponse(
+                ["Esta comparação ainda não tem resultado para avaliar."]));
+        }
+
+        sessao.AvaliacaoVeredito = corpo.Veredito;
+        sessao.AvaliacaoComentario = string.IsNullOrWhiteSpace(corpo.Comentario) ? null : corpo.Comentario.Trim();
+        sessao.AvaliacaoEm = DateTimeOffset.UtcNow;
+        sessao.AvaliacaoUsuarioId = usuarioId?.ToString();
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "Avaliacao registrada na sessao {SessaoId} (rede {RedeId}): {Veredito}", id, redeId, corpo.Veredito);
+
+        return Results.Ok(new SessaoAvaliacaoView(
+            sessao.AvaliacaoVeredito, sessao.AvaliacaoComentario, sessao.AvaliacaoEm));
+    }
+
+    /// <summary>
+    /// Os três vereditos do documento do patrocinador. Lista fechada porque a análise vai
+    /// agrupar por este valor: texto livre aqui viraria categoria nova a cada digitação.
+    /// </summary>
+    private static readonly string[] VereditosDaExecucao =
+        ["Valido", "ValidoComRessalvas", "NaoValido"];
 
     /// <summary>
     /// Agregados que a manchete materializada não carrega: previsão contra previsão
@@ -594,6 +669,10 @@ internal static class ComparacoesEndpoints
                 x.ErroPbs, x.ErroMl, x.Item.JanelaAlemDoHistorico))
             .ToListAsync(ct);
 
+        // Os totais do recorte inteiro entram aqui para o Quadro Resumo nao precisar pedir uma
+        // pagina de itens so para ler agregados. Sem filtro: o quadro fala da sugestao toda.
+        var totais = await TotalizarAsync(escopo, ct);
+
         return Results.Ok(new SessaoAnaliseView(
             Itens: total,
             PorCurva: porCurva,
@@ -604,7 +683,8 @@ internal static class ComparacoesEndpoints
             SobraExtraMlUnidades: sobraExtraUnidades,
             SobraExtraMlValor: sobraExtraValor,
             PioresNaCompra: pioresNaCompra,
-            PioresNaPrevisao: pioresNaPrevisao));
+            PioresNaPrevisao: pioresNaPrevisao,
+            Totais: totais));
     }
 
     /// <summary>
@@ -634,7 +714,8 @@ internal static class ComparacoesEndpoints
     /// </summary>
     private static IQueryable<ComparacaoSessaoItem> AplicarFiltros(
         IQueryable<ComparacaoSessaoItem> itens, int? lojaId, string? categoria, string? curva,
-        bool? somenteComAlerta = null)
+        bool? somenteComAlerta = null,
+        bool? somenteMlPior = null)
     {
         if (lojaId is { } loja)
         {
@@ -665,6 +746,15 @@ internal static class ComparacoesEndpoints
                 i.MercadoAlerta == MercadoAlertas.Ruptura
                 || i.MercadoAlerta == MercadoAlertas.SemCausa
                 || i.MercadoAlerta == MercadoAlertas.NaoApurado);
+        }
+
+        if (somenteMlPior == true)
+        {
+            // MESMA clausula do recorte "onde o ML foi pior" em AnaliseAsync (`sobrouMais`).
+            // Se as duas divergirem, o bloco dira "16 itens" e o link abrira uma tabela com
+            // outra contagem -- e o comprador vai acreditar na que estiver na frente dele.
+            itens = itens.Where(i =>
+                i.SobraMlUnidades != null && i.SobraMlUnidades > i.SobraPbsUnidades);
         }
 
         return itens;
@@ -698,6 +788,10 @@ internal static class ComparacoesEndpoints
                 CompraPbs = g.Sum(i => i.CompraSugeridaPbs),
                 CompraMl = g.Sum(i => i.CompraSugeridaMl),
                 ComCompraMl = g.Count(i => i.CompraSugeridaMl != null),
+                // A compra do PBS restrita aos itens que o ML calculou. Ficou de fora quando a
+                // sobra e o valor ganharam o lado comparavel, e a faixa de comparacao exibia o
+                // total (207 un.) ao lado dos 68 do ML: mesmo defeito, coluna diferente.
+                CompraPbsComparavel = g.Sum(i => i.CompraSugeridaMl != null ? i.CompraSugeridaPbs : 0m),
                 Vendido = g.Sum(i => i.VendidoNaJanela),
                 SobraPbs = g.Sum(i => i.SobraPbsUnidades),
                 SobraMl = g.Sum(i => i.SobraMlUnidades),
@@ -715,18 +809,26 @@ internal static class ComparacoesEndpoints
                 ValorPbsComparavel = g.Sum(i =>
                     i.SobraMlValor != null && i.SobraPbsValor != null ? i.SobraPbsValor : 0m),
                 ComMercado = g.Count(i => i.MercadoAlerta != null),
+                // Os TRES alertas de verdade, nunca "!= SemAlerta": nulo nao sobrevive a
+                // comparacao de desigualdade em SQL, e item sem dado de mercado nao e alerta —
+                // e "nao avaliado". Mesma clausula que o filtro "so com alerta" usa.
+                ComAlerta = g.Count(i =>
+                    i.MercadoAlerta == MercadoAlertas.Ruptura
+                    || i.MercadoAlerta == MercadoAlertas.SemCausa
+                    || i.MercadoAlerta == MercadoAlertas.NaoApurado),
             })
             .FirstOrDefaultAsync(ct);
 
         // Recorte vazio: GroupBy não devolve linha nenhuma.
         if (b is null)
         {
-            return new TotaisDosItens(0, 0m, null, 0, 0m, 0m, null, null, 0, null, 0, null, null, 0);
+            return new TotaisDosItens(0, 0m, null, null, 0, 0m, 0m, null, null, 0, null, 0, null, null, 0, 0);
         }
 
         return new TotaisDosItens(
             b.Itens,
             b.CompraPbs,
+            b.ComCompraMl == 0 ? null : b.CompraPbsComparavel,
             b.ComCompraMl == 0 ? null : b.CompraMl,
             b.ComCompraMl,
             b.Vendido,
@@ -739,7 +841,8 @@ internal static class ComparacoesEndpoints
             b.ComValorMl == 0 ? null : b.ValorPbsComparavel,
             b.ComValorMl == 0 ? null : b.ValorMl,
             b.ComValorMl,
-            b.ComMercado);
+            b.ComMercado,
+            b.ComAlerta);
     }
 
     /// <summary>
@@ -944,7 +1047,8 @@ internal static class ComparacoesEndpoints
             i.Fabricante,
             i.Ean,
             i.EstoqueNaSugestao,
-            i.EstoqueNoFimDoPeriodo);
+            i.EstoqueNoFimDoPeriodo,
+            i.VendaMediaDiaria);
 
     private static readonly Expression<Func<ComparacaoSessao, SessaoView>> ProjectToView =
         s => new SessaoView(
@@ -960,7 +1064,10 @@ internal static class ComparacoesEndpoints
             s.MensagemErro,
             s.SkusSemCadastro,
             null,
-            s.CargaStageId != null);
+            s.CargaStageId != null,
+            s.AvaliacaoVeredito,
+            s.AvaliacaoComentario,
+            s.AvaliacaoEm);
 
     /// <summary>
     /// Projeção do detalhe — a única que traz o <c>ResultadoJson</c>. A listagem não o traz
@@ -981,13 +1088,19 @@ internal static class ComparacoesEndpoints
             s.MensagemErro,
             s.SkusSemCadastro,
             s.ResultadoJson,
-            s.CargaStageId != null);
+            s.CargaStageId != null,
+            s.AvaliacaoVeredito,
+            s.AvaliacaoComentario,
+            s.AvaliacaoEm);
 
     private static SessaoView ToView(ComparacaoSessao s) => new(
         s.Id, s.Nome, s.Status.ToString(), s.CriadoEm,
         s.SugestaoId, s.SugestaoDescricao, s.SugestaoDataHora, s.SugestaoTipoCalculo,
         s.MotivoInviabilidade, s.MensagemErro, s.SkusSemCadastro, s.ResultadoJson,
-        s.CargaStageId != null);
+        s.CargaStageId != null,
+        s.AvaliacaoVeredito,
+        s.AvaliacaoComentario,
+        s.AvaliacaoEm);
 }
 
 internal sealed record CreateSessaoRequest(string? Nome);
@@ -1005,7 +1118,12 @@ internal sealed record SessaoView(
     string? MensagemErro,
     int? SkusSemCadastro = null,
     string? ResultadoJson = null,
-    bool DadosEnviados = false);
+    bool DadosEnviados = false,
+    // Avaliacao do comprador (secao G). Nulo = ainda nao avaliou; a tela precisa distinguir
+    // isso de "avaliou como nao valido".
+    string? AvaliacaoVeredito = null,
+    string? AvaliacaoComentario = null,
+    DateTimeOffset? AvaliacaoEm = null);
 
 /// <param name="OrderBy">
 /// Coluna <b>efetivamente</b> aplicada, depois da whitelist (<see cref="OrdemItensSessao"/>).
@@ -1032,6 +1150,7 @@ internal sealed record SessaoItensPage(
 internal sealed record TotaisDosItens(
     int Itens,
     decimal CompraPbsUnidades,
+    decimal? CompraPbsComparavelUnidades,
     decimal? CompraMlUnidades,
     int ItensComCompraMl,
     decimal VendidoNaJanela,
@@ -1047,7 +1166,10 @@ internal sealed record TotaisDosItens(
     // Itens do recorte com medição de mercado. Sai daqui, e não da página carregada, porque
     // a página traz 25 linhas de um recorte que pode ter milhares -- contar na tela diria
     // "20 de 25" onde a resposta é "21 de 43".
-    int ItensComDadoDeMercado = 0);
+    int ItensComDadoDeMercado = 0,
+    // Itens com um dos tres alertas de verdade. Diferente de ItensComDadoDeMercado, que conta
+    // tambem os avaliados e sem alerta.
+    int ItensComAlertaDeMercado = 0);
 
 /// <param name="TemItemSemCategoria">
 /// Se existe item sem categoria no cadastro. A tela usa isto para oferecer o recorte "sem
@@ -1074,6 +1196,11 @@ internal sealed record FiltrosDisponiveis(
 /// em WAPE/MAE por curva e por loja. Mandá-las em cada uma de dezenas de milhares de linhas
 /// pagaria o payload para nada.
 /// </remarks>
+internal sealed record AvaliacaoRequest(string Veredito, string? Comentario);
+
+internal sealed record SessaoAvaliacaoView(
+    string? Veredito, string? Comentario, DateTimeOffset? RegistradaEm);
+
 internal sealed record SessaoItemView(
     int LojaId,
     string Sku,
@@ -1104,7 +1231,8 @@ internal sealed record SessaoItemView(
     string? Fabricante = null,
     string? Ean = null,
     decimal? EstoqueNaSugestao = null,
-    decimal? EstoqueNoFimDoPeriodo = null);
+    decimal? EstoqueNoFimDoPeriodo = null,
+    decimal? VendaMediaDiaria = null);
 
 /// <param name="Itens">População inteira da sessão — o denominador de todo o resto.</param>
 /// <param name="SobraExtraMlUnidades">
@@ -1123,7 +1251,10 @@ internal sealed record SessaoAnaliseView(
     decimal SobraExtraMlValor,
     IReadOnlyList<ItemPiorView> PioresNaCompra,
     IReadOnlyList<ItemPiorView> PioresNaPrevisao,
-    IReadOnlyList<SessaoFatiaView>? PorGiro = null);
+    IReadOnlyList<SessaoFatiaView>? PorGiro = null,
+    // Totais do recorte inteiro, para o Quadro Resumo nao pedir uma pagina de itens so para
+    // ler agregado. Anulavel para nao quebrar consumidor de payload anterior.
+    TotaisDosItens? Totais = null);
 
 internal sealed record SessaoFatiaView(
     string Chave,

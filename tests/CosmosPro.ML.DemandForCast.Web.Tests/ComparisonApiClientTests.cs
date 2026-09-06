@@ -199,6 +199,7 @@ public sealed class ComparisonApiClientTests
         var t = new TotaisDosItens(
             Itens: 20_153,
             CompraPbsUnidades: 207m,
+            CompraPbsComparavelUnidades: 66m,
             CompraMlUnidades: 68m,
             ItensComCompraMl: itensComSobraMl,
             VendidoNaJanela: 1_542m,
@@ -224,6 +225,7 @@ public sealed class ComparisonApiClientTests
     private static TotaisDosItens Totais(decimal? sobraMl, decimal? valorMl) => new(
         Itens: 2031,
         CompraPbsUnidades: 34m,
+        CompraPbsComparavelUnidades: sobraMl is null ? null : 30m,
         CompraMlUnidades: sobraMl is null ? null : 2m,
         ItensComCompraMl: sobraMl is null ? 0 : 398,
         VendidoNaJanela: 177m,

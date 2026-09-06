@@ -63,72 +63,30 @@
             @Analise.ItensComPrevisaoMl.ToString("N0") item(ns). Empate conta no total e nunca como vitória.
         </RadzenText>
 
-        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
-            <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">Abertura por giro, por curva e por loja</RadzenText>
-            <HelpTip Text="@TipRegressao" />
-        </RadzenStack>
-
-        <RadzenTabs RenderMode="TabRenderMode.Client">
-            <Tabs>
-                @foreach (var dimensao in Dimensoes(Analise))
+        @* As aberturas por giro, curva e loja MUDARAM DE CASA: agora vivem no Quadro Resumo.
+           O patrocinador pediu copia nos dois lugares e depois concordou com a mudanca — dois
+           lugares mostrando os mesmos numeros divergem com o tempo, e a ferramenta passa a dar
+           duas respostas para a mesma pergunta. Aqui fica o que e especificamente tecnico: o
+           confronto global, a explicacao dos indicadores e a recusa da venda perdida. *@
+        <RadzenCard Variant="Variant.Outlined">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
+                         JustifyContent="JustifyContent.SpaceBetween" Gap="1rem" Wrap="FlexWrap.Wrap">
+                <RadzenStack Gap="0.25rem">
+                    <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">
+                        Aberturas por giro, por curva e por loja
+                    </RadzenText>
+                    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                        Elas ficam no Quadro Resumo, com o placar e o menor WAPE de cada grupo.
+                    </RadzenText>
+                </RadzenStack>
+                @if (SessaoId is { } id)
                 {
-                    var fatias = dimensao.Fatias;
-                    var regressoes = fatias.Count(f => f.MlPerde);
-
-                    <RadzenTabsItem Text="@($"{dimensao.Rotulo} ({fatias.Count})")">
-                        @if (fatias.Count == 0)
-                        {
-                            <RadzenText TextStyle="TextStyle.Body2" Style="color: var(--rz-text-secondary-color)">
-                                Sem dados nesta abertura.
-                            </RadzenText>
-                        }
-                        else
-                        {
-                            @if (regressoes > 0)
-                            {
-                                <RadzenAlert AlertStyle="AlertStyle.Warning" Shade="Shade.Lighter" AllowClose="false" Style="margin-bottom: 0.5rem">
-                                    <RadzenIcon Icon="warning" Style="margin-right: 0.25rem; vertical-align: middle;" />
-                                    Nos itens com previsão comparável desta execução, o PBS errou menos em
-                                    @regressoes de @fatias.Count grupo(s) desta abertura.
-                                    @(Analise.Global.MlPerde
-                                        ? " Vale para o subconjunto medido — confira a cobertura acima antes de concluir sobre o método."
-                                        : " No conjunto todo o resultado favorece o ML: a média está escondendo estes grupos.")
-                                </RadzenAlert>
-                            }
-                            <RadzenDataGrid TItem="SessaoFatia" Data="@fatias" AllowPaging="true" PageSize="10" AllowSorting="true" Density="Density.Compact">
-                                <Columns>
-                                    <RadzenDataGridColumn TItem="SessaoFatia" Property="Chave" Title="@dimensao.Rotulo" />
-                                    <RadzenDataGridColumn TItem="SessaoFatia" Property="Itens" Title="Itens" Width="100px" TextAlign="TextAlign.Right">
-                                        <Template Context="f">@f.Itens.ToString("N0")</Template>
-                                    </RadzenDataGridColumn>
-                                    <RadzenDataGridColumn TItem="SessaoFatia" Property="ItensComPrevisaoMl" Title="Medidos" Width="110px" TextAlign="TextAlign.Right">
-                                        <Template Context="f">@f.ItensComPrevisaoMl.ToString("N0")</Template>
-                                    </RadzenDataGridColumn>
-                                    <RadzenDataGridColumn TItem="SessaoFatia" Title="WAPE do PBS" Width="140px" TextAlign="TextAlign.Right" Sortable="false">
-                                        <Template Context="f">@Pct(f.WapePbs)</Template>
-                                    </RadzenDataGridColumn>
-                                    <RadzenDataGridColumn TItem="SessaoFatia" Title="WAPE do ML" Width="140px" TextAlign="TextAlign.Right" Sortable="false">
-                                        <Template Context="f">@Pct(f.WapeMl)</Template>
-                                    </RadzenDataGridColumn>
-                                    <RadzenDataGridColumn TItem="SessaoFatia" Title="Placar (ML × PBS)" Width="160px" Sortable="false">
-                                        <Template Context="f">@f.VitoriasMl × @f.VitoriasPbs</Template>
-                                    </RadzenDataGridColumn>
-                                    <RadzenDataGridColumn TItem="SessaoFatia" Title="ML perde aqui?" Width="150px" Sortable="false">
-                                        <Template Context="f">
-                                            @if (f.MlPerde)
-                                            {
-                                                <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger); vertical-align: middle;" />
-                                                <span style="color: var(--rz-danger); margin-left: 0.25rem;">sim</span>
-                                            }
-                                        </Template>
-                                    </RadzenDataGridColumn>
-                                </Columns>
-                            </RadzenDataGrid>
-                        }
-                    </RadzenTabsItem>
+                    <RadzenButton Text="Abrir Quadro Resumo" Icon="assessment" Variant="Variant.Outlined"
+                                  Size="ButtonSize.Small" data-test="ir-para-quadro-resumo"
+                                  Click="@(() => Nav.NavigateTo($"/comparacoes/{id}/resumo"))" />
                 }
-            </Tabs>
-        </RadzenTabs>
+            </RadzenStack>
+        </RadzenCard>
 
         @* Os dois indicadores já têm tooltip nas colunas, mas tooltip não sai em print nem
            em apresentação — que é onde este quadro é lido. O texto fica visível de propósito. *@
@@ -197,6 +155,11 @@
 @code {
     [Parameter] public SessaoAnalise? Analise { get; set; }
 
+    /// <summary>Para o link do Quadro Resumo. Nulo em telas que nao sao de sessao.</summary>
+    [Parameter] public Guid? SessaoId { get; set; }
+
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+
     [Parameter] public SessaoResultadoView? Resultado { get; set; }
 
     private const string TipUnidade =
@@ -209,9 +172,6 @@
     private const string TipMae =
         "MAE: erro médio em unidades por dia. Fácil de ler, mas não comparável entre itens de giro muito " +
         "diferente — para isso, olhe o WAPE.";
-    private const string TipRegressao =
-        "Média global esconde regressão local (CLAUDE.md §6). Os grupos marcados são aqueles em que o ML erra " +
-        "mais que o ERP, inclusive quando o resultado do conjunto favorece o ML.";
 
     private sealed record BracoLinha(string Nome, double? Wape, double? Mae, int N);
 

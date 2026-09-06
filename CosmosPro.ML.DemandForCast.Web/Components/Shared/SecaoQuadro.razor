@@ -1,0 +1,21 @@
+@* Moldura de uma seção do Quadro Resumo: a faixa escura com a letra, no padrão do desenho do
+   patrocinador. A letra é parte da informação, não enfeite — é por ela que ele se refere às
+   seções ("o E é o IQVIA"), e é ela que denuncia as reservadas: o quadro vai de A a D, pula E
+   e F e retoma em G. *@
+
+<RadzenCard Variant="Variant.Outlined" class="rz-p-0" style="overflow: hidden">
+    <div style="background: var(--rz-base-800); color: var(--rz-on-base-800); padding: 0.75rem 1rem">
+        <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0; color: inherit; font-weight: 600">
+            @(string.IsNullOrEmpty(Letra) ? Titulo : $"{Letra} — {Titulo}")
+        </RadzenText>
+    </div>
+    <div class="rz-p-4" data-test="@($"secao-{(string.IsNullOrEmpty(Letra) ? "conclusao" : Letra.ToLowerInvariant())}")">
+        @ChildContent
+    </div>
+</RadzenCard>
+
+@code {
+    [Parameter] public string Letra { get; set; } = "";
+    [Parameter] public required string Titulo { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

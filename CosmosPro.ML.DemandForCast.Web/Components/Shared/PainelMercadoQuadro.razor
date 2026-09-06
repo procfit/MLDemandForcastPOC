@@ -1,0 +1,79 @@
+@* Seção E do Quadro Resumo — inteligência de mercado da IQVIA.
+
+   <b>Duas escalas convivem aqui, e confundi-las seria o erro fácil.</b> As linhas de alerta
+   falam DESTA sugestão: são itens que o comprador acabou de comprar e que o bairro vende melhor
+   do que a rede. Já as oportunidades de sortimento são da REDE INTEIRA — produtos que o mercado
+   vende e que nem estão no cadastro, portanto não podiam estar nesta compra. Somar as duas num
+   número só faria a tela responder à pergunta errada, então elas ficam separadas e rotuladas.
+
+   Por isso as oportunidades não são calculadas aqui: elas vivem em /mercado/oportunidades, que é
+   a tela da rede, e esta seção aponta para lá em vez de repetir o número fora de contexto. *@
+
+<RadzenStack Gap="1rem">
+    @if (Totais is null || Totais.ItensComDadoDeMercado == 0)
+    {
+        @* "Sem dado de mercado" e "o mercado está bem" são afirmações opostas, e esta é a
+           primeira. Sem isso o comprador leria a ausência como aprovação. *@
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter"
+                     AllowClose="false" data-test="mercado-sem-dado">
+            <strong>Esta execução não tem medição de mercado.</strong>
+            <div style="margin-top: 0.35rem">
+                Isso não quer dizer que o mercado esteja bem — quer dizer que uma das pontes não
+                fechou: a loja pode estar sem CNPJ no cadastro, o CNPJ pode estar fora do painel
+                da IQVIA, os produtos podem estar sem código de barras, ou não há relatório da
+                IQVIA cobrindo um mês anterior ao da sugestão.
+            </div>
+        </RadzenAlert>
+    }
+    else
+    {
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap">
+            <Totalizador Rotulo="Registros com medição de mercado"
+                         Valor="@($"{Totais.ItensComDadoDeMercado:N0}")" />
+            <Totalizador Rotulo="Com alerta"
+                         Valor="@($"{Totais.ItensComAlertaDeMercado:N0}")"
+                         Nota="@NotaDoAlerta()" />
+        </RadzenStack>
+
+        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+            O alerta acende quando a participação do item no bairro fica abaixo da metade da
+            participação que a rede tem naquele mesmo bairro. Ele diz <strong>onde olhar</strong>,
+            não o que fazer: a causa pode ser ruptura, preço, exposição ou o próprio cadastro.
+        </RadzenText>
+
+        <RadzenButton Text="Ver os itens com alerta" Icon="filter_alt" Variant="Variant.Outlined"
+                      Size="ButtonSize.Small" data-test="ir-para-alertas"
+                      Click="@(() => Nav.NavigateTo($"/comparacoes/{SessaoId}"))" />
+    }
+
+    <RadzenCard Variant="Variant.Outlined">
+        <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0 0 0.35rem 0">
+            Oportunidades de sortimento
+        </RadzenText>
+        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0 0 0.75rem 0">
+            Produtos que o mercado do bairro vende e que <strong>não estão no cadastro da rede</strong>.
+            Eles são da rede inteira, e não desta sugestão — por definição não podiam estar nesta
+            compra, então somá-los aos alertas acima responderia outra pergunta.
+        </RadzenText>
+        <RadzenButton Text="Abrir oportunidades de sortimento" Icon="open_in_new"
+                      Variant="Variant.Outlined" Size="ButtonSize.Small"
+                      Click="@(() => Nav.NavigateTo("/mercado/oportunidades"))" />
+    </RadzenCard>
+</RadzenStack>
+
+@code {
+    [Parameter] public Guid SessaoId { get; set; }
+    [Parameter] public TotaisDosItens? Totais { get; set; }
+
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+
+    /// <summary>
+    /// Zero alerta sobre uma base medida é resultado, e a nota precisa dizer isso — deixar só o
+    /// "0" faria parecer que a medição não rodou.
+    /// </summary>
+    private string? NotaDoAlerta() =>
+        Totais is null ? null
+        : Totais.ItensComAlertaDeMercado == 0
+            ? $"nenhum dos {Totais.ItensComDadoDeMercado:N0} medidos disparou alerta"
+            : $"de {Totais.ItensComDadoDeMercado:N0} registros medidos";
+}

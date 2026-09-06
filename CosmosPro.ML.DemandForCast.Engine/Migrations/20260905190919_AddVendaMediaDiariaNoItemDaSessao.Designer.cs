@@ -4,6 +4,7 @@ using CosmosPro.ML.DemandForCast.Engine;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CosmosPro.ML.DemandForCast.Engine.Migrations
 {
     [DbContext(typeof(EngineDbContext))]
-    partial class EngineDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260905190919_AddVendaMediaDiariaNoItemDaSessao")]
+    partial class AddVendaMediaDiariaNoItemDaSessao
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -144,21 +147,6 @@ namespace CosmosPro.ML.DemandForCast.Engine.Migrations
 
                     b.Property<DateTimeOffset>("AtualizadoEm")
                         .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("AvaliacaoComentario")
-                        .HasMaxLength(4000)
-                        .HasColumnType("nvarchar(4000)");
-
-                    b.Property<DateTimeOffset?>("AvaliacaoEm")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("AvaliacaoUsuarioId")
-                        .HasMaxLength(450)
-                        .HasColumnType("nvarchar(450)");
-
-                    b.Property<string>("AvaliacaoVeredito")
-                        .HasMaxLength(30)
-                        .HasColumnType("nvarchar(30)");
 
                     b.Property<Guid?>("CargaStageId")
                         .HasColumnType("uniqueidentifier");

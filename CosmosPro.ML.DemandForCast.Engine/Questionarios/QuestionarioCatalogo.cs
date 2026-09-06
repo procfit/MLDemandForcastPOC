@@ -32,8 +32,15 @@ public sealed record SecaoDef(string Titulo, string? Descricao, IReadOnlyList<Pe
 /// diferença de variante ("artefacto"/"stocks"/"ruturas" contra "artefato"/"estoque"/"rupturas")
 /// é visível na tela de propósito: isto é instrumento de pesquisa, e reescrever enunciado
 /// invalida a comparação com o que foi submetido. Não "corrija" para pt-BR, e não reordene as
-/// perguntas — os códigos (A1–A3, B1–B7) são os do documento e é por eles que a análise casa as
-/// respostas. A4 do documento é a única ausente, por decisão registrada onde ela caberia.
+/// perguntas — os códigos (A1–A3, B1–B12) são os do documento e é por eles que a análise casa
+/// as respostas. A4 do documento é a única ausente, por decisão registrada onde ela caberia.
+/// </para>
+///
+/// <para>
+/// <b>Conteúdo da Versão 5 do Apêndice A</b>, recebida em 05/09/2026. Ela acrescentou cinco
+/// afirmações à Parte B e <b>reaproveitou o código B7</b>: o que era B7 na V2 (uso na operação
+/// diária) passou a ser B12, e B7 virou a afirmação sobre IQVIA e sortimento. Por isso a análise
+/// tem de agrupar por <c>(VersaoCatalogo, Codigo)</c>, nunca só por código.
 /// </para>
 ///
 /// <para>
@@ -62,7 +69,7 @@ public static class QuestionarioCatalogo
     /// enquanto o documento não estava disponível; nenhuma resposta foi coletada sob ela.
     /// </para>
     /// </summary>
-    public const int Versao = 2;
+    public const int Versao = 3;
 
     /// <summary>
     /// Apresentação e termo de consentimento, exibidos <b>antes</b> do primeiro passo. Não é
@@ -70,9 +77,9 @@ public static class QuestionarioCatalogo
     /// contagem de "passo N de M".
     ///
     /// <para>
-    /// <b>Isto é o que o participante consente.</b> A terceira frase afirma que não se recolhe
-    /// informação identificadora — confira contra o que <c>Questionario</c> de fato grava antes
-    /// de mudar qualquer um dos dois.
+    /// <b>Isto é o que o participante consente</b>, e tem de continuar batendo com o que
+    /// <c>Questionario</c> de fato grava. Já não bateu: o texto prometia anonimato e a tabela
+    /// guarda <c>UsuarioId</c>. Ao mexer em qualquer um dos dois, confira o outro.
     /// </para>
     /// </summary>
     public static IReadOnlyList<string> Apresentacao { get; } =
@@ -88,9 +95,16 @@ public static class QuestionarioCatalogo
         "atualmente utilizado pela organização (ERP), solicita-se a sua colaboração no " +
         "preenchimento deste questionário, respondendo de acordo com a sua perceção profissional.",
 
-        "A participação é voluntária, anónima e confidencial. Não será recolhida qualquer " +
-        "informação que permita identificar os participantes, sendo os dados utilizados " +
-        "exclusivamente para fins académicos.",
+        // A frase que prometia anonimato saiu em 05/09/2026, por decisão de quem conduz a
+        // pesquisa. Ela dizia "não será recolhida qualquer informação que permita identificar
+        // os participantes" enquanto `Questionarios.UsuarioId` grava exatamente quem respondeu:
+        // o participante consentia com uma coisa e o sistema fazia outra. A alternativa seria
+        // remover a coluna; manteve-se a coluna e corrigiu-se o texto, então o que se promete
+        // agora é confidencialidade e uso restrito — não anonimato.
+        "A participação é voluntária e confidencial. A sua resposta fica associada ao utilizador " +
+        "com que acedeu à aplicação, para que a investigação possa distinguir participantes " +
+        "distintos; os dados são utilizados exclusivamente para fins académicos e não são " +
+        "divulgados de forma individualizada.",
 
         "Tempo estimado de resposta: aproximadamente 3 minutos.",
     ];
@@ -157,6 +171,11 @@ public static class QuestionarioCatalogo
                 // valor. A análise preenche A4 a partir da própria importação. Se algum dia o
                 // extrator falar com um segundo ERP, o lugar de gravar isso é o cadastro da rede
                 // ou o manifesto do ZIP — não uma pergunta de questionário.
+                //
+                // REAFIRMADO EM 05/09/2026, ao receber a Versão 5 do Apêndice A: a V5 lista A4
+                // como campo livre, e a decisão de quem conduz a pesquisa foi mantê-la fora.
+                // A V5 aparecer com A4 não é decisão nova — o documento sempre a listou, e é
+                // justamente esta ausência que é a escolha.
             ]),
 
         new SecaoDef(
@@ -191,7 +210,38 @@ public static class QuestionarioCatalogo
                     "(por exemplo, sazonalidade, clima, epidemias e dados de mercado) representa " +
                     "uma mais-valia para melhorar a previsão da procura.", Likert),
 
+                // ATENCAO AO CODIGO: na Versao 2 o codigo B7 era a afirmacao sobre uso diario,
+                // que na V5 passou a ser B12. O codigo foi REAPROVEITADO para outra afirmacao,
+                // entao respostas de versoes diferentes NAO podem ser agrupadas por codigo:
+                // agrupe por (VersaoCatalogo, Codigo). Cada resposta guarda o retrato do
+                // enunciado exibido, entao o registro individual continua correto -- o risco e
+                // so na agregacao.
                 new PerguntaDef("B7",
+                    "Considero que a utilização de Inteligência Artificial em conjunto com os " +
+                    "dados de mercado da IQVIA pode apoiar a identificação de produtos com " +
+                    "potencial de venda que ainda não fazem parte do sortimento da organização.",
+                    Likert),
+
+                new PerguntaDef("B8",
+                    "Considero que a comparação entre os dados de mercado da IQVIA e os dados " +
+                    "internos da organização pode ajudar a identificar produtos já " +
+                    "comercializados que apresentam potencial para aumentar as vendas.", Likert),
+
+                new PerguntaDef("B9",
+                    "Considero que a integração de Inteligência Artificial, dados internos da " +
+                    "organização e informações externas de mercado pode tornar as decisões de " +
+                    "compra e gestão de stocks mais fundamentadas.", Likert),
+
+                new PerguntaDef("B10",
+                    "Considero que as quantidades de compra sugeridas pelo artefacto são " +
+                    "adequadas para apoiar as decisões de reposição de stocks.", Likert),
+
+                new PerguntaDef("B11",
+                    "As informações apresentadas pelo artefacto permitem compreender e avaliar " +
+                    "de forma clara as recomendações de compra geradas pela Inteligência " +
+                    "Artificial.", Likert),
+
+                new PerguntaDef("B12",
                     "Considero que este artefacto apresenta potencial para ser utilizado na " +
                     "operação diária da minha organização.", Likert),
             ]),

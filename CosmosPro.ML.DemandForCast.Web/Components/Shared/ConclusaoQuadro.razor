@@ -1,0 +1,93 @@
+@* Conclusão da execução.
+
+   <b>Descreve, não julga — e isso é uma decisão, não uma omissão.</b> O desenho do patrocinador
+   trazia um veredito em caixa alta ("MENOR ERRO GLOBAL COM ML; ..."), que está certo para aquela
+   execução. Produzir a frase certa para QUALQUER execução exigiria uma regra de classificação
+   que ninguém definiu, e a ferramenta passaria a anunciar uma conclusão que o comprador ainda
+   vai avaliar logo abaixo, na seção G. Ancorar a resposta dele antes de ele olhar os números
+   contamina exatamente o dado que a pesquisa coleta.
+
+   Então aqui vão fatos, com os números ao lado, e o julgamento fica com quem responde. *@
+
+<RadzenStack Gap="0.75rem">
+    @foreach (var frase in Frases())
+    {
+        <RadzenText TextStyle="TextStyle.Body1" Style="margin: 0">@frase</RadzenText>
+    }
+
+    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+        Estes são os fatos apurados nesta execução. <strong>A conclusão é sua</strong> — é ela que
+        a pesquisa registra, na seção abaixo.
+    </RadzenAlert>
+</RadzenStack>
+
+@code {
+    [Parameter] public required SessaoResultadoView Resultado { get; set; }
+    [Parameter] public required SessaoAnalise Analise { get; set; }
+
+    private IReadOnlyList<string> Frases()
+    {
+        var g = Analise.Global;
+        var (curvasMl, curvasMedidas) = SessaoAnalise.MenorWape(Analise.PorCurva);
+        var (lojasMl, lojasMedidas) = SessaoAnalise.MenorWape(Analise.PorLoja);
+        var (giroMl, giroMedidos) = SessaoAnalise.MenorWape(Analise.PorGiro);
+        var frases = new List<string>();
+
+        if (g.WapePbs is { } pbs && g.WapeMl is { } ml)
+        {
+            var quem = ml < pbs ? "o ML" : pbs < ml ? "o seu ERP" : "nenhum dos dois";
+            frases.Add(ml == pbs
+                ? $"No erro global de previsão os dois métodos empataram, em {ml:P1}, sobre {g.ItensComPrevisaoMl:N0} registros."
+                : $"No erro global de previsão {quem} errou menos: {Math.Min(pbs, ml):P1} contra "
+                  + $"{Math.Max(pbs, ml):P1}, sobre {g.ItensComPrevisaoMl:N0} registros medidos.");
+        }
+        else
+        {
+            frases.Add("O erro global de previsão não foi apurado nesta execução, então não há comparação de precisão a fazer.");
+        }
+
+        frases.Add(
+            $"Nas aberturas: o ML errou menos em {giroMl} de {giroMedidos} faixa(s) de giro, "
+            + $"{curvasMl} de {curvasMedidas} curva(s) e {lojasMl} de {lojasMedidas} loja(s). "
+            + "O que sobra de cada uma foi do seu ERP. Uma média global esconde essas diferenças, "
+            + "e é por isso que as aberturas existem.");
+
+        if (Analise.Totais is { } t && t.SobraMlUnidades is not null)
+        {
+            var compra = t.DiferencaCompraUnidades;
+            var sobra = t.DiferencaSobraUnidades;
+            var valor = t.DiferencaSobraValor;
+            frases.Add(
+                $"Na decisão de compra, sobre os {t.ItensComSobraMl:N0} registros que os dois calcularam: "
+                + $"o ML indicou {Assinado(compra, "un.")} {Direcao(compra)}, "
+                + $"{(sobra is null ? "sem sobra comparável" : $"deixou {Assinado(sobra, "un.")} {Direcao(sobra)} de sobra")}"
+                + $"{(valor is null ? "" : $" e {Assinado(valor, "R$", dinheiro: true)} {Direcao(valor)} em valor parado")}.");
+        }
+        else
+        {
+            frases.Add(
+                "Não houve decisão de compra do ML nesta execução, então a comparação de quantidade, "
+                + "sobra e valor não se aplica — e ausência de cálculo não é o mesmo que comprar zero.");
+        }
+
+        if (Resultado.ItensComPrevisaoMl < Resultado.ItensAvaliados)
+        {
+            frases.Add(
+                $"Cobertura da medição: {Resultado.ItensComPrevisaoMl:N0} de {Resultado.ItensAvaliados:N0} "
+                + "registros da sugestão entraram na comparação de previsão. O restante ficou fora por "
+                + "não ter série completa, por não caber no orçamento de SKUs do treino, ou por a janela "
+                + "avançar além do histórico importado.");
+        }
+
+        return frases;
+    }
+
+    /// <summary>Módulo do valor com unidade — a direção vai em <see cref="Direcao"/>, em palavras.</summary>
+    private static string Assinado(decimal? v, string unidade, bool dinheiro = false) =>
+        v is not { } d ? "—"
+        : dinheiro ? Math.Abs(d).ToString("C2")
+        : $"{Math.Abs(d):N0} {unidade}";
+
+    private static string Direcao(decimal? v) =>
+        v is not { } d ? "" : d > 0 ? "a mais" : d < 0 ? "a menos" : "de diferença";
+}

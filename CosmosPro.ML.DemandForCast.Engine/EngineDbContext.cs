@@ -154,6 +154,12 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
 
         modelBuilder.Entity<ComparacaoSessao>(b =>
         {
+            // Veredito gravado como texto curto, pelo mesmo criterio do Status: legivel no banco
+            // e sem depender da ordem de um enum. 30 chars cabem "ValidoComRessalvas" com folga.
+            b.Property(x => x.AvaliacaoVeredito).HasMaxLength(30);
+            b.Property(x => x.AvaliacaoComentario).HasMaxLength(4000);
+            b.Property(x => x.AvaliacaoUsuarioId).HasMaxLength(450);
+
             b.ToTable("ComparacaoSessoes");
             b.HasKey(x => x.Id);
 
@@ -213,6 +219,9 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             // Espelham SugestoesCompraItens.EstoqueSaldo e EstoquesDiarios.QuantidadeEmEstoque,
             // as duas DECIMAL(15,3) e DECIMAL(12,3) no Stage. O default do EF seria (18,2) e
             // truncaria a terceira casa em silencio.
+            // Mesma precisao de DemandaDia no Stage (12,4): as duas sao taxa por dia e a tela
+            // as poe lado a lado.
+            b.Property(x => x.VendaMediaDiaria).HasPrecision(12, 4);
             b.Property(x => x.EstoqueNaSugestao).HasPrecision(15, 3);
             b.Property(x => x.EstoqueNoFimDoPeriodo).HasPrecision(12, 3);
             b.Property(x => x.SobraPbsUnidades).HasPrecision(15, 3);

@@ -1,0 +1,71 @@
+@* Uma abertura (giro, curva ou loja) no Quadro Resumo.
+
+   Mesma forma das três de propósito: o comprador aprende a ler uma e lê as outras. A coluna
+   final é "Menor WAPE" e não "ML perde aqui?" — nomear o vencedor é simétrico, enquanto a
+   pergunta antiga só acendia para um dos lados e sugeria que o outro não podia perder. *@
+
+@if (Fatias is not { Count: > 0 })
+{
+    <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0; color: var(--rz-text-secondary-color)">
+        Sem dados nesta abertura.
+    </RadzenText>
+}
+else
+{
+    <RadzenDataGrid TItem="SessaoFatia" Data="@Fatias" AllowPaging="false" Density="Density.Compact">
+        <Columns>
+            <RadzenDataGridColumn TItem="SessaoFatia" Property="Chave" Title="@Rotulo" />
+            <RadzenDataGridColumn TItem="SessaoFatia" Property="Itens" Title="Itens" Width="100px" TextAlign="TextAlign.Right">
+                <Template Context="f">@f.Itens.ToString("N0")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoFatia" Property="ItensComPrevisaoMl" Title="Medidos" Width="110px" TextAlign="TextAlign.Right">
+                <Template Context="f">@f.ItensComPrevisaoMl.ToString("N0")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoFatia" Title="WAPE PBS" Width="130px" TextAlign="TextAlign.Right" Sortable="false">
+                <Template Context="f">@Pct(f.WapePbs)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoFatia" Title="WAPE ML" Width="130px" TextAlign="TextAlign.Right" Sortable="false">
+                <Template Context="f">@Pct(f.WapeMl)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoFatia" Title="Placar ML × PBS" Width="150px" Sortable="false">
+                <Template Context="f">@f.VitoriasMl × @f.VitoriasPbs</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoFatia" Title="Menor WAPE" Width="140px" Sortable="false">
+                <Template Context="f">
+                    @* Sem métrica nos dois lados não há vencedor a declarar. "Não se aplica" e
+                       não célula vazia: vazio leria como empate, que é outra afirmação. *@
+                    @if (f.WapePbs is not { } pbs || f.WapeMl is not { } ml)
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">não se aplica</span>
+                    }
+                    else if (ml < pbs)
+                    {
+                        <span style="color: var(--rz-success)">ML</span>
+                    }
+                    else if (pbs < ml)
+                    {
+                        <span style="color: var(--rz-warning)">PBS</span>
+                    }
+                    else
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">empate</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+
+    <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter"
+                 AllowClose="false" Style="margin-top: 0.75rem">
+        @Leitura
+    </RadzenAlert>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<SessaoFatia>? Fatias { get; set; }
+    [Parameter] public required string Rotulo { get; set; }
+    [Parameter] public required string Leitura { get; set; }
+
+    /// <summary>Nulo vira texto, nunca traço: "—" numa métrica lê como zero.</summary>
+    private static string Pct(double? v) => v is { } d ? d.ToString("P1") : "não apurado";
+}

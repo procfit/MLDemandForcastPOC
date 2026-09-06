@@ -1,0 +1,174 @@
+@* Seção A do Quadro Resumo: o confronto PBS × ML numa tabela só.
+
+   <b>Duas regras de leitura governam esta tabela, e as duas vieram de erro real.</b>
+
+   Primeira: toda linha comparativa soma os DOIS braços sobre os MESMOS registros. O total da
+   sugestão existe, mas vive no rodapé, fora do confronto — porque somar o total do PBS contra o
+   subconjunto do ML mede tamanho de população, não método, e já produziu na tela uma "economia"
+   de R$ 39 mil que na mesma população é de R$ 74.
+
+   Segunda: a coluna "Resultado" nomeia quem ficou melhor naquela linha, e nada mais. Ela não
+   soma placar nem declara vencedor da execução — quem julga é o comprador, na seção G. *@
+
+<div class="rz-mb-3">
+    <RadzenDataGrid TItem="LinhaResultado" Data="@Linhas()" AllowPaging="false" Density="Density.Compact">
+        <Columns>
+            <RadzenDataGridColumn TItem="LinhaResultado" Property="Cenario" Title="Cenário avaliado" />
+            <RadzenDataGridColumn TItem="LinhaResultado" Title="PBS" Width="150px" TextAlign="TextAlign.Right">
+                <Template Context="l">@l.Pbs</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LinhaResultado" Title="ML" Width="150px" TextAlign="TextAlign.Right">
+                <Template Context="l">@l.Ml</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LinhaResultado" Title="Resultado" Width="190px">
+                <Template Context="l">
+                    <span style="color: @CorDoResultado(l.Favorecido)">@l.Resultado</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LinhaResultado" Property="Leitura" Title="Leitura" />
+        </Columns>
+    </RadzenDataGrid>
+</div>
+
+<RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
+    <strong>Total da sugestão — e por que ele está fora do confronto acima.</strong>
+    <div style="margin-top: 0.35rem" data-test="total-da-sugestao">
+        O ERP comprou @Un(Totais?.CompraPbsUnidades) e deixou @Un(Totais?.SobraPbsUnidades) de sobra,
+        @(Totais?.SobraPbsValor is { } v ? $"somando {v:C2} parados" : "sem valor apurado") sobre os
+        @(Resultado.ItensAvaliados.ToString("N0")) registros da sugestão.
+        <strong>Estes totais não são a base da comparação:</strong> o braço de ML só alcançou
+        @(Resultado.ItensComDecisaoMl.ToString("N0")) deles, e subtrair um do outro mediria a
+        diferença de população, não a dos métodos.
+    </div>
+</RadzenAlert>
+
+@code {
+    [Parameter] public required SessaoResultadoView Resultado { get; set; }
+    [Parameter] public required SessaoAnalise Analise { get; set; }
+
+    private TotaisDosItens? Totais => Analise.Totais;
+
+    private sealed record LinhaResultado(
+        string Cenario, string Pbs, string Ml, string Resultado, string Leitura, Favorecido Favorecido);
+
+    private enum Favorecido { Ml, Pbs, Neutro }
+
+    private IReadOnlyList<LinhaResultado> Linhas()
+    {
+        var g = Analise.Global;
+        var (curvasMl, curvasMedidas) = SessaoAnalise.MenorWape(Analise.PorCurva);
+        var (lojasMl, lojasMedidas) = SessaoAnalise.MenorWape(Analise.PorLoja);
+        var semVenda = Analise.PorGiro?.FirstOrDefault(f => f.ItensComPrevisaoMl > 0 && f.SomaDemandaRealDiaria == 0m);
+
+        return
+        [
+            Metrica("WAPE da previsão", g.WapePbs, g.WapeMl, Pct,
+                $"Base comum de {g.ItensComPrevisaoMl:N0} registros"),
+
+            Metrica("MAE da previsão (un./dia)", g.MaePbs, g.MaeMl, Num, "Menor é melhor"),
+
+            Placar("Menor erro item a item", Analise.VitoriasPbs, Analise.VitoriasMl,
+                $"{Analise.Empates:N0} empate(s) em {Analise.ItensComPrevisaoMl:N0} registros"),
+
+            semVenda is null
+                ? Neutra("Menor erro nos registros sem venda", "—", "—", "Sem registros nesta faixa")
+                // Rotulo corrigido a pedido do proprio patrocinador: no desenho original dizia
+                // "Itens sem venda" com estes numeros, e eles nao sao contagem de itens — sao o
+                // PLACAR do grupo. 1.265 itens sem venda seria pior que 770, nao melhor.
+                : Placar("Menor erro nos registros sem venda", semVenda.VitoriasPbs, semVenda.VitoriasMl,
+                    $"{semVenda.ItensComPrevisaoMl:N0} registros nesta faixa"),
+
+            Placar("Curvas com menor WAPE", curvasMedidas - curvasMl, curvasMl,
+                $"{curvasMedidas:N0} curva(s) com métrica apurada"),
+
+            Placar("Lojas com menor WAPE", lojasMedidas - lojasMl, lojasMl,
+                $"{lojasMedidas:N0} loja(s) com métrica apurada"),
+
+            // As tres linhas de compra/sobra/valor usam SEMPRE o lado comparavel do PBS.
+            Comparavel("Quantidade de compra — mesmos registros",
+                Totais?.CompraPbsComparavelUnidades, Totais?.CompraMlUnidades, Un,
+                "Comprar mais ou menos não define melhor método", inverter: false, neutro: true),
+
+            Comparavel("Sobra final — mesmos registros",
+                Totais?.SobraPbsComparavelUnidades, Totais?.SobraMlUnidades, Un,
+                "Menor sobra é melhor", inverter: true),
+
+            Comparavel("Valor parado — mesmos registros",
+                Totais?.SobraPbsComparavelValor, Totais?.SobraMlValor, Dinheiro,
+                "Menor valor parado é melhor", inverter: true),
+
+            Neutra("Registros com compra comparável",
+                $"{Resultado.ItensComDecisaoMl:N0}", $"{Resultado.ItensComDecisaoMl:N0}",
+                "Mesma base nos dois braços"),
+
+            Neutra("Registros com previsão comparável",
+                $"{Resultado.ItensComPrevisaoMl:N0}", $"{Resultado.ItensComPrevisaoMl:N0}",
+                $"{Percentual(Resultado.ItensComPrevisaoMl, Resultado.ItensAvaliados)} da sugestão"),
+
+            Neutra("Registros com venda positiva na previsão medida",
+                $"{Analise.RegistrosComVendaPositiva:N0}", $"{Analise.RegistrosComVendaPositiva:N0}",
+                "Não é o total com venda na sugestão"),
+        ];
+    }
+
+    /// <summary>
+    /// Linha de métrica em que <b>menor é melhor</b>. Nulo dos dois lados vira "não apurado" e
+    /// não empate — são afirmações diferentes, e empate é medida igual.
+    /// </summary>
+    private static LinhaResultado Metrica(
+        string cenario, double? pbs, double? ml, Func<double?, string> fmt, string leitura)
+    {
+        if (pbs is not { } p || ml is not { } m)
+        {
+            return new(cenario, fmt(pbs), fmt(ml), "não apurado", leitura, Favorecido.Neutro);
+        }
+
+        return new(cenario, fmt(pbs), fmt(ml),
+            p == m ? "empate" : m < p ? "menor erro: ML" : "menor erro: PBS",
+            leitura, p == m ? Favorecido.Neutro : m < p ? Favorecido.Ml : Favorecido.Pbs);
+    }
+
+    private static LinhaResultado Placar(string cenario, int pbs, int ml, string leitura) =>
+        new(cenario, $"{pbs:N0}", $"{ml:N0}",
+            pbs == ml ? "empate" : ml > pbs ? "ML em mais registros" : "PBS em mais registros",
+            leitura, pbs == ml ? Favorecido.Neutro : ml > pbs ? Favorecido.Ml : Favorecido.Pbs);
+
+    /// <summary>
+    /// Linha em que os dois lados somam o <b>mesmo subconjunto</b>. Quando um dos lados é nulo o
+    /// braço de ML não existe nesta execução, e a linha diz isso em vez de mostrar um vencedor.
+    /// </summary>
+    private static LinhaResultado Comparavel(
+        string cenario, decimal? pbs, decimal? ml, Func<decimal?, string> fmt, string leitura,
+        bool inverter, bool neutro = false)
+    {
+        if (pbs is not { } p || ml is not { } m)
+        {
+            return new(cenario, fmt(pbs), fmt(ml), "sem cálculo do ML", leitura, Favorecido.Neutro);
+        }
+
+        var dif = m - p;
+        var texto = dif == 0m ? "iguais" : $"ML: {(dif > 0 ? "+" : "")}{fmt(dif)}";
+        if (neutro || dif == 0m) return new(cenario, fmt(p), fmt(m), texto, leitura, Favorecido.Neutro);
+
+        var mlMelhor = inverter ? m < p : m > p;
+        return new(cenario, fmt(p), fmt(m), texto, leitura, mlMelhor ? Favorecido.Ml : Favorecido.Pbs);
+    }
+
+    private static LinhaResultado Neutra(string cenario, string pbs, string ml, string leitura) =>
+        new(cenario, pbs, ml, "mesma base", leitura, Favorecido.Neutro);
+
+    private static string CorDoResultado(Favorecido f) => f switch
+    {
+        Favorecido.Ml => "var(--rz-success)",
+        Favorecido.Pbs => "var(--rz-warning)",
+        _ => "var(--rz-text-secondary-color)",
+    };
+
+    private static string Pct(double? v) => v is { } d ? d.ToString("P1") : "não apurado";
+    private static string Num(double? v) => v is { } d ? d.ToString("N2") : "não apurado";
+    private static string Un(decimal? v) => v is { } d ? $"{d:N0} un." : "sem cálculo do ML";
+    private static string Dinheiro(decimal? v) => v is { } d ? d.ToString("C2") : "sem cálculo do ML";
+
+    private static string Percentual(int parte, int total) =>
+        total == 0 ? "—" : ((double)parte / total).ToString("P1");
+}

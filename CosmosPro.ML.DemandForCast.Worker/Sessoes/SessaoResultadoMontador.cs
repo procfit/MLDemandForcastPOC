@@ -30,6 +30,7 @@ namespace CosmosPro.ML.DemandForCast.Worker.Sessoes;
 /// janela sai necessariamente subcontada, e com ela a sobra sai inflada.
 /// </param>
 internal sealed record ItemDoStage(
+    decimal? VendaMediaDiaria,
     SugestaoItemStage Item,
     string? NomeProduto,
     string? Categoria,
@@ -272,6 +273,7 @@ internal static class SessaoResultadoMontador
                 Ean = linha.Ean,
                 // EstoqueSaldo e NOT NULL no Stage, entao aqui ele sempre existe; a coluna e
                 // anulavel para as sessoes materializadas antes dela, e nao para esta.
+                VendaMediaDiaria = linha.VendaMediaDiaria,
                 EstoqueNaSugestao = item.EstoqueSaldo,
                 EstoqueNoFimDoPeriodo = linha.EstoqueNoFimDoPeriodo,
                 Curva = string.IsNullOrWhiteSpace(item.Curva) ? null : item.Curva,

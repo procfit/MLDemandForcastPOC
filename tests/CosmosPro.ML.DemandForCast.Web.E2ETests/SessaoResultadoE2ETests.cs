@@ -200,11 +200,12 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         corpo.Should().Contain("Apurado sobre 1 de 3 item(ns) da sugestão",
             "a métrica não fala da população inteira, e a tela precisa dizer sobre quanto ela fala");
         corpo.Should().Contain("WAPE");
-        // "por giro" no titulo: giro e a PRIMEIRA aba e a dimensao em que o resultado do ML de
-        // fato varia, e o rotulo antigo ("por curva e por loja") a omitia -- prometia menos do
-        // que a tela entrega, justamente na abertura que importa.
-        corpo.Should().Contain("Abertura por giro, por curva e por loja");
-        corpo.Should().Contain("ML perde aqui?");
+        // As tres aberturas MUDARAM de tela: vivem no Quadro Resumo desde 05/09/2026, para nao
+        // existirem em dois lugares que divergem. A Area tecnica passou a apontar para la, e e
+        // esse ponteiro que este caso afirma — sem ele, as aberturas ficariam inalcancaveis a
+        // partir daqui e ninguem perceberia.
+        corpo.Should().Contain("Aberturas por giro, por curva e por loja");
+        corpo.Should().Contain("Quadro Resumo");
 
         // A explicacao dos dois indicadores tem de ser TEXTO na pagina, e nao balaozinho de
         // ajuda: e em print e em apresentacao que este quadro e lido, e tooltip nao sai em

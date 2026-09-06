@@ -117,8 +117,6 @@ public static class ComparacaoItensExcelExporter
         l++;
         Par("Itens analisados", totais.Itens);
         Par("Compra PBS (un.)", totais.CompraPbsUnidades);
-        Par("Compra ML (un.)", Numero(totais.CompraMlUnidades));
-        Par("→ apurada sobre", $"{totais.ItensComCompraMl:N0} item(ns) com cálculo do ML");
         Par("Vendido no período (un.)", totais.VendidoNaJanela);
         Par("Sobra PBS (un.)", totais.SobraPbsUnidades);
         Par("R$ parado PBS", Numero(totais.SobraPbsValor));
@@ -130,6 +128,9 @@ public static class ComparacaoItensExcelExporter
         ws.Cell(l, 1).Value = $"Comparação PBS × ML — {totais.ItensComSobraMl:N0} item(ns)";
         ws.Cell(l, 1).Style.Font.Bold = true;
         l++;
+        Par("Compra PBS (un.) — mesmos itens", Numero(totais.CompraPbsComparavelUnidades));
+        Par("Compra ML (un.)", Numero(totais.CompraMlUnidades));
+        Par("Diferença de compra ML − PBS (un.)", Numero(totais.DiferencaCompraUnidades));
         Par("Sobra PBS (un.) — mesmos itens", Numero(totais.SobraPbsComparavelUnidades));
         Par("Sobra ML (un.)", Numero(totais.SobraMlUnidades));
         Par("Diferença de sobra ML − PBS (un.)", Numero(totais.DiferencaSobraUnidades));
@@ -157,6 +158,7 @@ public static class ComparacaoItensExcelExporter
         [
             "Loja", "SKU", "Produto", "EAN", "Fabricante", "Categoria", "Curva",
             "Estoque na sugestão (un.)", "Estoque no fim (un.)",
+            "Cobertura (dias)", "Análise rápida",
             "Comprado (PBS un.)", "Compraria (ML un.)", "Vendido no período (un.)",
             "Sobrou (PBS un.)", "Sobraria (ML un.)",
             "R$ parado (PBS)", "R$ parado (ML)", "Quem ficou mais perto", "Ressalva",
@@ -187,28 +189,38 @@ public static class ComparacaoItensExcelExporter
             // Celula VAZIA, nunca zero: zero e prateleira vazia, que e medicao.
             ws.Cell(linha, 8).Value = i.EstoqueNaSugestao is { } es ? es : Blank;
             ws.Cell(linha, 9).Value = i.EstoqueNoFimDoPeriodo is { } ef ? ef : Blank;
-            ws.Cell(linha, 10).Value = i.CompraSugeridaPbs;
-            ws.Cell(linha, 11).Value = Numero(i.CompraSugeridaMl);
-            ws.Cell(linha, 12).Value = i.VendidoNaJanela;
-            ws.Cell(linha, 13).Value = i.SobraPbsUnidades;
-            ws.Cell(linha, 14).Value = Numero(i.SobraMlUnidades);
-            ws.Cell(linha, 15).Value = Numero(i.SobraPbsValor);
-            ws.Cell(linha, 16).Value = Numero(i.SobraMlValor);
-            ws.Cell(linha, 17).Value = QuemFicouMaisPerto(i);
-            ws.Cell(linha, 18).Value = i.JanelaAlemDoHistorico ? "período incompleto" : "";
+            // Celula vazia, nunca zero: zero seria "dura zero dias", que e o oposto de encalhe.
+            ws.Cell(linha, 10).Value = i.Cobertura is { } cb ? cb : Blank;
+            ws.Cell(linha, 11).Value = i.AnaliseRapida switch
+            {
+                "Vermelho" => "encalhado",
+                "Amarelo" => "atenção",
+                "Verde" => "ok",
+                "SemGiro" => "sem giro (estoque parado, zero venda em 120 dias)",
+                _ => "não avaliado",
+            };
+            ws.Cell(linha, 12).Value = i.CompraSugeridaPbs;
+            ws.Cell(linha, 13).Value = Numero(i.CompraSugeridaMl);
+            ws.Cell(linha, 14).Value = i.VendidoNaJanela;
+            ws.Cell(linha, 15).Value = i.SobraPbsUnidades;
+            ws.Cell(linha, 16).Value = Numero(i.SobraMlUnidades);
+            ws.Cell(linha, 17).Value = Numero(i.SobraPbsValor);
+            ws.Cell(linha, 18).Value = Numero(i.SobraMlValor);
+            ws.Cell(linha, 19).Value = QuemFicouMaisPerto(i);
+            ws.Cell(linha, 20).Value = i.JanelaAlemDoHistorico ? "período incompleto" : "";
 
             // Célula VAZIA, nunca zero, quando não houve medição de mercado. A planilha é
             // ordenada pelo comprador: zero no índice colocaria o item sem medição junto
             // dos piores, e zero em unidades afirmaria que o bairro não vende o item.
-            ws.Cell(linha, 19).Value = i.MercadoMes is { } m
+            ws.Cell(linha, 21).Value = i.MercadoMes is { } m
                 ? m.ToString("MM/yyyy", CultureInfo.InvariantCulture)
                 : "";
-            ws.Cell(linha, 20).Value = i.MercadoBrick ?? "";
-            ws.Cell(linha, 21).Value = i.MercadoUnidadesRede is { } ur ? ur : Blank;
-            ws.Cell(linha, 22).Value = i.MercadoUnidadesConcorrentes is { } uc ? uc : Blank;
-            ws.Cell(linha, 23).Value = i.MercadoIndiceDesempenho is { } ix ? ix : Blank;
-            ws.Cell(linha, 24).Value = i.MercadoDiasSemEstoque is { } de ? de : Blank;
-            ws.Cell(linha, 25).Value = i.AlertaDeMercadoLegivel
+            ws.Cell(linha, 22).Value = i.MercadoBrick ?? "";
+            ws.Cell(linha, 23).Value = i.MercadoUnidadesRede is { } ur ? ur : Blank;
+            ws.Cell(linha, 24).Value = i.MercadoUnidadesConcorrentes is { } uc ? uc : Blank;
+            ws.Cell(linha, 25).Value = i.MercadoIndiceDesempenho is { } ix ? ix : Blank;
+            ws.Cell(linha, 26).Value = i.MercadoDiasSemEstoque is { } de ? de : Blank;
+            ws.Cell(linha, 27).Value = i.AlertaDeMercadoLegivel
                 ?? (i.TemDadoDeMercado ? "dentro do esperado" : "sem dado de mercado");
             linha++;
         }
