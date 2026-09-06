@@ -59,11 +59,19 @@ public sealed class QuestionarioE2ETests(AppHostFixture fixture)
         var chamada = page.Locator("[data-test=chamada-quadro-resumo]");
         await chamada.WaitForAsync(new() { Timeout = 60_000 });
 
+        //    Espera-se o DOM do destino, e NAO a URL. `WaitForURLAsync` aguarda o estado
+        //    "Load", que a navegacao client-side do Blazor nao dispara — no CI isso estourou
+        //    em 30s enquanto a pagina ja estava na tela; localmente passava por timing. Um
+        //    marcador do destino e deterministico nos dois lugares.
+        //
+        //    E a ULTIMA secao do quadro, nao a primeira: a pagina e pre-renderizada e depois
+        //    reinicializada quando o circuito conecta, e esperar pela primeira devolve o
+        //    controle no meio da segunda carga, com o botao ainda fora do DOM.
         await chamada.GetByText("Abrir Quadro Resumo").ClickAsync();
-        await page.WaitForURLAsync(u => u.Contains("/resumo"), new() { Timeout = 30_000 });
+        await page.Locator("[data-test=secao-g]").WaitForAsync(new() { Timeout = 60_000 });
 
         await page.Locator("[data-test=ir-para-questionario]").ClickAsync();
-        await page.WaitForURLAsync(u => u.Contains("/questionario"), new() { Timeout = 30_000 });
+        await page.GetByText("Passo 1 de").WaitForAsync(new() { Timeout = 60_000 });
 
         var secoes = QuestionarioCatalogo.Secoes;
 
