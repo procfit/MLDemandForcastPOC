@@ -4,8 +4,13 @@
    e F e retoma em G. *@
 
 <RadzenCard Variant="Variant.Outlined" class="rz-p-0" style="overflow: hidden">
-    <div style="background: var(--rz-base-800); color: var(--rz-on-base-800); padding: 0.75rem 1rem">
-        <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0; color: inherit; font-weight: 600">
+    @* Cor fixa, e nao variavel do tema. A primeira versao usava var(--rz-on-base-800), que NAO
+       existe neste tema: o fallback deixou o texto na mesma cor do fundo e as faixas sairam como
+       retangulos escuros vazios — o titulo de cada secao simplesmente nao aparecia, sem erro
+       nenhum. O azul e o do desenho do patrocinador, e vale nos dois temas porque a faixa e
+       escura por decisao, nao por herdar o tema. *@
+    <div style="background: #16324f; color: #ffffff; padding: 0.75rem 1rem">
+        <RadzenText TextStyle="TextStyle.Subtitle1" Style="margin: 0; color: #ffffff; font-weight: 600">
             @(string.IsNullOrEmpty(Letra) ? Titulo : $"{Letra} — {Titulo}")
         </RadzenText>
     </div>

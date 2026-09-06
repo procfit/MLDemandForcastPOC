@@ -377,6 +377,80 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
         }
     }
 
+    /// <summary>
+    /// O Quadro Resumo, que passou a ser a tela onde o comprador le tudo e avalia.
+    ///
+    /// <para>
+    /// Afirma as <b>secoes</b> pelo <c>data-test</c> e nao pelo texto: os titulos sao redacao e
+    /// vao mudar; a existencia de cada bloco e o contrato. As letras importam — o desenho do
+    /// patrocinador vai de A a D, pula E e F e retoma em G, e E foi confirmado como o painel de
+    /// mercado. Uma secao que suma daqui e uma parte do quadro que o comprador deixa de ver.
+    /// </para>
+    ///
+    /// <para>
+    /// A captura no fim nao e enfeite: este quadro foi construido a partir de um PNG e nunca
+    /// tinha sido olhado por ninguem. Ela vai para o diretorio de saida do teste.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Quadro_resumo_traz_as_secoes_do_desenho_e_o_caminho_ate_o_questionario()
+    {
+        await ResultadoRenderizadoAsync();
+
+        var page = await fixture.NovaPaginaLogadaAsync();
+        try
+        {
+            // Viewport alta de propósito: o layout rola num container interno, e não no
+            // documento, então FullPage captura só o que couber na janela. Sem isso a imagem
+            // termina na seção B e as quatro seguintes ficam sem conferência.
+            await page.SetViewportSizeAsync(1500, 3800);
+            var baseUrl = fixture.WebfrontendUrl.TrimEnd('/');
+            await page.GotoAsync($"{baseUrl}/comparacoes/{_sessaoId}/resumo");
+
+            // A ÚLTIMA seção, e não a primeira: a página é pré-renderizada e depois
+            // reinicializada quando o circuito conecta, refazendo a busca. Esperar por "secao-a"
+            // casa com o HTML pré-renderizado e devolve o controle no meio da segunda carga —
+            // com a tela mostrando "Carregando…". Esperar pela G, depois de a rede sossegar,
+            // garante que o que está na tela é o resultado final.
+            await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+            await page.Locator("[data-test=secao-g]").WaitForAsync(new() { Timeout = 60_000 });
+
+            // Captura ANTES das asserções: quando uma seção falta, é a imagem que diz se a
+            // página parou de renderizar ali ou se o bloco só mudou de nome.
+            await page.ScreenshotAsync(new()
+            {
+                Path = Path.Combine(AppContext.BaseDirectory, "quadro-resumo.png"),
+                FullPage = true,
+            });
+
+            foreach (var secao in new[] { "a", "b", "c", "d", "e", "conclusao", "g" })
+            {
+                (await page.Locator($"[data-test=secao-{secao}]").CountAsync())
+                    .Should().Be(1, $"a secao '{secao}' faz parte do quadro que o patrocinador desenhou");
+            }
+
+            // A faixa de contexto declara sobre o que o quadro fala. Sem ela os numeros parecem
+            // falar da rede inteira, e nao de uma sugestao.
+            (await page.Locator("[data-test=faixa-resumo]").CountAsync()).Should().Be(1);
+
+            // O total da sugestao existe, mas fora do confronto — e a tela precisa dizer isso,
+            // porque foi somar o total do PBS contra o subconjunto do ML que produziu na tela
+            // uma "economia" que nao existia.
+            var corpo = await page.InnerTextAsync("body");
+            corpo.Should().Contain("Total da sugestão");
+            corpo.Should().Contain("não são a base da comparação");
+
+            // O caminho ate o questionario passa por aqui desde que o atalho antigo saiu.
+            (await page.Locator("[data-test=ir-para-questionario]").CountAsync())
+                .Should().Be(1, "esta e a unica porta para o instrumento da pesquisa");
+
+        }
+        finally
+        {
+            await page.CloseAsync();
+        }
+    }
+
     // --- Infra do teste ------------------------------------------------------
 
     private static readonly SemaphoreSlim Portao = new(1, 1);

@@ -77,18 +77,15 @@
         </SecaoQuadro>
 
         <SecaoQuadro Letra="B" Titulo="Abertura por giro">
-            <AberturaQuadro Fatias="@_analise.PorGiro" Rotulo="Giro (un./dia)"
-                            Leitura="@LeituraDaAbertura(_analise.PorGiro, "faixa")" />
+            <AberturaQuadro Fatias="@_analise.PorGiro" Rotulo="Giro (un./dia)" Leitura="@_leituraGiro" />
         </SecaoQuadro>
 
         <SecaoQuadro Letra="C" Titulo="Abertura por curva do ERP">
-            <AberturaQuadro Fatias="@_analise.PorCurva" Rotulo="Curva"
-                            Leitura="@LeituraDaAbertura(_analise.PorCurva, "curva")" />
+            <AberturaQuadro Fatias="@_analise.PorCurva" Rotulo="Curva" Leitura="@_leituraCurva" />
         </SecaoQuadro>
 
         <SecaoQuadro Letra="D" Titulo="Abertura por loja">
-            <AberturaQuadro Fatias="@_analise.PorLoja" Rotulo="Loja"
-                            Leitura="@LeituraDaAbertura(_analise.PorLoja, "loja")" />
+            <AberturaQuadro Fatias="@_analise.PorLoja" Rotulo="Loja" Leitura="@_leituraLoja" />
         </SecaoQuadro>
 
         <SecaoQuadro Letra="E" Titulo="Inteligência de mercado · IQVIA">
@@ -118,6 +115,9 @@
     private SessaoView? _sessao;
     private SessaoAnalise? _analise;
     private bool _carregou;
+    private string _leituraGiro = "";
+    private string _leituraCurva = "";
+    private string _leituraLoja = "";
     private readonly CancellationTokenSource _cts = new();
 
     private SessaoResultadoView? Resultado => ComparacoesApiClient.ParseResultado(_sessao?.ResultadoJson);
@@ -132,6 +132,13 @@
             if (_sessao is not null)
             {
                 _analise = await ComparacoesApi.GetAnaliseAsync(Id, _cts.Token);
+            }
+
+            if (_analise is not null)
+            {
+                _leituraGiro = LeituraDaAbertura(_analise.PorGiro, "faixa");
+                _leituraCurva = LeituraDaAbertura(_analise.PorCurva, "curva");
+                _leituraLoja = LeituraDaAbertura(_analise.PorLoja, "loja");
             }
         }
         catch (OperationCanceledException)
@@ -168,7 +175,7 @@
     private static string LeituraDaAbertura(IReadOnlyList<SessaoFatia>? fatias, string substantivo)
     {
         var (ml, medidos) = SessaoAnalise.MenorWape(fatias);
-        if (medidos == 0) return $"Nenhum grupo desta abertura teve métrica apurada nos dois métodos.";
+        if (medidos == 0) return "Nenhum grupo desta abertura teve métrica apurada nos dois métodos.";
 
         var pbs = medidos - ml;
         var plural = medidos == 1 ? substantivo : substantivo + "s";
