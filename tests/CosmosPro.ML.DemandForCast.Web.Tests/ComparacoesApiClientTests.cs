@@ -295,6 +295,162 @@ public sealed class ComparacoesApiClientTests
         t.ItensComCompraMlPositiva.Should().Be(40, "mas so mandou comprar nesses");
     }
 
+    // --- Filtros novos --------------------------------------------------------
+
+    /// <summary>
+    /// Os seis filtros pedidos pelo patrocinador viajam na query string com os nomes que a
+    /// apiservice le. Sao dois processos: um nome divergente aqui devolveria a tabela inteira
+    /// sem erro nenhum, e o comprador acreditaria estar olhando um recorte.
+    /// </summary>
+    [Fact]
+    public void Filtros_novos_viajam_na_query_string()
+    {
+        var f = new FiltroDeItens(
+            Fabricante: "EMS",
+            Alerta: "Ruptura",
+            AnaliseRapida: "Vermelho",
+            MaisPerto: "ML",
+            IndiceAbaixoDe: 0.5m,
+            Preco: "RedeMenor");
+
+        var q = f.ParaQueryString();
+
+        q.Should().Contain("&fabricante=EMS");
+        q.Should().Contain("&alerta=Ruptura");
+        q.Should().Contain("&analiseRapida=Vermelho");
+        q.Should().Contain("&maisPerto=ML");
+        q.Should().Contain("&preco=RedeMenor");
+        // Ponto e nao virgula: a query string nao carrega cultura, e "0,5" viraria dois
+        // parametros ou um numero recusado pelo servidor.
+        q.Should().Contain("&indiceAbaixoDe=0.5");
+        f.Algum.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Cada um dos seis conta como recorte por si. Se algum ficasse fora de <c>Algum</c>, a tela
+    /// mostraria "todos os itens" enquanto exibisse um subconjunto, e o botao de limpar filtro
+    /// nem apareceria.
+    /// </summary>
+    [Theory]
+    [InlineData("fabricante")]
+    [InlineData("alerta")]
+    [InlineData("analise")]
+    [InlineData("maisPerto")]
+    [InlineData("indice")]
+    [InlineData("preco")]
+    public void Cada_filtro_novo_conta_como_recorte(string qual)
+    {
+        var f = qual switch
+        {
+            "fabricante" => new FiltroDeItens(Fabricante: "EMS"),
+            "alerta" => new FiltroDeItens(Alerta: "Ruptura"),
+            "analise" => new FiltroDeItens(AnaliseRapida: "Vermelho"),
+            "maisPerto" => new FiltroDeItens(MaisPerto: "ML"),
+            "indice" => new FiltroDeItens(IndiceAbaixoDe: 0.5m),
+            _ => new FiltroDeItens(Preco: "RedeMenor"),
+        };
+
+        f.Algum.Should().BeTrue($"'{qual}' recorta a tabela");
+    }
+
+    // --- Placar de preco no painel de mercado ---------------------------------
+
+    /// <summary>
+    /// O comparativo de precos que o patrocinador pediu para o painel de mercado.
+    ///
+    /// <para>
+    /// <b>Sao TRES grupos e nao dois.</b> No exemplo dele os dois lados somavam exatamente o
+    /// total ("dos 11.765 comparados, 5.765 IQVIA menor e 6.000 Retiro menor"), sem sobra. Na
+    /// pratica existe um terceiro: o item em que a rede nao vendeu nada e por isso nao tem preco
+    /// a comparar. Ele nao e "mais caro" nem "mais barato", e jogá-lo em qualquer um dos dois
+    /// lados inventaria um resultado. Sem o terceiro numero a soma nao fecha e a tela parece
+    /// errada.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Placar_de_preco_declara_tambem_os_itens_sem_comparacao()
+    {
+        var t = Totais(
+            sobraPbsTotal: 4194m, sobraPbsComparavel: 3692m, sobraMl: 3693m,
+            comMercado: 11_765, comPrecoComparavel: 8_000,
+            precoRedeMenor: 3_400, precoRedeMaior: 4_500);
+
+        t.ItensSemPrecoComparavel.Should().Be(3_765,
+            "dos 11.765 com medicao, 8.000 tem preco nos dois lados");
+        t.ItensComPrecoEmpatado.Should().Be(100, "8.000 - 3.400 - 4.500");
+    }
+
+    /// <summary>
+    /// Sem medicao de mercado no recorte, nao ha placar — e nao um placar de zero a zero, que
+    /// leria como "os precos estao iguais".
+    /// </summary>
+    [Fact]
+    public void Sem_medicao_de_mercado_nao_ha_placar_de_preco()
+    {
+        var t = Totais(
+            sobraPbsTotal: 4194m, sobraPbsComparavel: 3692m, sobraMl: 3693m,
+            comMercado: 0, comPrecoComparavel: 0, precoRedeMenor: 0, precoRedeMaior: 0);
+
+        t.TemPlacarDePreco.Should().BeFalse();
+    }
+
+    // --- Preco medio da IQVIA -------------------------------------------------
+
+    /// <summary>
+    /// Preco medio = valor da IQVIA dividido pelas unidades da IQVIA, nos dois lados. Regra
+    /// definida pelo patrocinador em 06/09/2026, e ele confirmou a opcao de tirar OS DOIS
+    /// numeros da mesma planilha — que e o que torna a comparacao entre eles legitima.
+    /// </summary>
+    [Fact]
+    public void Preco_medio_divide_valor_por_unidades_nos_dois_lados()
+    {
+        var item = ComMercado(unidadesRede: 12m, valorRede: 300m,
+                              unidadesConc: 988m, valorConc: 19_760m);
+
+        item.PrecoMedioRede.Should().Be(25m);
+        item.PrecoMedioConcorrentes.Should().Be(20m);
+        item.RedeMaisCaraQueOMercado.Should().BeTrue("25 e mais que 20");
+    }
+
+    /// <summary>
+    /// <b>Unidades zero nao vira preco zero.</b> Zero unidades com valor zero e o caso comum do
+    /// lado da rede: o item existe no bairro, os concorrentes venderam e a rede nao vendeu nada.
+    /// Dividir daria erro; gravar zero afirmaria que a rede vende de graca, e a tela ordenaria
+    /// esse item como o mais barato do mercado.
+    /// </summary>
+    [Fact]
+    public void Sem_unidades_nao_ha_preco_a_calcular()
+    {
+        var item = ComMercado(unidadesRede: 0m, valorRede: 0m,
+                              unidadesConc: 988m, valorConc: 19_760m);
+
+        item.PrecoMedioRede.Should().BeNull("nao ha preco sem venda que o sustente");
+        item.PrecoMedioConcorrentes.Should().Be(20m);
+        item.RedeMaisCaraQueOMercado.Should().BeNull("com um lado ausente nao ha comparacao");
+    }
+
+    [Fact]
+    public void Sem_dado_de_mercado_nao_ha_preco_nenhum()
+    {
+        var item = ComMercado(null, null, null, null);
+
+        item.PrecoMedioRede.Should().BeNull();
+        item.PrecoMedioConcorrentes.Should().BeNull();
+        item.RedeMaisCaraQueOMercado.Should().BeNull();
+    }
+
+    private static SessaoItem ComMercado(
+        decimal? unidadesRede, decimal? valorRede,
+        decimal? unidadesConc, decimal? valorConc) => new(
+        LojaId: 1, Sku: "SKU-1", NomeProduto: "Produto", Curva: "A",
+        CompraSugeridaPbs: 100m, CompraSugeridaMl: null, VendidoNaJanela: 0m,
+        SobraPbsUnidades: 0m, SobraMlUnidades: null, SobraPbsValor: null,
+        JanelaAlemDoHistorico: false,
+        MercadoUnidadesRede: unidadesRede,
+        MercadoUnidadesConcorrentes: unidadesConc,
+        MercadoValorRede: valorRede,
+        MercadoValorConcorrentes: valorConc);
+
     // --- Cobertura e analise rapida -------------------------------------------
 
     /// <summary>
@@ -471,7 +627,11 @@ public sealed class ComparacoesApiClientTests
         decimal? compraPbsComparavel = 66m,
         decimal? compraMl = 68m,
         int itensComCompraMl = 2106,
-        int itensComCompraMlPositiva = 40) => new(
+        int itensComCompraMlPositiva = 40,
+        int comMercado = 0,
+        int comPrecoComparavel = 0,
+        int precoRedeMenor = 0,
+        int precoRedeMaior = 0) => new(
         Itens: 20153,
         CompraPbsUnidades: compraPbsTotal,
         CompraPbsComparavelUnidades: sobraMl is null ? null : compraPbsComparavel,
@@ -487,7 +647,11 @@ public sealed class ComparacoesApiClientTests
         ItensComValorPbs: valorPbsTotal is null ? 0 : 18000,
         SobraPbsComparavelValor: valorPbsComparavel,
         SobraMlValor: valorMl,
-        ItensComValorMl: valorMl is null ? 0 : 2106);
+        ItensComValorMl: valorMl is null ? 0 : 2106,
+        ItensComDadoDeMercado: comMercado,
+        ItensComPrecoComparavel: comPrecoComparavel,
+        ItensComPrecoRedeMenor: precoRedeMenor,
+        ItensComPrecoRedeMaior: precoRedeMaior);
 
     // --- Leitura de WAPE e MAE ------------------------------------------------
 

@@ -235,6 +235,10 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             // dígitos inteiros cobrem com folga.
             b.Property(x => x.MercadoUnidadesRede).HasPrecision(15, 3);
             b.Property(x => x.MercadoUnidadesConcorrentes).HasPrecision(15, 3);
+            // Espelha MercadoObservacoes.ValorCpp, que e DECIMAL(18,4) -- o valor do brick
+            // inteiro soma muito mais que a sobra de um item, entao nao cabe em (14,4).
+            b.Property(x => x.MercadoValorRede).HasPrecision(18, 4);
+            b.Property(x => x.MercadoValorConcorrentes).HasPrecision(18, 4);
             b.Property(x => x.MercadoIndiceDesempenho).HasPrecision(9, 4);
             // Espelha MercadoObservacao.Brick.
             b.Property(x => x.MercadoBrick).HasMaxLength(80);

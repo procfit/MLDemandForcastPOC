@@ -13,6 +13,13 @@ internal sealed record SinalDoItem(
     string Brick,
     decimal UnidadesRede,
     decimal UnidadesConcorrentes,
+    // Valor ao consumidor sob a metodologia da IQVIA, somado no mesmo recorte das unidades.
+    // Serve para o preco medio (valor / unidades) que a tela exibe -- e que e PRECO-INDICE,
+    // nao preco de balcao: a IQVIA normaliza precos entre os participantes do painel. Os dois
+    // lados saem daqui, entao comparar um com o outro e legitimo; comparar qualquer um deles
+    // com preco praticado ou com PrecoCompra do Stage nao e.
+    decimal ValorRede,
+    decimal ValorConcorrentes,
     decimal Indice,
     int? DiasSemEstoque,
     string Alerta);
@@ -134,10 +141,12 @@ internal sealed class MercadoSinalLoader(
         // precisa de TODOS os EANs, não só dos itens da sugestão.
         var observacoes = await db.MercadoObservacoes.AsNoTracking()
             .Where(o => o.RedeId == redeId && o.Mes == mes && bricks.Contains(o.Brick))
-            .Select(o => new { o.Brick, o.Bandeira, o.Ean, o.Unidades })
+            .Select(o => new { o.Brick, o.Bandeira, o.Ean, o.Unidades, o.ValorCpp })
             .ToListAsync(ct);
 
-        var porBrickEan = new Dictionary<(string Brick, string Ean), (decimal Rede, decimal Conc)>();
+        var porBrickEan = new Dictionary<
+            (string Brick, string Ean),
+            (decimal Rede, decimal Conc, decimal ValorRede, decimal ValorConc)>();
         var totalPorBrick = new Dictionary<string, (decimal Rede, decimal Total)>();
 
         foreach (var o in observacoes)
@@ -157,8 +166,8 @@ internal sealed class MercadoSinalLoader(
             var chave = (o.Brick, ean);
             var atual = porBrickEan.GetValueOrDefault(chave);
             porBrickEan[chave] = ehConcorrente
-                ? (atual.Rede, atual.Conc + o.Unidades)
-                : (atual.Rede + o.Unidades, atual.Conc);
+                ? (atual.Rede, atual.Conc + o.Unidades, atual.ValorRede, atual.ValorConc + o.ValorCpp)
+                : (atual.Rede + o.Unidades, atual.Conc, atual.ValorRede + o.ValorCpp, atual.ValorConc);
         }
 
         var fatiaPorBrick = totalPorBrick.ToDictionary(
@@ -192,7 +201,9 @@ internal sealed class MercadoSinalLoader(
             if (calculado is not { } c) continue;
 
             sinais[(lojaId, sku)] = new SinalDoItem(
-                mes, brick, medida.Rede, medida.Conc, c.Indice, diasSemEstoque, c.Alerta);
+                mes, brick, medida.Rede, medida.Conc,
+                medida.ValorRede, medida.ValorConc,
+                c.Indice, diasSemEstoque, c.Alerta);
         }
 
         logger.LogInformation(

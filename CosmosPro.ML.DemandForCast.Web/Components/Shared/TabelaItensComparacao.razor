@@ -47,6 +47,45 @@
             </RadzenFormField>
         }
 
+        @if (_fabricantesDisponiveis.Count > 0)
+        {
+            <RadzenFormField Text="Fabricante" Variant="Variant.Outlined" Style="width: 230px">
+                <RadzenDropDown TValue="string" Value="@_filtro.Fabricante" Data="@_fabricantesDisponiveis"
+                                TextProperty="Rotulo" ValueProperty="Valor" AllowClear="true"
+                                Placeholder="todos" Change="@(v => AplicarAsync(_filtro with { Fabricante = (string?)v }))" />
+            </RadzenFormField>
+        }
+
+        <RadzenFormField Text="Análise rápida" Variant="Variant.Outlined" Style="width: 200px">
+            <RadzenDropDown TValue="string" Value="@_filtro.AnaliseRapida" Data="@OpcoesDeAnalise"
+                            TextProperty="Rotulo" ValueProperty="Valor" AllowClear="true"
+                            Placeholder="todas" Change="@(v => AplicarAsync(_filtro with { AnaliseRapida = (string?)v }))" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="Alerta de mercado" Variant="Variant.Outlined" Style="width: 230px">
+            <RadzenDropDown TValue="string" Value="@_filtro.Alerta" Data="@OpcoesDeAlerta"
+                            TextProperty="Rotulo" ValueProperty="Valor" AllowClear="true"
+                            Placeholder="todos" Change="@(v => AplicarAsync(_filtro with { Alerta = (string?)v }))" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="Quem ficou mais perto" Variant="Variant.Outlined" Style="width: 190px">
+            <RadzenDropDown TValue="string" Value="@_filtro.MaisPerto" Data="@OpcoesDeMaisPerto"
+                            TextProperty="Rotulo" ValueProperty="Valor" AllowClear="true"
+                            Placeholder="todos" Change="@(v => AplicarAsync(_filtro with { MaisPerto = (string?)v }))" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="Preço unitário" Variant="Variant.Outlined" Style="width: 210px">
+            <RadzenDropDown TValue="string" Value="@_filtro.Preco" Data="@OpcoesDePreco"
+                            TextProperty="Rotulo" ValueProperty="Valor" AllowClear="true"
+                            Placeholder="todos" Change="@(v => AplicarAsync(_filtro with { Preco = (string?)v }))" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="Índice vs bairro abaixo de" Variant="Variant.Outlined" Style="width: 190px">
+            <RadzenNumeric TValue="decimal?" Value="@_filtro.IndiceAbaixoDe" Step="0.05" Min="0"
+                           Placeholder="0,50" ShowUpDown="true"
+                           Change="@(v => AplicarAsync(_filtro with { IndiceAbaixoDe = v }))" />
+        </RadzenFormField>
+
         <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.35rem">
             @* O data-test vive num <span> puro, e nao no RadzenCheckBox: componente Radzen
                nao repassa atributo desconhecido para o DOM, e o seletor do E2E nao acharia
@@ -158,6 +197,20 @@
                                  Nota="“sem causa” não valida o seu preço"
                                  Ajuda="@AjudaDoPreco" />
                 </div>
+
+                @* Placar de preço pedido pelo patrocinador. TRÊS grupos, e o terceiro não é
+                   detalhe: sem ele a soma não fecha com o número de itens medidos, e a tela
+                   pareceria errada. Item em que a rede não vendeu nada não tem preço, e não
+                   pertence a nenhum dos dois lados. *@
+                @if (_totais is { TemPlacarDePreco: true } tp)
+                {
+                    <div data-test="placar-de-preco">
+                        <Totalizador Rotulo="Preço da rede vs IQVIA"
+                                     Valor="@($"{tp.ItensComPrecoRedeMenor:N0} menor · {tp.ItensComPrecoRedeMaior:N0} maior")"
+                                     Nota="@PlacarDePrecoNota(tp)"
+                                     Ajuda="@AjudaDoPlacarDePreco" />
+                    </div>
+                }
             </RadzenStack>
         </RadzenCard>
     }
@@ -433,18 +486,6 @@
                     }
                 </Template>
             </RadzenDataGridColumn>
-            <RadzenDataGridColumn TItem="SessaoItem" Property="JanelaAlemDoHistorico" Title="Ressalva" Width="170px">
-                <Template Context="i">
-                    @if (i.JanelaAlemDoHistorico)
-                    {
-                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
-                            <RadzenIcon Icon="warning" Style="color: var(--rz-warning); font-size: 1rem" />
-                            <span style="color: var(--rz-warning)">período incompleto</span>
-                            <HelpTip Size="0.85rem" Text="O período que esta compra deveria cobrir termina depois do último dia de venda que veio no arquivo. A venda deste item sai contada por menos e a sobra, por mais: não compare esta linha com as outras." />
-                        </RadzenStack>
-                    }
-                </Template>
-            </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoIndiceDesempenho"
                                   Title="Índice vs bairro" Width="150px" TextAlign="TextAlign.Right">
                 <HeaderTemplate>
@@ -469,6 +510,58 @@
                     }
                 </Template>
             </RadzenDataGridColumn>
+            @* Posicao pedida pelo patrocinador (06/09/2026): logo depois do indice vs bairro.
+               A conta e a dele — valor da IQVIA dividido pelas unidades da IQVIA, nos DOIS
+               lados, tirados da mesma planilha. Foi a opcao certa entre as duas que ele
+               levantou: a alternativa (preco da rede vindo da base de vendas dela) compararia
+               um numero normalizado pela IQVIA com um numero real, e a diferenca passaria a
+               medir metodologia em vez de posicionamento de preco. *@
+            <RadzenDataGridColumn TItem="SessaoItem" Property="PrecoMedioConcorrentes"
+                                  Title="Preço unit. IQVIA" Width="150px" TextAlign="TextAlign.Right"
+                                  Sortable="false">
+                <HeaderTemplate>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                        <span>Preço unit. IQVIA</span>
+                        <HelpTip Text="Preço médio dos CONCORRENTES neste item, no bairro e mês comparados: o valor que a IQVIA reporta dividido pelas unidades que ela reporta. ATENÇÃO: a IQVIA normaliza preços entre os participantes do painel, então este NÃO é o preço que passou no caixa — é um índice. Ele serve para comparar com a coluna ao lado, que sai do mesmo arquivo e da mesma normalização. Não compare com preço de compra." />
+                    </RadzenStack>
+                </HeaderTemplate>
+                <Template Context="i">@Dinheiro(i.PrecoMedioConcorrentes)</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoItem" Property="PrecoMedioRede"
+                                  Title="Preço unit. rede" Width="170px" TextAlign="TextAlign.Right"
+                                  Sortable="false">
+                <HeaderTemplate>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                        <span>Preço unit. rede</span>
+                        <HelpTip Text="Mesmo cálculo, para as bandeiras da própria rede, no mesmo bairro e mês. Travessão quando a rede não vendeu nenhuma unidade daquele item no recorte: sem venda não há preço a calcular, e zero afirmaria que a rede vende de graça." />
+                    </RadzenStack>
+                </HeaderTemplate>
+                <Template Context="i">
+                    @if (i.PrecoMedioRede is null)
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">—</span>
+                    }
+                    else
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
+                                     JustifyContent="JustifyContent.End" Gap="0.3rem">
+                            <span>@Dinheiro(i.PrecoMedioRede)</span>
+                            @* A seta compara os dois indices entre si, que e a unica comparacao
+                               que a metodologia da IQVIA autoriza. Nulo nao acende nada. *@
+                            @if (i.RedeMaisCaraQueOMercado is true)
+                            {
+                                <RadzenIcon Icon="arrow_upward" title="Acima do índice dos concorrentes"
+                                            Style="color: var(--rz-danger); font-size: 0.9rem" />
+                            }
+                            else if (i.RedeMaisCaraQueOMercado is false)
+                            {
+                                <RadzenIcon Icon="arrow_downward" title="Abaixo do índice dos concorrentes"
+                                            Style="color: var(--rz-success); font-size: 0.9rem" />
+                            }
+                        </RadzenStack>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoDiasSemEstoque"
                                   Title="Dias sem estoque" Width="150px" TextAlign="TextAlign.Right">
                 <HeaderTemplate>
@@ -485,6 +578,23 @@
                     else
                     {
                         <span style="color: var(--rz-text-tertiary-color)">—</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            @* "Ressalva" e "Dias sem estoque" ficam por ultimo a pedido do patrocinador
+               (07/09/2026). Ele havia sugerido REMOVER as duas por parecerem vazias, e recuou
+               quando soube o que elas fazem: Ressalva marca a linha que nao e comparavel com as
+               outras, e Dias sem estoque e a evidencia do alerta de ruptura. Ficam, no fim, onde
+               nao competem com as colunas de decisao. *@
+            <RadzenDataGridColumn TItem="SessaoItem" Property="JanelaAlemDoHistorico" Title="Ressalva" Width="170px">
+                <Template Context="i">
+                    @if (i.JanelaAlemDoHistorico)
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                            <RadzenIcon Icon="warning" Style="color: var(--rz-warning); font-size: 1rem" />
+                            <span style="color: var(--rz-warning)">período incompleto</span>
+                            <HelpTip Size="0.85rem" Text="O período que esta compra deveria cobrir termina depois do último dia de venda que veio no arquivo. A venda deste item sai contada por menos e a sobra, por mais: não compare esta linha com as outras." />
+                        </RadzenStack>
                     }
                 </Template>
             </RadzenDataGridColumn>
@@ -525,6 +635,51 @@
     /// compartilharem estado.
     /// </summary>
     [Parameter] public bool SomenteMlPior { get; set; }
+
+    /// <summary>
+    /// Estados da análise rápida em português de comprador. <b>"Não avaliado" é uma opção de
+    /// verdade</b>, e não a ausência de filtro: ela lista justamente os itens que a régua não
+    /// alcançou, que é o recorte para descobrir por que ela não alcançou.
+    /// </summary>
+    private static readonly OpcaoDeFiltro[] OpcoesDeAnalise =
+    [
+        new(Engine.Sessoes.AnaliseRapida.Vermelho, "encalhado (60 dias ou mais)"),
+        new(Engine.Sessoes.AnaliseRapida.Amarelo, "atenção (30 a 59 dias)"),
+        new(Engine.Sessoes.AnaliseRapida.Verde, "ok (menos de 30 dias)"),
+        new(Engine.Sessoes.AnaliseRapida.SemGiro, "sem giro (estoque e zero venda)"),
+        new(FiltroDeItens.Ausente, "não avaliado"),
+    ];
+
+    /// <summary>
+    /// Os alertas, um a um — e não só o "só com alerta" que a caixa de seleção já oferece.
+    /// <b>"Sem dado de mercado" e "dentro do esperado" são opções separadas</b>: a primeira não
+    /// foi avaliada, a segunda foi e passou. Juntá-las apagaria a diferença que a coluna
+    /// inteira existe para mostrar.
+    /// </summary>
+    private static readonly OpcaoDeFiltro[] OpcoesDeAlerta =
+    [
+        new(Engine.Mercado.MercadoAlertas.Ruptura, "possível perda por ruptura"),
+        new(Engine.Mercado.MercadoAlertas.SemCausa, "sem causa aparente"),
+        new(Engine.Mercado.MercadoAlertas.NaoApurado, "estoque não apurado"),
+        new(Engine.Mercado.MercadoAlertas.SemAlerta, "dentro do esperado"),
+        new(FiltroDeItens.Ausente, "sem dado de mercado"),
+    ];
+
+    private static readonly OpcaoDeFiltro[] OpcoesDeMaisPerto =
+    [
+        new("ML", "o ML ficou mais perto"),
+        new("PBS", "o seu ERP ficou mais perto"),
+        new("Empate", "empate"),
+        new(FiltroDeItens.Ausente, "sem cálculo do ML"),
+    ];
+
+    private static readonly OpcaoDeFiltro[] OpcoesDePreco =
+    [
+        new("RedeMenor", "rede mais barata que o mercado"),
+        new("IqviaMenor", "mercado mais barato que a rede"),
+    ];
+
+    private IReadOnlyList<OpcaoDeFiltro> _fabricantesDisponiveis = [];
 
     private FiltroDeItens _filtro = FiltroDeItens.Nenhum;
     private bool _mlPiorAplicado;
@@ -610,6 +765,13 @@
                 .. d.Curvas.Select(c => new OpcaoDeFiltro(c, c)),
                 .. d.TemItemSemCurva && d.Curvas.Count > 0
                     ? new[] { new OpcaoDeFiltro(FiltroDeItens.Ausente, "sem curva") }
+                    : [],
+            ];
+            _fabricantesDisponiveis =
+            [
+                .. (d.Fabricantes ?? []).Select(f => new OpcaoDeFiltro(f, f)),
+                .. d.TemItemSemFabricante && (d.Fabricantes?.Count ?? 0) > 0
+                    ? new[] { new OpcaoDeFiltro(FiltroDeItens.Ausente, "sem fabricante") }
                     : [],
             ];
             _semCategoriaNenhuma = d.TemItemSemCategoria && d.Categorias.Count == 0;
@@ -764,6 +926,34 @@
             "Tem estoque parado e não vendeu nada nos últimos 120 dias. Não há cobertura a calcular."),
         _ => null,
     };
+
+    /// <summary>
+    /// Fecha a conta do placar em palavras. Declara os empates e, sobretudo, os itens
+    /// <b>sem preço comparável</b> — sem essa frase os dois números do placar somariam menos que
+    /// os itens medidos e ninguém saberia por quê.
+    /// </summary>
+    private static string PlacarDePrecoNota(TotaisDosItens t)
+    {
+        var partes = new List<string> { $"sobre {t.ItensComPrecoComparavel:N0} com preço nos dois lados" };
+
+        if (t.ItensComPrecoEmpatado > 0) partes.Add($"{t.ItensComPrecoEmpatado:N0} igual(is)");
+
+        if (t.ItensSemPrecoComparavel > 0)
+        {
+            partes.Add($"{t.ItensSemPrecoComparavel:N0} sem preço da rede");
+        }
+
+        return string.Join(" · ", partes);
+    }
+
+    private const string AjudaDoPlacarDePreco =
+        "Preço médio de cada lado no bairro e mês comparados: o valor que a IQVIA reporta dividido " +
+        "pelas unidades que ela reporta. ATENÇÃO: a IQVIA normaliza preços entre os participantes " +
+        "do painel, então estes NÃO são preços de balcão — são índices. Comparar um com o outro é " +
+        "legítimo porque saem do mesmo arquivo e da mesma normalização; comparar qualquer um deles " +
+        "com o seu preço de compra, ou com a sua base de vendas, mede metodologia e não preço. " +
+        "Os itens “sem preço da rede” são aqueles em que a rede não vendeu nenhuma unidade no " +
+        "recorte: sem venda não há preço, e eles não entram em nenhum dos dois lados.";
 
     private static string Texto(string? valor) =>
         string.IsNullOrWhiteSpace(valor) ? "—" : valor;

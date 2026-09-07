@@ -246,6 +246,25 @@ public sealed class ComparacaoSessaoItem
     public decimal? MercadoUnidadesConcorrentes { get; set; }
 
     /// <summary>
+    /// Valor ao consumidor que a IQVIA atribuiu às bandeiras próprias da rede, no mesmo
+    /// recorte de <see cref="MercadoUnidadesRede"/>. Existe para a tela poder mostrar
+    /// <b>valor ÷ unidades</b> como preço médio.
+    ///
+    /// <para>
+    /// <b>Isto é preço-índice, não preço praticado.</b> A metodologia da IQVIA normaliza
+    /// preços entre os participantes do painel, então o número não é o que passou no caixa.
+    /// Comparar o índice da rede com o índice dos concorrentes é legítimo — os dois saem do
+    /// mesmo arquivo e da mesma normalização. Comparar qualquer um deles com
+    /// <c>SugestoesCompraItens.PrecoCompra</c>, ou com a base de vendas da rede, mede
+    /// metodologia e não posicionamento de preço.
+    /// </para>
+    /// </summary>
+    public decimal? MercadoValorRede { get; set; }
+
+    /// <summary>Idem para o agregado de concorrentes, no mesmo recorte e mesma ressalva.</summary>
+    public decimal? MercadoValorConcorrentes { get; set; }
+
+    /// <summary>
     /// Fatia da rede neste item dividida pela fatia agregada da rede no mesmo brick e mês.
     /// 1,0 = o item vai tão bem quanto a rede vai naquele bairro; abaixo de 0,5 dispara
     /// alerta (regra B2).

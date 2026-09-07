@@ -348,7 +348,7 @@ public sealed class SessaoResultadoMontadorTests
     }
 
     [Fact]
-    public void Item_com_sinal_de_mercado_recebe_as_sete_colunas()
+    public void Item_com_sinal_de_mercado_recebe_as_colunas_de_mercado()
     {
         var sinais = new Dictionary<(int LojaId, string Sku), SinalDoItem>
         {
@@ -357,6 +357,8 @@ public sealed class SessaoResultadoMontadorTests
                 Brick: "528-RJ VOLTA REDONDA RETIRO",
                 UnidadesRede: 12m,
                 UnidadesConcorrentes: 988m,
+                ValorRede: 300m,
+                ValorConcorrentes: 19_760m,
                 Indice: 0.1234m,
                 DiasSemEstoque: 3,
                 Alerta: MercadoAlertas.Ruptura),
@@ -400,7 +402,8 @@ public sealed class SessaoResultadoMontadorTests
         var sinais = new Dictionary<(int LojaId, string Sku), SinalDoItem>
         {
             [(LojaId + 999, Sku)] = new(
-                new DateOnly(2025, 6, 1), "outro brick", 1m, 1m, 0.1m, 0, MercadoAlertas.SemCausa),
+                new DateOnly(2025, 6, 1), "outro brick", 1m, 1m, 10m, 10m, 0.1m, 0,
+                MercadoAlertas.SemCausa),
         };
 
         var item = Montar([Linha()], sinaisDeMercado: sinais).Itens.Single();

@@ -97,6 +97,16 @@ public static class ComparacaoItensExcelExporter
         Par("Loja", filtro.LojaId?.ToString() ?? "todas");
         Par("Categoria", Rotulo(filtro.Categoria, "todas"));
         Par("Curva do ERP", Rotulo(filtro.Curva, "todas"));
+        // Todo filtro novo tem de aparecer aqui. A planilha e levada para reuniao solta do
+        // sistema: se ela nao declarar o recorte, o numero dela nao tem como ser conferido, e
+        // um recorte esquecido faz a planilha parecer falar da sugestao inteira.
+        Par("Fabricante", Rotulo(filtro.Fabricante, "todos"));
+        Par("Análise rápida", RotuloDeAnalise(filtro.AnaliseRapida));
+        Par("Alerta de mercado", RotuloDeAlerta(filtro));
+        Par("Quem ficou mais perto", RotuloDeMaisPerto(filtro.MaisPerto));
+        Par("Preço unitário", RotuloDePreco(filtro.Preco));
+        Par("Índice vs bairro", filtro.IndiceAbaixoDe is { } ix ? $"abaixo de {ix:N2}" : "todos");
+        Par("Só onde o ML foi pior", filtro.SomenteMlPior ? "sim" : "não");
         Par("Itens no recorte", $"{itens.Count:N0} de {totalSemFiltro:N0} da sugestão");
         l++;
 
@@ -163,7 +173,9 @@ public static class ComparacaoItensExcelExporter
             "Sobrou (PBS un.)", "Sobraria (ML un.)",
             "R$ parado (PBS)", "R$ parado (ML)", "Quem ficou mais perto", "Ressalva",
             "Mês IQVIA", "Bairro (brick)", "Vendemos no bairro (un.)",
-            "Concorrentes no bairro (un.)", "Índice vs bairro", "Dias sem estoque",
+            "Concorrentes no bairro (un.)", "Índice vs bairro",
+            "Preço unit. IQVIA", "Preço unit. rede",
+            "Dias sem estoque",
             "Alerta de mercado",
         ];
 
@@ -219,8 +231,12 @@ public static class ComparacaoItensExcelExporter
             ws.Cell(linha, 23).Value = i.MercadoUnidadesRede is { } ur ? ur : Blank;
             ws.Cell(linha, 24).Value = i.MercadoUnidadesConcorrentes is { } uc ? uc : Blank;
             ws.Cell(linha, 25).Value = i.MercadoIndiceDesempenho is { } ix ? ix : Blank;
-            ws.Cell(linha, 26).Value = i.MercadoDiasSemEstoque is { } de ? de : Blank;
-            ws.Cell(linha, 27).Value = i.AlertaDeMercadoLegivel
+            // Celula vazia, nunca zero: sem unidades nao ha preco, e zero diria que a rede
+            // vende de graca -- e esta e uma das colunas por onde o comprador ordena.
+            ws.Cell(linha, 26).Value = i.PrecoMedioConcorrentes is { } pc ? pc : Blank;
+            ws.Cell(linha, 27).Value = i.PrecoMedioRede is { } pr ? pr : Blank;
+            ws.Cell(linha, 28).Value = i.MercadoDiasSemEstoque is { } de ? de : Blank;
+            ws.Cell(linha, 29).Value = i.AlertaDeMercadoLegivel
                 ?? (i.TemDadoDeMercado ? "dentro do esperado" : "sem dado de mercado");
             linha++;
         }
@@ -256,6 +272,52 @@ public static class ComparacaoItensExcelExporter
     /// mercado" na mesma linha.
     /// </summary>
     private static readonly XLCellValue Blank = "";
+
+    /// <summary>
+    /// Rótulos dos filtros novos, em português de comprador. <b>Não reaproveitam os da tela</b>
+    /// porque a planilha é lida fora do sistema: "Vermelho" ali não diz nada, "encalhado (60
+    /// dias ou mais)" diz.
+    /// </summary>
+    private static string RotuloDeAnalise(string? valor) => valor switch
+    {
+        Engine.Sessoes.AnaliseRapida.Vermelho => "encalhado (60 dias ou mais)",
+        Engine.Sessoes.AnaliseRapida.Amarelo => "atenção (30 a 59 dias)",
+        Engine.Sessoes.AnaliseRapida.Verde => "ok (menos de 30 dias)",
+        Engine.Sessoes.AnaliseRapida.SemGiro => "sem giro (estoque e zero venda)",
+        FiltroDeItens.Ausente => "não avaliado",
+        _ => "todas",
+    };
+
+    /// <summary>
+    /// O alerta tem DOIS controles na tela — a caixa "só com alerta" e o seletor por tipo — e a
+    /// planilha precisa dizer qual estava valendo. Declarar só um deles faria o recorte parecer
+    /// mais amplo do que foi.
+    /// </summary>
+    private static string RotuloDeAlerta(FiltroDeItens filtro) => filtro.Alerta switch
+    {
+        Engine.Mercado.MercadoAlertas.Ruptura => "possível perda por ruptura",
+        Engine.Mercado.MercadoAlertas.SemCausa => "sem causa aparente",
+        Engine.Mercado.MercadoAlertas.NaoApurado => "estoque não apurado",
+        Engine.Mercado.MercadoAlertas.SemAlerta => "dentro do esperado",
+        FiltroDeItens.Ausente => "sem dado de mercado",
+        _ => filtro.SomenteComAlerta ? "só com alerta" : "todos",
+    };
+
+    private static string RotuloDeMaisPerto(string? valor) => valor switch
+    {
+        "ML" => "o ML ficou mais perto",
+        "PBS" => "o seu ERP ficou mais perto",
+        "Empate" => "empate",
+        FiltroDeItens.Ausente => "sem cálculo do ML",
+        _ => "todos",
+    };
+
+    private static string RotuloDePreco(string? valor) => valor switch
+    {
+        "RedeMenor" => "rede mais barata que o mercado",
+        "IqviaMenor" => "mercado mais barato que a rede",
+        _ => "todos",
+    };
 
     private static string Rotulo(string? filtro, string quandoAusente) => filtro switch
     {

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -474,7 +475,26 @@ public sealed record FiltroDeItens(
     /// "Onde o ML foi pior" resume em dez linhas. Existe para o link daquele bloco abrir a
     /// tabela inteira já recortada, em vez de o comprador procurar item a item.
     /// </summary>
-    bool SomenteMlPior = false)
+    bool SomenteMlPior = false,
+    /// <summary>Fabricante do cadastro, ou <see cref="Ausente"/> para os sem fabricante.</summary>
+    string? Fabricante = null,
+    /// <summary>
+    /// Um valor de <c>MercadoAlertas</c>, ou <see cref="Ausente"/> para os itens <b>sem dado de
+    /// mercado</b> — que é diferente de <c>SemAlerta</c>: um não foi avaliado, o outro foi e
+    /// está dentro do esperado.
+    /// </summary>
+    string? Alerta = null,
+    /// <summary>Um estado de <c>Engine.Sessoes.AnaliseRapida</c>, ou <see cref="Ausente"/>.</summary>
+    string? AnaliseRapida = null,
+    /// <summary><c>ML</c>, <c>PBS</c>, <c>Empate</c> ou <see cref="Ausente"/> (sem braço de ML).</summary>
+    string? MaisPerto = null,
+    /// <summary>
+    /// Só itens com índice vs bairro <b>abaixo</b> deste valor. Item sem índice não entra: nulo
+    /// não é "abaixo de", é "não avaliado".
+    /// </summary>
+    decimal? IndiceAbaixoDe = null,
+    /// <summary><c>RedeMenor</c> ou <c>IqviaMenor</c>, comparando os dois preços-índice.</summary>
+    string? Preco = null)
 {
     /// <summary>
     /// Sentinela que casa ausência do atributo. Precisa ser <b>o mesmo</b> string que a
@@ -490,7 +510,13 @@ public sealed record FiltroDeItens(
         || !string.IsNullOrWhiteSpace(Categoria)
         || !string.IsNullOrWhiteSpace(Curva)
         || SomenteComAlerta
-        || SomenteMlPior;
+        || SomenteMlPior
+        || !string.IsNullOrWhiteSpace(Fabricante)
+        || !string.IsNullOrWhiteSpace(Alerta)
+        || !string.IsNullOrWhiteSpace(AnaliseRapida)
+        || !string.IsNullOrWhiteSpace(MaisPerto)
+        || IndiceAbaixoDe is not null
+        || !string.IsNullOrWhiteSpace(Preco);
 
     public string ParaQueryString()
     {
@@ -500,6 +526,12 @@ public sealed record FiltroDeItens(
         if (!string.IsNullOrWhiteSpace(Curva)) q += $"&curva={Uri.EscapeDataString(Curva)}";
         if (SomenteComAlerta) q += "&somenteComAlerta=true";
         if (SomenteMlPior) q += "&somenteMlPior=true";
+        if (!string.IsNullOrWhiteSpace(Fabricante)) q += $"&fabricante={Uri.EscapeDataString(Fabricante)}";
+        if (!string.IsNullOrWhiteSpace(Alerta)) q += $"&alerta={Uri.EscapeDataString(Alerta)}";
+        if (!string.IsNullOrWhiteSpace(AnaliseRapida)) q += $"&analiseRapida={Uri.EscapeDataString(AnaliseRapida)}";
+        if (!string.IsNullOrWhiteSpace(MaisPerto)) q += $"&maisPerto={Uri.EscapeDataString(MaisPerto)}";
+        if (IndiceAbaixoDe is { } ix) q += $"&indiceAbaixoDe={ix.ToString(CultureInfo.InvariantCulture)}";
+        if (!string.IsNullOrWhiteSpace(Preco)) q += $"&preco={Uri.EscapeDataString(Preco)}";
         return q;
     }
 }
@@ -535,8 +567,35 @@ public sealed record TotaisDosItens(
     // carregada: a página traz 25 linhas de um recorte que pode ter milhares, então contar
     // aqui diria "20 de 25" onde a resposta é "21 de 43".
     int ItensComDadoDeMercado = 0,
-    int ItensComAlertaDeMercado = 0)
+    int ItensComAlertaDeMercado = 0,
+    int ItensComPrecoComparavel = 0,
+    int ItensComPrecoRedeMenor = 0,
+    int ItensComPrecoRedeMaior = 0)
 {
+    /// <summary>
+    /// Itens com medição de mercado mas <b>sem preço comparável</b> — quase sempre porque a rede
+    /// não vendeu nenhuma unidade do item no recorte, e sem venda não há preço.
+    ///
+    /// <para>
+    /// Existe para a conta fechar. O patrocinador desenhou o placar com dois grupos somando o
+    /// total; na prática há três, e omitir o terceiro faria a soma não bater com o número de
+    /// itens medidos — a tela pareceria errada, ou pior, esses itens seriam empurrados para um
+    /// dos lados e passariam a afirmar um resultado que ninguém apurou.
+    /// </para>
+    /// </summary>
+    public int ItensSemPrecoComparavel => ItensComDadoDeMercado - ItensComPrecoComparavel;
+
+    /// <summary>Preço idêntico nos dois lados. Raro, mas não é vitória de ninguém.</summary>
+    public int ItensComPrecoEmpatado =>
+        ItensComPrecoComparavel - ItensComPrecoRedeMenor - ItensComPrecoRedeMaior;
+
+    /// <summary>
+    /// Se há placar de preço a exibir. Falso quando não houve medição de mercado no recorte —
+    /// e nesse caso a tela não pode mostrar um placar de zero a zero, que leria como "os preços
+    /// estão iguais" em vez de "não há dado".
+    /// </summary>
+    public bool TemPlacarDePreco => ItensComPrecoComparavel > 0;
+
     /// <summary>
     /// Diferença de sobra entre os braços, ou <c>null</c> quando o ML não foi apurado em
     /// nenhum item do recorte. Zero aqui afirmaria "os dois métodos empataram", que é o
@@ -577,7 +636,9 @@ public sealed record FiltrosDisponiveis(
     IReadOnlyList<string> Categorias,
     bool TemItemSemCategoria,
     IReadOnlyList<string> Curvas,
-    bool TemItemSemCurva);
+    bool TemItemSemCurva,
+    IReadOnlyList<string>? Fabricantes = null,
+    bool TemItemSemFabricante = false);
 
 public sealed record SessaoItem(
     int LojaId,
@@ -609,8 +670,45 @@ public sealed record SessaoItem(
     string? Ean = null,
     decimal? EstoqueNaSugestao = null,
     decimal? EstoqueNoFimDoPeriodo = null,
-    decimal? VendaMediaDiaria = null)
+    decimal? VendaMediaDiaria = null,
+    decimal? MercadoValorRede = null,
+    decimal? MercadoValorConcorrentes = null)
 {
+    /// <summary>
+    /// Preço médio das bandeiras da rede neste item, no bairro e mês comparados: o valor que a
+    /// IQVIA atribuiu dividido pelas unidades que ela atribuiu.
+    ///
+    /// <para>
+    /// <b>É preço-índice, não preço de balcão.</b> A IQVIA normaliza preços entre os
+    /// participantes do painel, então este número não é o que passou no caixa. Ele serve para
+    /// comparar com <see cref="PrecoMedioConcorrentes"/>, que sai do mesmo arquivo e da mesma
+    /// normalização — nunca para comparar com o preço de compra do Stage nem com a base de
+    /// vendas da rede, onde a diferença mediria metodologia e não posicionamento.
+    /// </para>
+    ///
+    /// <para>
+    /// Nulo quando <b>não há unidades</b> que sustentem um preço. Esse é o caso comum do lado
+    /// da rede: o bairro vendeu e a rede não vendeu nada. Zero ali afirmaria que a rede vende
+    /// de graça, e a tela ordenaria o item como o mais barato do mercado.
+    /// </para>
+    /// </summary>
+    public decimal? PrecoMedioRede => Media(MercadoValorRede, MercadoUnidadesRede);
+
+    /// <summary>Idem para o agregado de concorrentes, mesma ressalva.</summary>
+    public decimal? PrecoMedioConcorrentes =>
+        Media(MercadoValorConcorrentes, MercadoUnidadesConcorrentes);
+
+    /// <summary>
+    /// Se o preço-índice da rede está <b>acima</b> do dos concorrentes no mesmo recorte. Nulo
+    /// quando falta um dos dois lados — sem os dois não há comparação, e falso significaria
+    /// "está mais barata", que é uma afirmação diferente de "não se sabe".
+    /// </summary>
+    public bool? RedeMaisCaraQueOMercado =>
+        PrecoMedioRede is { } rede && PrecoMedioConcorrentes is { } conc ? rede > conc : null;
+
+    private static decimal? Media(decimal? valor, decimal? unidades) =>
+        valor is { } v && unidades is { } u && u > 0m ? v / u : null;
+
     /// <summary>
     /// Quantos dias o estoque que sobrou duraria no ritmo de venda dos últimos 120 dias.
     ///
@@ -629,10 +727,7 @@ public sealed record SessaoItem(
     /// </para>
     /// </summary>
     public decimal? Cobertura =>
-        EstoqueNoFimDoPeriodo is not { } estoque || VendaMediaDiaria is not { } media ? null
-        : estoque == 0m ? 0m
-        : media == 0m ? null
-        : estoque / media;
+        Engine.Sessoes.AnaliseRapida.Cobertura(EstoqueNoFimDoPeriodo, VendaMediaDiaria);
 
     /// <summary>
     /// O sinal de cor da coluna "Análise rápida", na régua que o patrocinador definiu em
@@ -653,12 +748,7 @@ public sealed record SessaoItem(
     /// </para>
     /// </summary>
     public string? AnaliseRapida =>
-        EstoqueNoFimDoPeriodo is not { } estoque || VendaMediaDiaria is not { } media ? null
-        : estoque == 0m ? "Verde"
-        : media == 0m ? "SemGiro"
-        : Cobertura is { } dias
-            ? dias >= 60m ? "Vermelho" : dias >= 30m ? "Amarelo" : "Verde"
-            : null;
+        Engine.Sessoes.AnaliseRapida.Classificar(EstoqueNoFimDoPeriodo, VendaMediaDiaria);
 
     /// <summary>
     /// Rotulo do alerta em portugues de comprador. Devolve <c>null</c> quando nao ha alerta

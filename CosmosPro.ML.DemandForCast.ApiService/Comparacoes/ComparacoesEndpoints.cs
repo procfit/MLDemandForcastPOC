@@ -8,6 +8,7 @@ using Minio;
 using Minio.DataModel.Args;
 using Minio.Exceptions;
 using CosmosPro.ML.DemandForCast.Engine.Mercado;
+using CosmosPro.ML.DemandForCast.Engine.Sessoes;
 
 namespace CosmosPro.ML.DemandForCast.ApiService.Comparacoes;
 
@@ -423,7 +424,13 @@ internal static class ComparacoesEndpoints
         [FromQuery] string? categoria = null,
         [FromQuery] string? curva = null,
         [FromQuery] bool? somenteComAlerta = null,
-        [FromQuery] bool? somenteMlPior = null)
+        [FromQuery] bool? somenteMlPior = null,
+        [FromQuery] string? fabricante = null,
+        [FromQuery] string? alerta = null,
+        [FromQuery] string? analiseRapida = null,
+        [FromQuery] string? maisPerto = null,
+        [FromQuery] decimal? indiceAbaixoDe = null,
+        [FromQuery] string? preco = null)
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
 
@@ -433,7 +440,9 @@ internal static class ComparacoesEndpoints
         take = Math.Clamp(take, 1, 200);
         skip = Math.Max(0, skip);
 
-        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta, somenteMlPior);
+        var filtrados = AplicarFiltros(
+            ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta, somenteMlPior,
+            fabricante, alerta, analiseRapida, maisPerto, indiceAbaixoDe, preco);
 
         var totais = await TotalizarAsync(filtrados, ct);
 
@@ -469,12 +478,20 @@ internal static class ComparacoesEndpoints
         var curvas = await escopo.Where(i => i.Curva != null)
             .Select(i => i.Curva!).Distinct().OrderBy(c => c).ToListAsync(ct);
 
+        // Fabricantes desta sessao, nao o cadastro inteiro da rede -- oferecer um fabricante que
+        // nenhum item tem produziria filtro que devolve tela vazia e parece defeito.
+        var fabricantes = await escopo.Where(i => i.Fabricante != null)
+            .Select(i => i.Fabricante!).Distinct().OrderBy(f => f).ToListAsync(ct);
+        var temSemFabricante = await escopo.AnyAsync(i => i.Fabricante == null, ct);
+
         return Results.Ok(new FiltrosDisponiveis(
             lojas,
             categorias,
             await escopo.AnyAsync(i => i.Categoria == null, ct),
             curvas,
-            await escopo.AnyAsync(i => i.Curva == null, ct)));
+            await escopo.AnyAsync(i => i.Curva == null, ct),
+            fabricantes,
+            temSemFabricante));
     }
 
     /// <summary>
@@ -499,13 +516,21 @@ internal static class ComparacoesEndpoints
         [FromQuery] string? categoria = null,
         [FromQuery] string? curva = null,
         [FromQuery] bool? somenteComAlerta = null,
-        [FromQuery] bool? somenteMlPior = null)
+        [FromQuery] bool? somenteMlPior = null,
+        [FromQuery] string? fabricante = null,
+        [FromQuery] string? alerta = null,
+        [FromQuery] string? analiseRapida = null,
+        [FromQuery] string? maisPerto = null,
+        [FromQuery] decimal? indiceAbaixoDe = null,
+        [FromQuery] string? preco = null)
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
         if (await TotalDeItensAsync(db, id, redeId, ct) is null) return Results.NotFound();
 
         var coluna = OrdemItensSessao.Resolver(orderBy);
-        var filtrados = AplicarFiltros(ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta, somenteMlPior);
+        var filtrados = AplicarFiltros(
+            ItensDaSessao(db, id, redeId), lojaId, categoria, curva, somenteComAlerta, somenteMlPior,
+            fabricante, alerta, analiseRapida, maisPerto, indiceAbaixoDe, preco);
 
         var itens = await OrdemItensSessao
             .Aplicar(filtrados, coluna, desc)
@@ -715,7 +740,13 @@ internal static class ComparacoesEndpoints
     private static IQueryable<ComparacaoSessaoItem> AplicarFiltros(
         IQueryable<ComparacaoSessaoItem> itens, int? lojaId, string? categoria, string? curva,
         bool? somenteComAlerta = null,
-        bool? somenteMlPior = null)
+        bool? somenteMlPior = null,
+        string? fabricante = null,
+        string? alerta = null,
+        string? analiseRapida = null,
+        string? maisPerto = null,
+        decimal? indiceAbaixoDe = null,
+        string? preco = null)
     {
         if (lojaId is { } loja)
         {
@@ -755,6 +786,97 @@ internal static class ComparacoesEndpoints
             // outra contagem -- e o comprador vai acreditar na que estiver na frente dele.
             itens = itens.Where(i =>
                 i.SobraMlUnidades != null && i.SobraMlUnidades > i.SobraPbsUnidades);
+        }
+
+        if (!string.IsNullOrWhiteSpace(fabricante))
+        {
+            itens = fabricante == FiltroAusente
+                ? itens.Where(i => i.Fabricante == null)
+                : itens.Where(i => i.Fabricante == fabricante);
+        }
+
+        if (!string.IsNullOrWhiteSpace(alerta))
+        {
+            // Sentinela para "sem dado de mercado", que e diferente de SemAlerta: um nao foi
+            // avaliado, o outro foi e esta dentro do esperado.
+            itens = alerta == FiltroAusente
+                ? itens.Where(i => i.MercadoAlerta == null)
+                : itens.Where(i => i.MercadoAlerta == alerta);
+        }
+
+        if (!string.IsNullOrWhiteSpace(analiseRapida))
+        {
+            // A regua vem de Engine.Sessoes.AnaliseRapida, a mesma que a tela usa para pintar a
+            // bolinha. Aqui ela e reescrita em SQL porque arvore de expressao nao chama metodo --
+            // mas os CORTES sao as constantes de la, nunca literais repetidos.
+            itens = analiseRapida switch
+            {
+                AnaliseRapida.Vermelho => itens.Where(i =>
+                    i.EstoqueNoFimDoPeriodo > 0m && i.VendaMediaDiaria > 0m
+                    && i.EstoqueNoFimDoPeriodo / i.VendaMediaDiaria >= AnaliseRapida.VermelhoAPartirDe),
+
+                AnaliseRapida.Amarelo => itens.Where(i =>
+                    i.EstoqueNoFimDoPeriodo > 0m && i.VendaMediaDiaria > 0m
+                    && i.EstoqueNoFimDoPeriodo / i.VendaMediaDiaria >= AnaliseRapida.AmareloAPartirDe
+                    && i.EstoqueNoFimDoPeriodo / i.VendaMediaDiaria < AnaliseRapida.VermelhoAPartirDe),
+
+                // Estoque zero cai aqui junto: prateleira vazia e cobertura zero, que e verde.
+                AnaliseRapida.Verde => itens.Where(i =>
+                    i.EstoqueNoFimDoPeriodo != null && i.VendaMediaDiaria != null
+                    && (i.EstoqueNoFimDoPeriodo == 0m
+                        || (i.VendaMediaDiaria > 0m
+                            && i.EstoqueNoFimDoPeriodo / i.VendaMediaDiaria < AnaliseRapida.AmareloAPartirDe))),
+
+                AnaliseRapida.SemGiro => itens.Where(i =>
+                    i.EstoqueNoFimDoPeriodo > 0m && i.VendaMediaDiaria == 0m),
+
+                FiltroAusente => itens.Where(i =>
+                    i.EstoqueNoFimDoPeriodo == null || i.VendaMediaDiaria == null),
+
+                _ => itens,
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(maisPerto))
+        {
+            // Mesma aritmetica de SessaoItem.MlFicouMaisPerto: menor sobra ganha, e empate e
+            // estado proprio -- nunca vitoria de um dos lados.
+            itens = maisPerto switch
+            {
+                "ML" => itens.Where(i =>
+                    i.SobraMlUnidades != null && i.SobraMlUnidades < i.SobraPbsUnidades),
+                "PBS" => itens.Where(i =>
+                    i.SobraMlUnidades != null && i.SobraMlUnidades > i.SobraPbsUnidades),
+                "Empate" => itens.Where(i =>
+                    i.SobraMlUnidades != null && i.SobraMlUnidades == i.SobraPbsUnidades),
+                FiltroAusente => itens.Where(i => i.SobraMlUnidades == null),
+                _ => itens,
+            };
+        }
+
+        if (indiceAbaixoDe is { } limiar)
+        {
+            // Item sem indice NAO entra: nulo nao e "abaixo de", e "nao avaliado".
+            itens = itens.Where(i =>
+                i.MercadoIndiceDesempenho != null && i.MercadoIndiceDesempenho < limiar);
+        }
+
+        if (!string.IsNullOrWhiteSpace(preco))
+        {
+            // Exige unidades nos DOIS lados: sem venda nao ha preco, e o item nao pertence a
+            // nenhum dos lados da comparacao.
+            itens = preco switch
+            {
+                "RedeMenor" => itens.Where(i =>
+                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
+                    && i.MercadoValorRede / i.MercadoUnidadesRede
+                       < i.MercadoValorConcorrentes / i.MercadoUnidadesConcorrentes),
+                "IqviaMenor" => itens.Where(i =>
+                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
+                    && i.MercadoValorRede / i.MercadoUnidadesRede
+                       > i.MercadoValorConcorrentes / i.MercadoUnidadesConcorrentes),
+                _ => itens,
+            };
         }
 
         return itens;
@@ -817,6 +939,20 @@ internal static class ComparacoesEndpoints
                 // Os TRES alertas de verdade, nunca "!= SemAlerta": nulo nao sobrevive a
                 // comparacao de desigualdade em SQL, e item sem dado de mercado nao e alerta —
                 // e "nao avaliado". Mesma clausula que o filtro "so com alerta" usa.
+                // Placar de preco: os itens com preco nos DOIS lados, e de que lado ele e menor.
+                // "Preco" aqui e valor / unidades, entao exige unidades > 0 nos dois -- item em
+                // que a rede nao vendeu nada nao tem preco, e nao pertence a nenhum dos lados.
+                ComPrecoComparavel = g.Count(i =>
+                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
+                    && i.MercadoValorRede != null && i.MercadoValorConcorrentes != null),
+                PrecoRedeMenor = g.Count(i =>
+                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
+                    && i.MercadoValorRede / i.MercadoUnidadesRede
+                       < i.MercadoValorConcorrentes / i.MercadoUnidadesConcorrentes),
+                PrecoRedeMaior = g.Count(i =>
+                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
+                    && i.MercadoValorRede / i.MercadoUnidadesRede
+                       > i.MercadoValorConcorrentes / i.MercadoUnidadesConcorrentes),
                 ComAlerta = g.Count(i =>
                     i.MercadoAlerta == MercadoAlertas.Ruptura
                     || i.MercadoAlerta == MercadoAlertas.SemCausa
@@ -827,7 +963,8 @@ internal static class ComparacoesEndpoints
         // Recorte vazio: GroupBy não devolve linha nenhuma.
         if (b is null)
         {
-            return new TotaisDosItens(0, 0m, null, null, 0, 0, 0m, 0m, null, null, 0, null, 0, null, null, 0, 0);
+            return new TotaisDosItens(
+                0, 0m, null, null, 0, 0, 0m, 0m, null, null, 0, null, 0, null, null, 0, 0, 0, 0, 0);
         }
 
         return new TotaisDosItens(
@@ -848,7 +985,10 @@ internal static class ComparacoesEndpoints
             b.ComValorMl == 0 ? null : b.ValorMl,
             b.ComValorMl,
             b.ComMercado,
-            b.ComAlerta);
+            b.ComAlerta,
+            b.ComPrecoComparavel,
+            b.PrecoRedeMenor,
+            b.PrecoRedeMaior);
     }
 
     /// <summary>
@@ -1054,7 +1194,9 @@ internal static class ComparacoesEndpoints
             i.Ean,
             i.EstoqueNaSugestao,
             i.EstoqueNoFimDoPeriodo,
-            i.VendaMediaDiaria);
+            i.VendaMediaDiaria,
+            i.MercadoValorRede,
+            i.MercadoValorConcorrentes);
 
     private static readonly Expression<Func<ComparacaoSessao, SessaoView>> ProjectToView =
         s => new SessaoView(
@@ -1176,7 +1318,12 @@ internal sealed record TotaisDosItens(
     int ItensComDadoDeMercado = 0,
     // Itens com um dos tres alertas de verdade. Diferente de ItensComDadoDeMercado, que conta
     // tambem os avaliados e sem alerta.
-    int ItensComAlertaDeMercado = 0);
+    int ItensComAlertaDeMercado = 0,
+    // Placar de preco pedido pelo patrocinador. Sao TRES grupos: os dois lados mais os itens
+    // sem preco comparavel, que a soma precisa declarar para fechar.
+    int ItensComPrecoComparavel = 0,
+    int ItensComPrecoRedeMenor = 0,
+    int ItensComPrecoRedeMaior = 0);
 
 /// <param name="TemItemSemCategoria">
 /// Se existe item sem categoria no cadastro. A tela usa isto para oferecer o recorte "sem
@@ -1188,7 +1335,9 @@ internal sealed record FiltrosDisponiveis(
     IReadOnlyList<string> Categorias,
     bool TemItemSemCategoria,
     IReadOnlyList<string> Curvas,
-    bool TemItemSemCurva);
+    bool TemItemSemCurva,
+    IReadOnlyList<string>? Fabricantes = null,
+    bool TemItemSemFabricante = false);
 
 /// <summary>
 /// Uma linha do detalhe. Os anuláveis chegam anuláveis <b>de propósito</b>: nulo é "não foi
@@ -1239,7 +1388,12 @@ internal sealed record SessaoItemView(
     string? Ean = null,
     decimal? EstoqueNaSugestao = null,
     decimal? EstoqueNoFimDoPeriodo = null,
-    decimal? VendaMediaDiaria = null);
+    decimal? VendaMediaDiaria = null,
+    // Valor da IQVIA nos dois lados. O preco medio (valor / unidades) e derivado na Web, e nao
+    // aqui: e conta de apresentacao, e materializar o quociente perderia a informacao de que
+    // unidades zero nao tem preco.
+    decimal? MercadoValorRede = null,
+    decimal? MercadoValorConcorrentes = null);
 
 /// <param name="Itens">População inteira da sessão — o denominador de todo o resto.</param>
 /// <param name="SobraExtraMlUnidades">
