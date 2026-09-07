@@ -57,6 +57,7 @@ public class MercadoApiClient(HttpClient httpClient, IRedeContext redeContext)
         decimal? corteMinimo = null,
         string? brick = null,
         string? areaFarmacia = null,
+        string? laboratorio = null,
         int skip = 0,
         int take = 50,
         CancellationToken ct = default)
@@ -67,6 +68,7 @@ public class MercadoApiClient(HttpClient httpClient, IRedeContext redeContext)
         if (corteMinimo is { } corte) q += $"&corteMinimo={corte.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
         if (!string.IsNullOrWhiteSpace(brick)) q += $"&brick={Uri.EscapeDataString(brick)}";
         if (!string.IsNullOrWhiteSpace(areaFarmacia)) q += $"&areaFarmacia={Uri.EscapeDataString(areaFarmacia)}";
+        if (!string.IsNullOrWhiteSpace(laboratorio)) q += $"&laboratorio={Uri.EscapeDataString(laboratorio)}";
 
         var pagina = await httpClient.GetFromJsonAsync<OportunidadesPagina>(q, ct);
         return pagina ?? new OportunidadesPagina([], 0, null, 0);
@@ -184,4 +186,24 @@ public sealed record OportunidadeDeSortimento(
     string? AreaFarmacia,
     string? Classe4,
     decimal UnidadesConcorrentes,
-    decimal ValorCpp);
+    decimal ValorCpp)
+{
+    /// <summary>
+    /// Preço médio do mercado neste item: valor dividido por unidades.
+    ///
+    /// <para>
+    /// <b>Aqui existe UM preço, e não dois.</b> Na tela de itens comparados o preço da rede
+    /// aparece ao lado do do mercado; nesta tela isso é impossível por definição — a lista é
+    /// dos produtos que <i>não estão no cadastro da rede</i>, então ela não os vende e não tem
+    /// preço a comparar. Uma coluna "preço da rede" ficaria vazia em toda linha.
+    /// </para>
+    ///
+    /// <para>
+    /// É preço-índice sob a metodologia da IQVIA, que normaliza preços entre participantes do
+    /// painel — não é o preço de balcão do concorrente. Serve para dimensionar a oportunidade,
+    /// não para montar tabela de preço.
+    /// </para>
+    /// </summary>
+    public decimal? PrecoMedioMercado =>
+        UnidadesConcorrentes > 0m ? ValorCpp / UnidadesConcorrentes : null;
+}

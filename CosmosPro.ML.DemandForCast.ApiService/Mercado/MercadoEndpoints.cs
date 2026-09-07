@@ -197,6 +197,7 @@ internal static class MercadoEndpoints
         [FromQuery] decimal? corteMinimo = null,
         [FromQuery] string? brick = null,
         [FromQuery] string? areaFarmacia = null,
+        [FromQuery] string? laboratorio = null,
         [FromQuery] int? skip = null,
         [FromQuery] int? take = null)
     {
@@ -208,6 +209,7 @@ internal static class MercadoEndpoints
             corteMinimo ?? MercadoOportunidadesQuery.CorteMinimoPadrao,
             brick,
             areaFarmacia,
+            laboratorio,
             skip ?? 0,
             take ?? 50,
             ct);

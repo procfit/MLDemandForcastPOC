@@ -736,13 +736,24 @@
         Nav.NavigateTo($"/comparacoes/{SessaoId}/itens/excel{QueryDoFiltro()}", forceLoad: true);
     }
 
+    /// <summary>
+    /// O recorte da tela, no formato de fio de <see cref="FiltroDeItens.ParaQueryString"/>.
+    ///
+    /// <para>
+    /// <b>Reaproveita aquele método de propósito.</b> Esta função montava a query à mão com
+    /// três dos filtros, e os demais eram descartados em silêncio: o comprador filtrava,
+    /// exportava e recebia a sugestão inteira, com a capa da planilha desmentindo o que ele
+    /// acabava de ver na tela. Com um único formato de fio, filtro novo entra nos dois
+    /// caminhos de uma vez.
+    /// </para>
+    /// </summary>
     private string QueryDoFiltro()
     {
-        var q = new List<string>();
-        if (_filtro.LojaId is { } loja) q.Add($"lojaId={loja}");
-        if (!string.IsNullOrWhiteSpace(_filtro.Categoria)) q.Add($"categoria={Uri.EscapeDataString(_filtro.Categoria)}");
-        if (!string.IsNullOrWhiteSpace(_filtro.Curva)) q.Add($"curva={Uri.EscapeDataString(_filtro.Curva)}");
-        return q.Count == 0 ? "" : "?" + string.Join("&", q);
+        var q = _filtro.ParaQueryString();
+
+        // ParaQueryString devolve "&a=1&b=2", pensado para concatenar depois de um parametro
+        // que ja existe; aqui ele abre a query.
+        return q.Length == 0 ? "" : "?" + q.TrimStart('&');
     }
 
     private async Task CarregarFiltrosAsync()

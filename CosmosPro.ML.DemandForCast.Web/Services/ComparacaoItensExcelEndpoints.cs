@@ -35,6 +35,19 @@ internal static class ComparacaoItensExcelEndpoints
         [FromQuery] int? lojaId = null,
         [FromQuery] string? categoria = null,
         [FromQuery] string? curva = null,
+        // TODO filtro de FiltroDeItens tem de estar aqui. A rota lia apenas tres deles, e o
+        // resultado era a planilha ignorando o recorte da tela em silencio: o comprador
+        // filtrava "so com alerta", exportava, e recebia a sugestao inteira -- com o contador
+        // da capa desmentindo o que ele acabou de ver. Ao acrescentar filtro novo, acrescente
+        // aqui e em QueryDoFiltro na tabela; ParaQueryString e o formato de fio compartilhado.
+        [FromQuery] bool somenteComAlerta = false,
+        [FromQuery] bool somenteMlPior = false,
+        [FromQuery] string? fabricante = null,
+        [FromQuery] string? alerta = null,
+        [FromQuery] string? analiseRapida = null,
+        [FromQuery] string? maisPerto = null,
+        [FromQuery] decimal? indiceAbaixoDe = null,
+        [FromQuery] string? preco = null,
         [FromQuery] string? orderBy = null,
         [FromQuery] bool desc = true)
     {
@@ -47,7 +60,9 @@ internal static class ComparacaoItensExcelEndpoints
                 statusCode: StatusCodes.Status404NotFound);
         }
 
-        var filtro = new FiltroDeItens(lojaId, categoria, curva);
+        var filtro = new FiltroDeItens(
+            lojaId, categoria, curva, somenteComAlerta, somenteMlPior,
+            fabricante, alerta, analiseRapida, maisPerto, indiceAbaixoDe, preco);
 
         // A primeira página serve só para os totais e o total sem filtro, que descrevem o
         // recorte na aba de capa. take mínimo: as linhas vêm da rota de exportação.

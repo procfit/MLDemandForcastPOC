@@ -17,7 +17,29 @@ internal sealed record OportunidadeDeSortimento(
     string? AreaFarmacia,
     string? Classe4,
     decimal UnidadesConcorrentes,
-    decimal ValorCpp);
+    decimal ValorCpp)
+{
+    /// <summary>
+    /// Preço médio que o mercado praticou neste item, no bairro e mês: valor dividido por
+    /// unidades.
+    ///
+    /// <para>
+    /// <b>Aqui existe UM preço, e não dois.</b> Na tela de itens comparados há o preço da rede
+    /// ao lado do preço do mercado; nesta tela isso é impossível por definição — a lista é
+    /// justamente dos produtos que <i>não estão no cadastro da rede</i>, então a rede não os
+    /// vende e não tem preço a comparar. Uma coluna "preço da rede" aqui ficaria vazia em
+    /// 100% das linhas.
+    /// </para>
+    ///
+    /// <para>
+    /// É preço-índice sob a metodologia da IQVIA, que normaliza preços entre os participantes
+    /// do painel — não é o preço de balcão do concorrente. Serve para dimensionar a
+    /// oportunidade, não para montar tabela de preço.
+    /// </para>
+    /// </summary>
+    public decimal? PrecoMedioMercado =>
+        UnidadesConcorrentes > 0m ? ValorCpp / UnidadesConcorrentes : null;
+}
 
 /// <param name="EansNoCatalogo">
 /// Tamanho do catálogo da rede. <b>Zero significa "o comprador não enviou o arquivo", nunca
@@ -75,6 +97,7 @@ internal static class MercadoOportunidadesQuery
         decimal corteMinimo,
         string? brick,
         string? areaFarmacia,
+        string? laboratorio,
         int skip,
         int take,
         CancellationToken ct)
@@ -145,6 +168,11 @@ internal static class MercadoOportunidadesQuery
         if (!string.IsNullOrWhiteSpace(areaFarmacia))
         {
             candidatos = candidatos.Where(x => x.AreaFarmacia == areaFarmacia);
+        }
+
+        if (!string.IsNullOrWhiteSpace(laboratorio))
+        {
+            candidatos = candidatos.Where(x => x.Laboratorio == laboratorio);
         }
 
         // O corte no servidor repete a regra de PassaNoCorte porque o EF não traduz chamada

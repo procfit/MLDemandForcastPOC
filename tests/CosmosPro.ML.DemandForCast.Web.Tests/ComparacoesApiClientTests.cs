@@ -295,6 +295,34 @@ public sealed class ComparacoesApiClientTests
         t.ItensComCompraMlPositiva.Should().Be(40, "mas so mandou comprar nesses");
     }
 
+    /// <summary>
+    /// <b>A exportacao tem de honrar TODOS os filtros.</b> A rota do Excel lia apenas tres
+    /// deles e montava a query a mao; o resultado era a planilha ignorando o recorte da tela em
+    /// silencio -- o comprador filtrava "so com alerta", exportava, e recebia a sugestao
+    /// inteira. Agora os dois caminhos usam ParaQueryString, que e o formato de fio unico, e
+    /// este caso afirma que nenhum filtro fica de fora dele.
+    /// </summary>
+    [Fact]
+    public void Formato_de_fio_do_filtro_carrega_todos_os_recortes()
+    {
+        var cheio = new FiltroDeItens(
+            LojaId: 18, Categoria: "MIP/OTC", Curva: "A",
+            SomenteComAlerta: true, SomenteMlPior: true,
+            Fabricante: "EMS", Alerta: "Ruptura", AnaliseRapida: "Vermelho",
+            MaisPerto: "ML", IndiceAbaixoDe: 0.5m, Preco: "RedeMenor");
+
+        var q = cheio.ParaQueryString();
+
+        foreach (var chave in new[]
+                 {
+                     "lojaId", "categoria", "curva", "somenteComAlerta", "somenteMlPior",
+                     "fabricante", "alerta", "analiseRapida", "maisPerto", "indiceAbaixoDe", "preco",
+                 })
+        {
+            q.Should().Contain($"&{chave}=", $"'{chave}' precisa atravessar para a exportacao");
+        }
+    }
+
     // --- Filtros novos --------------------------------------------------------
 
     /// <summary>

@@ -3,6 +3,7 @@
 @rendermode InteractiveServer
 @inject MercadoApiClient MercadoApi
 @inject ILogger<Oportunidades> Logger
+@inject NavigationManager Nav
 
 <PageTitle>Oportunidades de sortimento</PageTitle>
 
@@ -114,7 +115,18 @@
                 </RadzenFormField>
             }
 
+            @if (_laboratorios.Count > 1)
+            {
+                <RadzenFormField Text="Laboratório" Variant="Variant.Outlined" Style="width: 240px">
+                    <RadzenDropDown TValue="string" Value="@_laboratorio" Data="@_laboratorios" AllowClear="true"
+                                    Placeholder="todos" Change="@(v => AplicarLaboratorioAsync((string?)v))" />
+                </RadzenFormField>
+            }
+
             <div style="flex: 1"></div>
+            <RadzenButton Text="Exportar para Excel" Icon="table_view" Variant="Variant.Outlined"
+                          Size="ButtonSize.Small" Disabled="@(_loading || _pagina is null or { Total: 0 })"
+                          Click="@ExportarAsync" data-test="exportar-oportunidades" />
             <RadzenButton Click="@CarregarAsync" Icon="refresh" Variant="Variant.Text" Disabled="@_loading" />
         </RadzenStack>
 
@@ -148,6 +160,24 @@
                         <Template Context="o">
                             <strong>@o.UnidadesConcorrentes.ToString("N0")</strong>
                             <span style="color: var(--rz-text-tertiary-color)"> un.</span>
+                        </Template>
+                    </RadzenDataGridColumn>
+                    @* UM preco, e nao dois. A tela de itens comparados poe o preco da rede ao
+                       lado do do mercado; aqui isso e impossivel por definicao — a lista e dos
+                       produtos que NAO estao no cadastro da rede, entao ela nao os vende e nao
+                       tem preco a comparar. Uma coluna "preco da rede" ficaria vazia em toda
+                       linha, e o filtro de "quem esta mais barato" nao teria contra o que
+                       comparar. *@
+                    <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="PrecoMedioMercado"
+                                          Title="Preço unit. IQVIA" Width="160px" TextAlign="TextAlign.Right">
+                        <HeaderTemplate>
+                            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                                <span>Preço unit. IQVIA</span>
+                                <HelpTip Text="Preço médio que o mercado praticou neste item, no bairro e mês: o valor que a IQVIA reporta dividido pelas unidades que ela reporta. ATENÇÃO: a IQVIA normaliza preços entre os participantes do painel, então NÃO é o preço de balcão do concorrente — é um índice. Serve para dimensionar a oportunidade, não para montar tabela de preço. E não existe coluna de preço da rede aqui: por definição estes produtos não estão no seu cadastro, então a rede não os vende e não tem preço a comparar." />
+                            </RadzenStack>
+                        </HeaderTemplate>
+                        <Template Context="o">
+                            @(o.PrecoMedioMercado is { } p ? p.ToString("C2") : "—")
                         </Template>
                     </RadzenDataGridColumn>
                     <RadzenDataGridColumn TItem="OportunidadeDeSortimento" Property="Ean"
@@ -214,8 +244,11 @@
     private string? _brick;
     private string? _area;
 
+    private string? _laboratorio;
+
     private List<string> _bricks = [];
     private List<string> _areas = [];
+    private List<string> _laboratorios = [];
 
     protected override Task OnInitializedAsync() => CarregarAsync();
 
@@ -224,17 +257,19 @@
         _loading = true;
         try
         {
-            _pagina = await MercadoApi.OportunidadesAsync(_corte, _brick, _area, take: 200);
+            _pagina = await MercadoApi.OportunidadesAsync(_corte, _brick, _area, _laboratorio, take: 200);
             _erro = null;
 
             // Opções de filtro saem do que a página trouxe. Consultar a base inteira para
             // montar dropdown daria uma lista de bairros que o corte já excluiu — o comprador
             // escolheria um filtro que devolve nada.
-            if (_brick is null && _area is null)
+            if (_brick is null && _area is null && _laboratorio is null)
             {
                 _bricks = [.. _pagina.Itens.Select(i => i.Brick).Distinct().Order()];
                 _areas = [.. _pagina.Itens.Where(i => i.AreaFarmacia is not null)
                                           .Select(i => i.AreaFarmacia!).Distinct().Order()];
+                _laboratorios = [.. _pagina.Itens.Where(i => i.Laboratorio is not null)
+                                                 .Select(i => i.Laboratorio!).Distinct().Order()];
             }
         }
         catch (Exception ex)
@@ -265,6 +300,45 @@
     {
         _area = area;
         return CarregarAsync();
+    }
+
+    private Task AplicarLaboratorioAsync(string? laboratorio)
+    {
+        _laboratorio = laboratorio;
+        return CarregarAsync();
+    }
+
+    /// <summary>
+    /// Exporta <b>o recorte que está na tela</b>, e não o mercado inteiro — pedido explícito do
+    /// patrocinador. A planilha declara os filtros no cabeçalho pelo mesmo motivo da outra: ela
+    /// é levada solta para reunião, e sem o recorte declarado o número dela não tem como ser
+    /// conferido.
+    /// </summary>
+    private void ExportarAsync()
+    {
+        // forceLoad: é endpoint HTTP comum, não rota Blazor — mesmo padrão da exportação da
+        // tabela de itens. Sem isso o router tentaria resolvê-la no circuito e cairia em
+        // "página não encontrada".
+        Nav.NavigateTo("/mercado/oportunidades/excel" + QueryDoRecorte(), forceLoad: true);
+    }
+
+    /// <summary>
+    /// O recorte que está na tela, para a rota de exportação reproduzir exatamente ele. Filtro
+    /// novo tem de entrar aqui: o que ficar de fora vira planilha mais ampla do que a tela, e o
+    /// contador da capa desmentindo o que o comprador acabou de ver.
+    /// </summary>
+    private string QueryDoRecorte()
+    {
+        var q = new List<string>
+        {
+            $"corteMinimo={_corte.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+        };
+
+        if (!string.IsNullOrWhiteSpace(_brick)) q.Add($"brick={Uri.EscapeDataString(_brick)}");
+        if (!string.IsNullOrWhiteSpace(_area)) q.Add($"areaFarmacia={Uri.EscapeDataString(_area)}");
+        if (!string.IsNullOrWhiteSpace(_laboratorio)) q.Add($"laboratorio={Uri.EscapeDataString(_laboratorio)}");
+
+        return "?" + string.Join("&", q);
     }
 
     /// <summary>
