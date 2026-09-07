@@ -62,10 +62,15 @@
 
         return
         [
-            Metrica("WAPE da previsão", g.WapePbs, g.WapeMl, Pct,
+            @* Formatador derivado do PAR, nunca fixo: com duas casas esta tabela chegava a
+               mostrar 0,08 nos dois lados e declarar "menor erro: PBS". Ver ComparacaoFormato. *@
+            Metrica("WAPE da previsão", g.WapePbs, g.WapeMl,
+                Adaptativo(g.WapePbs, g.WapeMl, ComparacaoFormato.Percentual),
                 $"Base comum de {g.ItensComPrevisaoMl:N0} registros"),
 
-            Metrica("MAE da previsão (un./dia)", g.MaePbs, g.MaeMl, Num, "Menor é melhor"),
+            Metrica("MAE da previsão (un./dia)", g.MaePbs, g.MaeMl,
+                Adaptativo(g.MaePbs, g.MaeMl, ComparacaoFormato.Unidades),
+                DiferencaLegivel(g.MaePbs, g.MaeMl, ComparacaoFormato.Unidades, " un./dia")),
 
             Placar("Menor erro item a item", Analise.VitoriasPbs, Analise.VitoriasMl,
                 $"{Analise.Empates:N0} empate(s) em {Analise.ItensComPrevisaoMl:N0} registros"),
@@ -164,8 +169,31 @@
         _ => "var(--rz-text-secondary-color)",
     };
 
-    private static string Pct(double? v) => v is { } d ? d.ToString("P1") : "não apurado";
-    private static string Num(double? v) => v is { } d ? d.ToString("N2") : "não apurado";
+    /// <summary>
+    /// Formatador com casas suficientes para os dois lados do par não parecerem iguais — se a
+    /// linha nomeia um vencedor, a diferença aparece nela.
+    /// </summary>
+    private static Func<double?, string> Adaptativo(
+        double? pbs, double? ml, Func<double, int, string> formatar)
+    {
+        var casas = ComparacaoFormato.CasasParaDistinguir(pbs, ml, formatar);
+        return v => v is { } d ? formatar(d, casas) : "não apurado";
+    }
+
+    /// <summary>
+    /// A diferença calculada, na coluna de leitura. Foi a outra metade do pedido do
+    /// patrocinador: mais casas resolvem o "parecem iguais", e a diferença resolve o "quanto".
+    /// </summary>
+    private static string DiferencaLegivel(
+        double? pbs, double? ml, Func<double, int, string> formatar, string unidade)
+    {
+        if (pbs is not { } p || ml is not { } m) return "Menor é melhor";
+        if (p == m) return "Menor é melhor — valores idênticos";
+
+        var casas = ComparacaoFormato.CasasParaDistinguir(pbs, ml, formatar);
+        return $"Menor é melhor — diferença de {formatar(Math.Abs(p - m), casas)}{unidade}";
+    }
+
     private static string Un(decimal? v) => v is { } d ? $"{d:N0} un." : "sem cálculo do ML";
     private static string Dinheiro(decimal? v) => v is { } d ? d.ToString("C2") : "sem cálculo do ML";
 

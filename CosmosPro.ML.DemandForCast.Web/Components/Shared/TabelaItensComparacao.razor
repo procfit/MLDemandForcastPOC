@@ -322,36 +322,6 @@
             <RadzenDataGridColumn TItem="SessaoItem" Property="Curva" Title="Curva" Width="90px">
                 <Template Context="i">@(string.IsNullOrWhiteSpace(i.Curva) ? "sem curva" : i.Curva)</Template>
             </RadzenDataGridColumn>
-            <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoAlerta"
-                                  Title="Alerta de mercado" Width="300px">
-                <HeaderTemplate>
-                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
-                        <span>Alerta de mercado</span>
-                        <HelpTip Text="Acende quando o índice fica abaixo de 0,50. Aí o sistema procura a causa numa ordem: primeiro estoque — se houve dia sem estoque no mês comparado, diz possível perda por ruptura; se havia estoque todos os dias, diz sem causa aparente e o item vai para a sua análise; se aquele mês não veio no arquivo, diz estoque não apurado, que NÃO é o mesmo que não houve ruptura. PREÇO NÃO É VERIFICADO: o relatório da IQVIA não traz o preço que cada concorrente cobrou, então sem causa aparente NÃO significa que o preço está certo — significa que estoque não explica, e preço não pôde ser testado." />
-                    </RadzenStack>
-                </HeaderTemplate>
-                <Template Context="i">
-                    @if (i.AlertaDeMercadoLegivel is { } rotulo)
-                    {
-                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
-                            <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger); font-size: 1rem" />
-                            <span style="color: var(--rz-danger)" title="@ExplicacaoDoAlerta(i)"
-                                  data-test="alerta-de-mercado">@rotulo</span>
-                        </RadzenStack>
-                    }
-                    else if (i.TemDadoDeMercado)
-                    {
-                        <span style="color: var(--rz-text-tertiary-color)">dentro do esperado</span>
-                    }
-                    else
-                    {
-                        @* "Sem dado" e "dentro do esperado" são afirmações diferentes, e a
-                           coluna precisa distingui-las: o comprador não pode ler ausência de
-                           medição como aprovação. *@
-                        <span style="color: var(--rz-text-tertiary-color)" title="Uma das pontes não fechou: loja sem CNPJ, produto sem código de barras, ou a IQVIA não reportou este item no bairro.">sem dado</span>
-                    }
-                </Template>
-            </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="Categoria" Title="Categoria" Width="150px" Sortable="false">
                 <HeaderTemplate>
                     <span>Categoria</span>
@@ -510,7 +480,47 @@
                     }
                 </Template>
             </RadzenDataGridColumn>
-            @* Posicao pedida pelo patrocinador (06/09/2026): logo depois do indice vs bairro.
+            @* ALERTA AO LADO DO INDICE, pedido do patrocinador em 07/09/2026. Antes esta coluna
+               ficava junto de Curva, a dez colunas de distancia do indice que a produz — e o
+               alerta NAO e um atributo do item, e a leitura do indice: ele acende quando o indice
+               cai abaixo de 0,50 e diz qual causa foi testada. Separados, o comprador via o rotulo
+               sem o numero que o justifica e tinha de rolar a tabela para cruzar os dois.
+
+               Isto SUPERA a posicao pedida em 06/09, quando os precos deviam vir logo depois do
+               indice: so uma coluna pode ser a primeira, e a que explica o indice ganha. Os precos
+               continuam no mesmo bloco de mercado, duas posicoes adiante. *@
+            <RadzenDataGridColumn TItem="SessaoItem" Property="MercadoAlerta"
+                                  Title="Alerta de mercado" Width="300px">
+                <HeaderTemplate>
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                        <span>Alerta de mercado</span>
+                        <HelpTip Text="Acende quando o índice fica abaixo de 0,50. Aí o sistema procura a causa numa ordem: primeiro estoque — se houve dia sem estoque no mês comparado, diz possível perda por ruptura; se havia estoque todos os dias, diz sem causa aparente e o item vai para a sua análise; se aquele mês não veio no arquivo, diz estoque não apurado, que NÃO é o mesmo que não houve ruptura. PREÇO NÃO É VERIFICADO: o relatório da IQVIA não traz o preço que cada concorrente cobrou, então sem causa aparente NÃO significa que o preço está certo — significa que estoque não explica, e preço não pôde ser testado." />
+                    </RadzenStack>
+                </HeaderTemplate>
+                <Template Context="i">
+                    @if (i.AlertaDeMercadoLegivel is { } rotulo)
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
+                            <RadzenIcon Icon="trending_down" Style="color: var(--rz-danger); font-size: 1rem" />
+                            <span style="color: var(--rz-danger)" title="@ExplicacaoDoAlerta(i)"
+                                  data-test="alerta-de-mercado">@rotulo</span>
+                        </RadzenStack>
+                    }
+                    else if (i.TemDadoDeMercado)
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">dentro do esperado</span>
+                    }
+                    else
+                    {
+                        @* "Sem dado" e "dentro do esperado" são afirmações diferentes, e a
+                           coluna precisa distingui-las: o comprador não pode ler ausência de
+                           medição como aprovação. *@
+                        <span style="color: var(--rz-text-tertiary-color)" title="Uma das pontes não fechou: loja sem CNPJ, produto sem código de barras, ou a IQVIA não reportou este item no bairro.">sem dado</span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            @* Posicao pedida pelo patrocinador (06/09/2026): no bloco de mercado, logo depois
+               do indice — hoje com o alerta entre os dois, ver a nota acima.
                A conta e a dele — valor da IQVIA dividido pelas unidades da IQVIA, nos DOIS
                lados, tirados da mesma planilha. Foi a opcao certa entre as duas que ele
                levantou: a alternativa (preco da rede vindo da base de vendas dela) compararia

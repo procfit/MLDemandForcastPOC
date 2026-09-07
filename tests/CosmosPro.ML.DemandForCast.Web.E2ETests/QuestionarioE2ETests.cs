@@ -94,11 +94,13 @@ public sealed class QuestionarioE2ETests(AppHostFixture fixture)
 
             foreach (var pergunta in secoes[i].Perguntas)
             {
-                // Escopo pela pergunta antes de casar o texto da alternativa: as sete afirmações
+                // Escopo pela pergunta antes de casar o texto da alternativa: TODAS as afirmações
                 // da Parte B compartilham os mesmos rótulos ("4 – Concordo" etc.), então um
                 // GetByText global casaria sempre com a primeira ocorrência e este laço
-                // responderia a B1 doze vezes, deixando B2..B12 em branco — e o teste passaria a
-                // provar o oposto do que afirma.
+                // responderia a B1 onze vezes, deixando as demais em branco — e o teste passaria
+                // a provar o oposto do que afirma. O laço percorre o catálogo, então ele
+                // acompanha a renumeração do instrumento sozinho; foi o que o levou de doze
+                // afirmações (V5) para onze (V6) sem uma linha de mudança aqui.
                 await page.Locator($"[data-test=pergunta-{pergunta.Codigo}]")
                           .GetByText(pergunta.Opcoes[0].Texto, new() { Exact = true })
                           .First.ClickAsync();

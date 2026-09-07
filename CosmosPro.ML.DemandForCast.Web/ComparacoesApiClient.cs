@@ -885,11 +885,12 @@ public sealed record SessaoFatia(
     /// não como tooltip, porque é numa apresentação e num print que o comprador lê o
     /// indicador — e tooltip não sai em nenhum dos dois.
     /// </summary>
-    public string LeituraDoWape => Leitura(WapePbs, WapeMl, v => v.ToString("P1"), "menor erro global");
+    public string LeituraDoWape =>
+        Leitura(WapePbs, WapeMl, ComparacaoFormato.Percentual, "menor erro global", "");
 
     /// <summary>Idem para o MAE, na unidade do indicador (unidades por dia).</summary>
     public string LeituraDoMae =>
-        Leitura(MaePbs, MaeMl, v => $"{v:N2} un./dia", "menor erro médio");
+        Leitura(MaePbs, MaeMl, ComparacaoFormato.Unidades, "menor erro médio", " un./dia");
 
     /// <summary>
     /// Os dois desfechos que não são "alguém ganhou" existem porque são afirmações
@@ -899,7 +900,8 @@ public sealed record SessaoFatia(
     /// de um número, o que ninguém calculou.
     /// </summary>
     private static string Leitura(
-        double? pbs, double? ml, Func<double, string> formatar, string qualificacao)
+        double? pbs, double? ml, Func<double, int, string> formatar, string qualificacao,
+        string unidade)
     {
         if (pbs is not { } p || ml is not { } m)
         {
@@ -907,16 +909,27 @@ public sealed record SessaoFatia(
                    "então não há comparação a fazer aqui.";
         }
 
-        var numeros = $"Nesta execução: PBS {formatar(p)} e ML {formatar(m)}";
+        // Casas derivadas do par, e não fixas: com duas casas a frase chegava a dizer
+        // "PBS 0,08 e ML 0,08; portanto, o seu ERP apresentou menor erro médio" — dois
+        // números iguais e um vencedor. Ver ComparacaoFormato.
+        var casas = ComparacaoFormato.CasasParaDistinguir(pbs, ml, formatar);
+        var numeros = $"Nesta execução: PBS {formatar(p, casas)}{unidade} " +
+                      $"e ML {formatar(m, casas)}{unidade}";
 
         // Igualdade exata, sem tolerância, pelo mesmo critério de MlPerde: inventar um
         // epsilon aqui criaria um empate que a coluna "ML perde aqui?" não reconhece, e as
         // duas leituras da mesma tela passariam a discordar.
         if (p == m) return $"{numeros} — empate, nenhum dos dois apresentou {qualificacao}.";
 
+        // A diferença explícita, porque foi a outra metade do pedido: mesmo com casas
+        // suficientes, subtrair dois números na cabeça é trabalho que a tela pode poupar.
+        var diferenca = formatar(Math.Abs(p - m), casas);
+
         return p < m
-            ? $"{numeros}; portanto, o seu ERP apresentou {qualificacao}."
-            : $"{numeros}; portanto, o ML apresentou {qualificacao}.";
+            ? $"{numeros}; portanto, o seu ERP apresentou {qualificacao}, " +
+              $"por uma diferença de {diferenca}{unidade}."
+            : $"{numeros}; portanto, o ML apresentou {qualificacao}, " +
+              $"por uma diferença de {diferenca}{unidade}.";
     }
 }
 

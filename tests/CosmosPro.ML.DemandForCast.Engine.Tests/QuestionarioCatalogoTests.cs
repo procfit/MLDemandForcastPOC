@@ -103,6 +103,73 @@ public sealed class QuestionarioCatalogoTests
         }
     }
 
+    /// <summary>
+    /// A forma do instrumento V6, travada de proposito.
+    ///
+    /// <para>
+    /// O catalogo ja foi renumerado <b>duas vezes</b> (V2 → V5 → V6) e cada renumeracao troca o
+    /// dono de um codigo sem produzir erro nenhum: a tela renderiza, o envio grava, e so a
+    /// tabulacao no Excel sai errada — meses depois, quando o dado ja foi coletado. Este teste nao
+    /// impede a proxima renumeracao, ele obriga a ser deliberada: quem mudar o instrumento tem de
+    /// mudar aqui tambem, e ao fazer isso ve o aviso de subir a Versao.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Parte_B_da_V6_tem_onze_afirmacoes_nos_codigos_do_documento()
+    {
+        QuestionarioCatalogo.Versao.Should().Be(4, "V6 do Apendice A");
+
+        var parteB = QuestionarioCatalogo.Perguntas
+            .Where(p => p.Codigo.StartsWith('B'))
+            .Select(p => p.Codigo)
+            .ToList();
+
+        parteB.Should().Equal(
+            ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9", "B10", "B11"],
+            "os codigos e a ordem sao os do documento submetido, e a analise casa por eles");
+
+        QuestionarioCatalogo.Perguntas
+            .Where(p => p.Codigo.StartsWith('A'))
+            .Select(p => p.Codigo)
+            .Should().Equal(["A1", "A2", "A3"], "a A4 do documento esta deliberadamente ausente");
+    }
+
+    /// <summary>
+    /// Duas ausencias e uma presenca que valem asserção porque foram decisoes de quem conduz a
+    /// pesquisa, e as tres seriam "corrigidas" por alguem lendo o documento antigo.
+    /// </summary>
+    [Fact]
+    public void A_V6_nao_pergunta_sobre_clima_e_epidemias_e_fecha_com_o_uso_diario()
+    {
+        var textos = QuestionarioCatalogo.Perguntas.Select(p => p.Texto).ToList();
+
+        textos.Should().NotContain(t => t.Contains("epidemias", StringComparison.OrdinalIgnoreCase),
+            "a afirmacao sobre variaveis externas (sazonalidade, clima, epidemias) era a B6 da V5 e "
+            + "saiu na V6: era a unica que perguntava sobre coisas que o artefacto nao faz");
+
+        QuestionarioCatalogo.Pergunta("B11")!.Texto.Should().Contain("operação diária",
+            "esta afirmacao foi B7 na V2, B12 na V5 e e B11 na V6 — e o caso concreto de codigo "
+            + "reaproveitado que impede agrupar respostas por codigo sozinho");
+    }
+
+    /// <summary>
+    /// O termo de consentimento nao promete anonimato, e isso e deliberado: <c>Questionario</c>
+    /// grava <c>UsuarioId</c>, e o patrocinador pede a identificacao do respondente na exportacao.
+    /// O documento V6 que ele enviou traz a frase antiga de volta; a decisao de 07/09/2026 foi
+    /// manter o texto corrigido aqui. Se a frase reaparecer, o participante volta a consentir com
+    /// uma coisa enquanto o sistema faz outra.
+    /// </summary>
+    [Fact]
+    public void Apresentacao_nao_promete_anonimato()
+    {
+        var apresentacao = string.Join(" ", QuestionarioCatalogo.Apresentacao);
+
+        apresentacao.Should().NotContain("anónima")
+            .And.NotContain("anônima")
+            .And.NotContain("permita identificar");
+        apresentacao.Should().Contain("confidencial", "o que se promete e confidencialidade");
+    }
+
     [Fact]
     public void Pergunta_resolve_por_codigo_e_opcao_resolve_dentro_dela()
     {

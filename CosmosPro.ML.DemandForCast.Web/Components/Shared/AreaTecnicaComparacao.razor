@@ -45,11 +45,11 @@
                 </RadzenDataGridColumn>
                 <RadzenDataGridColumn TItem="BracoLinha" Title="WAPE" Width="130px" TextAlign="TextAlign.Right">
                     <HeaderTemplate><span>WAPE</span><HelpTip Text="@TipWape" Size="0.85rem" /></HeaderTemplate>
-                    <Template Context="b">@Pct(b.Wape)</Template>
+                    <Template Context="b">@FormatarWape(b.Wape)</Template>
                 </RadzenDataGridColumn>
                 <RadzenDataGridColumn TItem="BracoLinha" Title="MAE (un./dia)" Width="150px" TextAlign="TextAlign.Right">
                     <HeaderTemplate><span>MAE (un./dia)</span><HelpTip Text="@TipMae" Size="0.85rem" /></HeaderTemplate>
-                    <Template Context="b">@Num(b.Mae)</Template>
+                    <Template Context="b">@FormatarMae(b.Mae)</Template>
                 </RadzenDataGridColumn>
                 <RadzenDataGridColumn TItem="BracoLinha" Title="Itens" Width="110px" TextAlign="TextAlign.Right">
                     <Template Context="b">@b.N.ToString("N0")</Template>
@@ -181,8 +181,22 @@
         new("ML (LightGBM)", global.WapeMl, global.MaeMl, global.ItensComPrevisaoMl),
     ];
 
-    /// <summary>Nulo vira texto, nunca traço: "—" numa métrica lê como zero.</summary>
-    private static string Pct(double? v) => v is { } d ? d.ToString("P1") : "não apurado";
 
-    private static string Num(double? v) => v is { } d ? d.ToString("N2") : "não apurado";
+    /// <summary>
+    /// As duas linhas desta tabela são os dois métodos, e a frase abaixo dela declara qual
+    /// apresentou menor erro. Com casas fixas as duas linhas podiam exibir o MESMO número e a
+    /// frase apontar um vencedor — o defeito que o patrocinador relatou. A precisão sai do par,
+    /// então as duas linhas só se parecem quando os valores são de fato iguais.
+    /// </summary>
+    private string FormatarMae(double? v) =>
+        v is { } d
+            ? ComparacaoFormato.Unidades(d, ComparacaoFormato.CasasParaDistinguir(
+                Analise.Global.MaePbs, Analise.Global.MaeMl, ComparacaoFormato.Unidades))
+            : "não apurado";
+
+    private string FormatarWape(double? v) =>
+        v is { } d
+            ? ComparacaoFormato.Percentual(d, ComparacaoFormato.CasasParaDistinguir(
+                Analise.Global.WapePbs, Analise.Global.WapeMl, ComparacaoFormato.Percentual))
+            : "não apurado";
 }

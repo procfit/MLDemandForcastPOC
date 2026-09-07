@@ -96,7 +96,16 @@
                                        pergunta sete vezes. *@
                                     <div data-test="pergunta-@pergunta.Codigo">
                                     <RadzenStack Gap="0.5rem">
+                                        @* O CODIGO DA PERGUNTA FICA VISIVEL (pedido do patrocinador,
+                                           07/09/2026): e por ele que a analise casa a resposta com o
+                                           Apendice A, e quem conduz a sessao precisa poder dizer "na
+                                           B4 voce marcou 5" sem contar linhas na tela. Sai do proprio
+                                           catalogo, entao numeracao e ordem nunca divergem — escrever
+                                           "B4" a mao aqui criaria uma segunda fonte de verdade que
+                                           silenciosamente sai de sincronia na proxima renumeracao, e
+                                           o instrumento ja foi renumerado duas vezes. *@
                                         <RadzenText TextStyle="TextStyle.Subtitle2" Style="margin: 0">
+                                            <span style="color: var(--rz-text-secondary-color); font-weight: 600; margin-right: 0.4rem">@pergunta.Codigo</span>
                                             @pergunta.Texto
                                             @if (!pergunta.Obrigatoria)
                                             {

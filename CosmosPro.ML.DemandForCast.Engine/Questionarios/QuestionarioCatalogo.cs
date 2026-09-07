@@ -32,15 +32,25 @@ public sealed record SecaoDef(string Titulo, string? Descricao, IReadOnlyList<Pe
 /// diferença de variante ("artefacto"/"stocks"/"ruturas" contra "artefato"/"estoque"/"rupturas")
 /// é visível na tela de propósito: isto é instrumento de pesquisa, e reescrever enunciado
 /// invalida a comparação com o que foi submetido. Não "corrija" para pt-BR, e não reordene as
-/// perguntas — os códigos (A1–A3, B1–B12) são os do documento e é por eles que a análise casa
+/// perguntas — os códigos (A1–A3, B1–B11) são os do documento e é por eles que a análise casa
 /// as respostas. A4 do documento é a única ausente, por decisão registrada onde ela caberia.
 /// </para>
 ///
 /// <para>
-/// <b>Conteúdo da Versão 5 do Apêndice A</b>, recebida em 05/09/2026. Ela acrescentou cinco
-/// afirmações à Parte B e <b>reaproveitou o código B7</b>: o que era B7 na V2 (uso na operação
-/// diária) passou a ser B12, e B7 virou a afirmação sobre IQVIA e sortimento. Por isso a análise
-/// tem de agrupar por <c>(VersaoCatalogo, Codigo)</c>, nunca só por código.
+/// <b>Conteúdo da Versão 6 do Apêndice A</b>, recebida em 07/09/2026. Ela <b>removeu</b> a
+/// afirmação sobre "IA e variáveis externas (sazonalidade, clima, epidemias e dados de mercado)",
+/// que era a B6 da V5 — a única que perguntava sobre coisas que o artefacto não faz —, e
+/// renumerou as seguintes. A Parte B foi de doze afirmações para onze.
+/// </para>
+///
+/// <para>
+/// <b>É a SEGUNDA renumeração do instrumento, e agora seis códigos carregam afirmação diferente
+/// da versão anterior</b> (B6 a B11). Antes disso, a V5 já havia reaproveitado o código B7: o que
+/// era B7 na V2 (uso na operação diária) virou B12 na V5 e agora é B11 na V6. Consequência que não
+/// é estilo: <b>a análise tem de agrupar por <c>(VersaoCatalogo, Codigo)</c>, nunca só por
+/// código</b> — somar "B7" das três versões mistura três perguntas distintas. Cada resposta guarda
+/// o retrato do enunciado exibido, então o registro individual continua correto; o risco é só na
+/// agregação, e ele é silencioso.
 /// </para>
 ///
 /// <para>
@@ -67,9 +77,11 @@ public static class QuestionarioCatalogo
     /// <para>
     /// 2 = instrumento real (Questionário V3). A versão 1 foi o catálogo provisório que existiu
     /// enquanto o documento não estava disponível; nenhuma resposta foi coletada sob ela.
+    /// 3 = Questionário V5 (Parte B de B1 a B12). 4 = Questionário V6, que removeu a antiga B6 e
+    /// renumerou as seguintes — ver o aviso de renumeração no doc da classe.
     /// </para>
     /// </summary>
-    public const int Versao = 3;
+    public const int Versao = 4;
 
     /// <summary>
     /// Apresentação e termo de consentimento, exibidos <b>antes</b> do primeiro passo. Não é
@@ -205,43 +217,44 @@ public static class QuestionarioCatalogo
                     "Considero que o artefacto poderá contribuir para reduzir os custos associados " +
                     "à gestão de inventário.", Likert),
 
+                // A afirmacao sobre "IA e variaveis externas (sazonalidade, clima, epidemias)"
+                // ERA A B6 DA V5 e SAIU na V6, por decisao de quem conduz a pesquisa: era a unica
+                // que perguntava sobre coisas que o artefacto nao faz. Nao "restaure" -- a
+                // ausencia e deliberada, como a da A4.
+                //
+                // ATENCAO AO CODIGO: daqui para baixo todo codigo mudou de dono na V6, e este e o
+                // SEGUNDO remanejamento do instrumento. A afirmacao abaixo era B7 na V5 e agora e
+                // B6; a de uso diario foi B7 na V2, B12 na V5 e e B11 aqui. Respostas de versoes
+                // diferentes NAO podem ser agrupadas por codigo: agrupe por
+                // (VersaoCatalogo, Codigo). Cada resposta guarda o retrato do enunciado exibido,
+                // entao o registro individual continua correto -- o risco e so na agregacao, e ele
+                // nao da erro nenhum.
                 new PerguntaDef("B6",
-                    "Considero que a utilização de Inteligência Artificial e de variáveis externas " +
-                    "(por exemplo, sazonalidade, clima, epidemias e dados de mercado) representa " +
-                    "uma mais-valia para melhorar a previsão da procura.", Likert),
-
-                // ATENCAO AO CODIGO: na Versao 2 o codigo B7 era a afirmacao sobre uso diario,
-                // que na V5 passou a ser B12. O codigo foi REAPROVEITADO para outra afirmacao,
-                // entao respostas de versoes diferentes NAO podem ser agrupadas por codigo:
-                // agrupe por (VersaoCatalogo, Codigo). Cada resposta guarda o retrato do
-                // enunciado exibido, entao o registro individual continua correto -- o risco e
-                // so na agregacao.
-                new PerguntaDef("B7",
                     "Considero que a utilização de Inteligência Artificial em conjunto com os " +
                     "dados de mercado da IQVIA pode apoiar a identificação de produtos com " +
                     "potencial de venda que ainda não fazem parte do sortimento da organização.",
                     Likert),
 
-                new PerguntaDef("B8",
+                new PerguntaDef("B7",
                     "Considero que a comparação entre os dados de mercado da IQVIA e os dados " +
                     "internos da organização pode ajudar a identificar produtos já " +
                     "comercializados que apresentam potencial para aumentar as vendas.", Likert),
 
-                new PerguntaDef("B9",
+                new PerguntaDef("B8",
                     "Considero que a integração de Inteligência Artificial, dados internos da " +
                     "organização e informações externas de mercado pode tornar as decisões de " +
                     "compra e gestão de stocks mais fundamentadas.", Likert),
 
-                new PerguntaDef("B10",
+                new PerguntaDef("B9",
                     "Considero que as quantidades de compra sugeridas pelo artefacto são " +
                     "adequadas para apoiar as decisões de reposição de stocks.", Likert),
 
-                new PerguntaDef("B11",
+                new PerguntaDef("B10",
                     "As informações apresentadas pelo artefacto permitem compreender e avaliar " +
                     "de forma clara as recomendações de compra geradas pela Inteligência " +
                     "Artificial.", Likert),
 
-                new PerguntaDef("B12",
+                new PerguntaDef("B11",
                     "Considero que este artefacto apresenta potencial para ser utilizado na " +
                     "operação diária da minha organização.", Likert),
             ]),
