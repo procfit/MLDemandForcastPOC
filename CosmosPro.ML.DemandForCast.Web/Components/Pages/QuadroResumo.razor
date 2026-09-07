@@ -68,7 +68,8 @@
                 <Totalizador Rotulo="Lojas" Valor="@($"{(_analise.PorLoja?.Count ?? 0):N0}")" />
                 <Totalizador Rotulo="Vendido no período" Valor="@($"{resultado.VendidoNaJanelaUnidades:N0} un.")" />
                 <Totalizador Rotulo="Base de previsão" Valor="@($"{resultado.ItensComPrevisaoMl:N0} registros")" />
-                <Totalizador Rotulo="Base de compra" Valor="@($"{resultado.ItensComDecisaoMl:N0} registros")" />
+                <Totalizador Rotulo="Base de compra" Valor="@($"{resultado.ItensComDecisaoMl:N0} registros")"
+                             Nota="@BaseDeCompraNota" />
             </RadzenStack>
         </RadzenCard>
 
@@ -156,6 +157,16 @@
     /// Linha de contexto da execução. Declara <b>sobre o quê</b> o quadro fala — sem isso os
     /// números abaixo parecem falar da rede inteira, e não de uma sugestão.
     /// </summary>
+    /// <summary>
+    /// "Calculou" nao e "mandou comprar", e a nota existe porque a falta dela ja levou o
+    /// patrocinador a ler a base de compra como itens comprados. Decidir comprar ZERO e uma
+    /// decisao — o item entra na base —, mas nao e uma compra.
+    /// </summary>
+    private string? BaseDeCompraNota =>
+        _analise?.Totais is { } t && t.ItensComCompraMl > 0
+            ? $"o ML mandou comprar em {t.ItensComCompraMlPositiva:N0}; nos demais decidiu zero"
+            : null;
+
     private string Cabecalho(SessaoResultadoView r)
     {
         var partes = new List<string>();

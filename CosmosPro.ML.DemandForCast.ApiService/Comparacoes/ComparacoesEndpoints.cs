@@ -788,6 +788,11 @@ internal static class ComparacoesEndpoints
                 CompraPbs = g.Sum(i => i.CompraSugeridaPbs),
                 CompraMl = g.Sum(i => i.CompraSugeridaMl),
                 ComCompraMl = g.Count(i => i.CompraSugeridaMl != null),
+                // Quantos o ML mandou comprar DE FATO. Diferente de ComCompraMl, que conta os
+                // itens em que ele decidiu — inclusive decidindo zero, que e uma decisao e nao
+                // uma ausencia. A falta deste numero fez o patrocinador ler "2.106 com calculo
+                // do ML" como 2.106 itens comprados.
+                ComCompraMlPositiva = g.Count(i => i.CompraSugeridaMl > 0m),
                 // A compra do PBS restrita aos itens que o ML calculou. Ficou de fora quando a
                 // sobra e o valor ganharam o lado comparavel, e a faixa de comparacao exibia o
                 // total (207 un.) ao lado dos 68 do ML: mesmo defeito, coluna diferente.
@@ -822,7 +827,7 @@ internal static class ComparacoesEndpoints
         // Recorte vazio: GroupBy não devolve linha nenhuma.
         if (b is null)
         {
-            return new TotaisDosItens(0, 0m, null, null, 0, 0m, 0m, null, null, 0, null, 0, null, null, 0, 0);
+            return new TotaisDosItens(0, 0m, null, null, 0, 0, 0m, 0m, null, null, 0, null, 0, null, null, 0, 0);
         }
 
         return new TotaisDosItens(
@@ -831,6 +836,7 @@ internal static class ComparacoesEndpoints
             b.ComCompraMl == 0 ? null : b.CompraPbsComparavel,
             b.ComCompraMl == 0 ? null : b.CompraMl,
             b.ComCompraMl,
+            b.ComCompraMlPositiva,
             b.Vendido,
             b.SobraPbs,
             b.ComSobraMl == 0 ? null : b.SobraPbsComparavel,
@@ -1153,6 +1159,7 @@ internal sealed record TotaisDosItens(
     decimal? CompraPbsComparavelUnidades,
     decimal? CompraMlUnidades,
     int ItensComCompraMl,
+    int ItensComCompraMlPositiva,
     decimal VendidoNaJanela,
     decimal SobraPbsUnidades,
     decimal? SobraPbsComparavelUnidades,

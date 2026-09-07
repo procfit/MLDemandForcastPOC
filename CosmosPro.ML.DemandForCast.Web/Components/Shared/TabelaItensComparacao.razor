@@ -201,7 +201,8 @@
 
                     <RadzenStack Orientation="Orientation.Horizontal" Gap="2rem" Wrap="FlexWrap.Wrap" class="rz-mt-2">
                         <Totalizador Rotulo="Compra PBS (un.)" Valor="@UnidadesOuSemMl(t.CompraPbsComparavelUnidades)" />
-                        <Totalizador Rotulo="Compra ML (un.)" Valor="@UnidadesOuSemMl(t.CompraMlUnidades)" />
+                        <Totalizador Rotulo="Compra ML (un.)" Valor="@UnidadesOuSemMl(t.CompraMlUnidades)"
+                                     Nota="@($"em {t.ItensComCompraMlPositiva:N0} de {t.ItensComCompraMl:N0} registros; nos demais o ML decidiu zero")" />
                         <Totalizador Rotulo="Diferença de compra (un.)" Valor="@DiferencaUnidades(t.DiferencaCompraUnidades)" />
                         <Totalizador Rotulo="Sobra PBS (un.)" Valor="@UnidadesOuSemMl(t.SobraPbsComparavelUnidades)" />
                         <Totalizador Rotulo="Sobra ML (un.)" Valor="@UnidadesOuSemMl(t.SobraMlUnidades)" />

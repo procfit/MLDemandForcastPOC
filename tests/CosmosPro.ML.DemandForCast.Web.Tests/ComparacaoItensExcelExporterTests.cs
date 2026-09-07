@@ -216,6 +216,7 @@ public sealed class ComparacaoItensExcelExporterTests
                 CompraPbsComparavelUnidades: 4m,
                 CompraMlUnidades: 3m,
                 ItensComCompraMl: 1,
+                ItensComCompraMlPositiva: 1,
                 VendidoNaJanela: 4m,
                 SobraPbsUnidades: 10m,
                 SobraPbsComparavelUnidades: 9m,

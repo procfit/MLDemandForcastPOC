@@ -514,6 +514,13 @@ public sealed record TotaisDosItens(
     decimal? CompraPbsComparavelUnidades,
     decimal? CompraMlUnidades,
     int ItensComCompraMl,
+    /// <summary>
+    /// Itens em que o ML mandou comprar <b>acima de zero</b>. Diferente de
+    /// <see cref="ItensComCompraMl"/>, que conta onde ele decidiu — inclusive decidindo zero.
+    /// Decidir comprar nada é uma decisão, não uma ausência, e sem este número a tela não
+    /// distinguia "calculou" de "comprou".
+    /// </summary>
+    int ItensComCompraMlPositiva,
     decimal VendidoNaJanela,
     decimal SobraPbsUnidades,
     decimal? SobraPbsComparavelUnidades,

@@ -277,6 +277,24 @@ public sealed class ComparacoesApiClientTests
         FiltroDeItens.Nenhum.ParaQueryString().Should().NotContain("somenteMlPior");
     }
 
+    /// <summary>
+    /// <b>"Calculou" e "mandou comprar" sao numeros diferentes</b>, e a falta do segundo gerou
+    /// reclamacao do patrocinador em 27/08/2026: ele leu "2.106 registros com calculo do ML"
+    /// como 2.106 itens comprados, quando o ML mandou comprar acima de zero em algumas dezenas.
+    /// O rotulo antigo ja dizia "com calculo", mas nao existia o numero que ele queria — e
+    /// decidir comprar ZERO e uma decisao, nao uma ausencia.
+    /// </summary>
+    [Fact]
+    public void Compra_positiva_do_ML_e_contada_a_parte_de_quem_apenas_teve_calculo()
+    {
+        var t = Totais(
+            sobraPbsTotal: 4194m, sobraPbsComparavel: 3692m, sobraMl: 3693m,
+            itensComCompraMl: 2106, itensComCompraMlPositiva: 40);
+
+        t.ItensComCompraMl.Should().Be(2106, "o ML calculou para todos esses");
+        t.ItensComCompraMlPositiva.Should().Be(40, "mas so mandou comprar nesses");
+    }
+
     // --- Cobertura e analise rapida -------------------------------------------
 
     /// <summary>
@@ -451,12 +469,15 @@ public sealed class ComparacoesApiClientTests
         decimal? valorMl = null,
         decimal compraPbsTotal = 207m,
         decimal? compraPbsComparavel = 66m,
-        decimal? compraMl = 68m) => new(
+        decimal? compraMl = 68m,
+        int itensComCompraMl = 2106,
+        int itensComCompraMlPositiva = 40) => new(
         Itens: 20153,
         CompraPbsUnidades: compraPbsTotal,
         CompraPbsComparavelUnidades: sobraMl is null ? null : compraPbsComparavel,
         CompraMlUnidades: sobraMl is null ? null : compraMl,
-        ItensComCompraMl: sobraMl is null ? 0 : 2106,
+        ItensComCompraMl: sobraMl is null ? 0 : itensComCompraMl,
+        ItensComCompraMlPositiva: sobraMl is null ? 0 : itensComCompraMlPositiva,
         VendidoNaJanela: 1000m,
         SobraPbsUnidades: sobraPbsTotal,
         SobraPbsComparavelUnidades: sobraPbsComparavel,
