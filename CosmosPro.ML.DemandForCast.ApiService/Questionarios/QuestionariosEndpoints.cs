@@ -42,7 +42,151 @@ internal static class QuestionariosEndpoints
              .Produces(StatusCodes.Status404NotFound)
              .Produces<ValidationErrorResponse>(StatusCodes.Status409Conflict);
 
+        app.MapGet("/api/comparacoes/avaliacoes", TabulacaoAsync)
+           .WithName("GetAvaliacoesTabuladas")
+           .WithTags("Questionarios")
+           .Produces<TabulacaoView>();
+
         return app;
+    }
+
+    /// <summary>
+    /// Uma linha por execução avaliada, com a seção G e as respostas do questionário lado a
+    /// lado — os dados brutos que quem conduz a pesquisa tabula no Excel.
+    ///
+    /// <para>
+    /// <b>A chave é a execução, nunca o comprador</b> (exigência explícita do patrocinador). O
+    /// mesmo comprador avalia várias execuções, e consolidar por ele apagaria justamente a
+    /// variação que a pesquisa mede. Isso já é garantido pelo banco
+    /// (<c>UQ_Questionarios_SessaoId</c>); esta consulta parte da sessão para que a garantia
+    /// apareça também no formato.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Traz sessão sem avaliação e sem questionário também.</b> Filtrar só as respondidas
+    /// esconderia o denominador: 12 avaliações não dizem nada sem as 30 execuções de onde
+    /// saíram. Quem exporta decide o que descartar.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>VersaoCatalogo</c> na linha não é enfeite.</b> O instrumento já foi renumerado duas
+    /// vezes, e o código B7 designou afirmação diferente em cada versão. Sem esta coluna a
+    /// planilha soma perguntas distintas na mesma coluna, sem erro nenhum e sem sintoma. É a
+    /// única coisa que este endpoint acrescenta ao que foi pedido.
+    /// </para>
+    /// </summary>
+    private static async Task<IResult> TabulacaoAsync(
+        EngineDbContext db,
+        CancellationToken ct,
+        [FromQuery] int redeId = 1)
+    {
+        if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
+
+        var sessoes = await db.ComparacaoSessoes
+            .AsNoTracking()
+            .Where(s => s.RedeId == redeId)
+            .OrderByDescending(s => s.CriadoEm)
+            .Select(s => new
+            {
+                s.Id,
+                s.CriadoEm,
+                s.Status,
+                s.SugestaoId,
+                s.SugestaoDescricao,
+                s.AvaliacaoVeredito,
+                s.AvaliacaoComentario,
+                s.AvaliacaoEm,
+                s.AvaliacaoUsuarioId,
+            })
+            .ToListAsync(ct);
+
+        if (sessoes.Count == 0) return Results.Ok(new TabulacaoView(redeId, [], []));
+
+        var ids = sessoes.Select(s => s.Id).ToList();
+
+        // Cabeçalho e respostas em duas idas, e não numa junção só: a junção repetiria o
+        // cabeçalho em cada resposta (onze linhas por execução) e o custo de montar passaria a
+        // crescer com o produto em vez de com a soma.
+        var questionarios = await db.Questionarios
+            .AsNoTracking()
+            .Where(q => ids.Contains(q.SessaoId))
+            .Select(q => new { q.Id, q.SessaoId, q.UsuarioId, q.VersaoCatalogo, q.EnviadoEm })
+            .ToListAsync(ct);
+
+        var porSessao = questionarios.ToDictionary(q => q.SessaoId);
+        var qids = questionarios.Select(q => q.Id).ToList();
+
+        var respostas = (await db.QuestionarioRespostas
+                .AsNoTracking()
+                .Where(r => qids.Contains(r.QuestionarioId))
+                .Select(r => new
+                {
+                    r.QuestionarioId,
+                    r.PerguntaCodigo,
+                    r.PerguntaTexto,
+                    r.OpcaoTexto,
+                    r.OpcaoValor,
+                    r.TextoLivre,
+                })
+                .ToListAsync(ct))
+            .GroupBy(r => r.QuestionarioId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        // Identidade resolvida em bloco. O e-mail é o que identifica a pessoa para quem tabula;
+        // o Guid sozinho não serve a ninguém numa planilha.
+        var usuarioIds = questionarios.Select(q => q.UsuarioId.ToString())
+            .Concat(sessoes.Select(s => s.AvaliacaoUsuarioId).Where(x => x is not null)!)
+            .Distinct()
+            .ToList();
+
+        var porUsuario = (await db.Users
+                .AsNoTracking()
+                .Where(u => usuarioIds.Contains(u.Id.ToString()))
+                .Select(u => new { Id = u.Id.ToString(), u.Email, u.NomeCompleto })
+                .ToListAsync(ct))
+            .ToDictionary(u => u.Id, u => u.Email ?? u.NomeCompleto ?? u.Id);
+
+        string? Quem(string? id) => id is null ? null : porUsuario.GetValueOrDefault(id, id);
+
+        var linhas = sessoes.Select(s =>
+        {
+            porSessao.TryGetValue(s.Id, out var q);
+
+            IReadOnlyList<RespostaTabuladaView> respostasDaLinha = q is null
+                ? []
+                : [.. respostas.GetValueOrDefault(q.Id, [])
+                    .Select(r => new RespostaTabuladaView(
+                        r.PerguntaCodigo, r.PerguntaTexto, r.OpcaoTexto, r.OpcaoValor,
+                        r.TextoLivre))];
+
+            return new AvaliacaoTabuladaView(
+                s.Id,
+                s.CriadoEm,
+                s.Status.ToString(),
+                s.SugestaoId,
+                s.SugestaoDescricao,
+                s.AvaliacaoVeredito,
+                s.AvaliacaoComentario,
+                s.AvaliacaoEm,
+                Quem(s.AvaliacaoUsuarioId),
+                q?.EnviadoEm,
+                q?.VersaoCatalogo,
+                q is null ? null : Quem(q.UsuarioId.ToString()),
+                respostasDaLinha);
+        }).ToList();
+
+        // Colunas na ordem do catálogo ATUAL, e depois os códigos que só existem em respostas de
+        // versões anteriores — sem isso uma pergunta que saiu do instrumento desapareceria da
+        // planilha junto com as respostas que alguém de fato deu a ela.
+        var doCatalogo = QuestionarioCatalogo.Perguntas.Select(p => p.Codigo).ToList();
+        var extras = linhas
+            .SelectMany(l => l.Respostas.Select(r => r.PerguntaCodigo))
+            .Distinct()
+            .Where(c => !doCatalogo.Contains(c))
+            .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return Results.Ok(new TabulacaoView(redeId, [.. doCatalogo, .. extras], linhas));
     }
 
     private static IResult Catalogo() => Results.Ok(
@@ -398,3 +542,50 @@ internal sealed record QuestionarioView(
 
 internal sealed record RespostaView(
     string PerguntaCodigo, string OpcaoCodigo, int? OpcaoValor, string? TextoLivre);
+
+/// <param name="Codigos">
+/// Ordem das colunas de resposta, para a tela e a planilha não decidirem cada uma a sua. Começa
+/// na ordem do catálogo atual e termina nos códigos que só aparecem em respostas de versões
+/// anteriores do instrumento.
+/// </param>
+internal sealed record TabulacaoView(
+    int RedeId,
+    IReadOnlyList<string> Codigos,
+    IReadOnlyList<AvaliacaoTabuladaView> Linhas);
+
+/// <param name="VersaoCatalogo">
+/// Versão do instrumento sob a qual esta linha foi respondida. <b>Sem ela a planilha soma
+/// perguntas diferentes na mesma coluna</b>: o código B7 já designou três afirmações distintas
+/// (V2, V5, V6). Nulo quando não há questionário.
+/// </param>
+internal sealed record AvaliacaoTabuladaView(
+    Guid SessaoId,
+    DateTimeOffset CriadoEm,
+    string Status,
+    long? SugestaoId,
+    string? SugestaoDescricao,
+    string? AvaliacaoVeredito,
+    string? AvaliacaoComentario,
+    DateTimeOffset? AvaliacaoEm,
+    string? Avaliador,
+    DateTimeOffset? QuestionarioEnviadoEm,
+    int? VersaoCatalogo,
+    string? Respondente,
+    IReadOnlyList<RespostaTabuladaView> Respostas);
+
+/// <param name="OpcaoValor">
+/// Posição na escala (1 a 5) em pergunta ordinal. <b>Nulo significa "esta pergunta não é
+/// ordinal"</b> — a de função e a de tempo de experiência são nominais, e é por isso que a
+/// planilha exporta o texto nelas e o número nas afirmações da Parte B, exatamente como pedido.
+/// </param>
+internal sealed record RespostaTabuladaView(
+    string PerguntaCodigo,
+    /// <summary>
+    /// Retrato do enunciado como foi exibido. Viaja junto porque e a UNICA forma de
+    /// interpretar resposta de versao anterior do instrumento: o codigo B7 designou tres
+    /// afirmacoes diferentes, e o catalogo atual so conhece a ultima.
+    /// </summary>
+    string PerguntaTexto,
+    string OpcaoTexto,
+    int? OpcaoValor,
+    string? TextoLivre);

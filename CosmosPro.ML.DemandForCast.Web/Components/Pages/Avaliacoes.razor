@@ -1,0 +1,245 @@
+@page "/avaliacoes"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject QuestionariosApiClient QuestionariosApi
+@inject ILogger<Avaliacoes> Logger
+@inject NavigationManager Nav
+
+<PageTitle>Avaliações do POC</PageTitle>
+
+@* A tabulação pedida pelo patrocinador em 07/09/2026: uma linha por execução avaliada, com a
+   seção G e as respostas do questionário lado a lado, e um botão de exportação.
+
+   NÃO tem média, contagem por faixa nem percentual, de propósito. O pedido é explícito: o POC
+   registra, mantém o vínculo e exporta; a tabulação e a análise são feitas depois, no Excel.
+   Estatística derivada aqui viraria uma segunda versão da análise, competindo com a dele.
+
+   É também o destino do botão "Ver o resultado" no fim do questionário, que antes caía no
+   painel de comparações — a pergunta de quem acabou de responder é "onde foi parar o que eu
+   respondi", e o painel não respondia isso. *@
+
+<RadzenStack Orientation="Orientation.Vertical" Gap="1.5rem">
+
+    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Avaliações do POC</RadzenText>
+        <HelpTip Position="TooltipPosition.Bottom"
+                 Text="Uma linha por execução: a avaliação rápida (seção G) e as respostas do questionário. A chave é a execução, e não o comprador — o mesmo comprador avalia várias execuções, e cada resposta fica presa à execução que ela avaliou. São dados brutos, para tabular no Excel." />
+        <div style="flex: 1"></div>
+        <RadzenLink Path="/" Text="Comparações" Icon="arrow_back" Style="font-size: 0.85rem" />
+    </RadzenStack>
+
+    @if (_erro is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter"
+                     AllowClose="false" data-test="avaliacoes-erro">@_erro</RadzenAlert>
+    }
+    else if (_tabulacao is null)
+    {
+        <RadzenText TextStyle="TextStyle.Body2">Carregando…</RadzenText>
+    }
+    else if (_tabulacao.Linhas.Count == 0)
+    {
+        @* Zero execuções e zero respostas são coisas diferentes, e a tela precisa dizer qual. *@
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" Shade="Shade.Lighter"
+                     AllowClose="false" data-test="avaliacoes-sem-execucao">
+            Esta rede ainda não tem nenhuma execução. A tabulação aparece aqui quando a primeira
+            comparação for processada.
+        </RadzenAlert>
+    }
+    else
+    {
+        <RadzenCard Variant="Variant.Outlined">
+            <RadzenStack Gap="1rem">
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
+                             Gap="1.5rem" Wrap="FlexWrap.Wrap">
+                    <Totalizador Rotulo="Execuções" Valor="@($"{_tabulacao.Linhas.Count:N0}")" />
+                    <Totalizador Rotulo="Com avaliação" Valor="@($"{_tabulacao.ComAvaliacao:N0}")" />
+                    <Totalizador Rotulo="Com questionário" Valor="@($"{_tabulacao.ComQuestionario:N0}")" />
+                    <div style="flex: 1"></div>
+                    <RadzenButton Text="Exportar para Excel" Icon="table_view" Variant="Variant.Outlined"
+                                  Size="ButtonSize.Small" data-test="exportar-avaliacoes"
+                                  Click="@Exportar" />
+                </RadzenStack>
+
+                @* O denominador declarado: "12 avaliações" não diz nada sem as execuções de onde
+                   saíram, e a tabela lista as duas coisas para a conta poder ser feita. *@
+                <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
+                    A lista traz TODAS as execuções da rede, inclusive as que ninguém avaliou.
+                    Linha em branco nas colunas de avaliação significa que ela não foi avaliada —
+                    não que a avaliação foi vazia.
+                </RadzenText>
+
+                @if (_tabulacao.VersoesPresentes.Count > 1)
+                {
+                    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter"
+                                 AllowClose="false" data-test="aviso-versoes">
+                        Há respostas de @_tabulacao.VersoesPresentes.Count versões diferentes do
+                        questionário (@string.Join(", ", _tabulacao.VersoesPresentes.Select(v => $"v{v}"))).
+                        <strong>O mesmo código designa afirmações diferentes entre versões</strong>,
+                        então não some uma coluna inteira sem separar por versão. A aba
+                        <em>Perguntas</em> da planilha mostra o enunciado de cada código em cada versão.
+                    </RadzenAlert>
+                }
+            </RadzenStack>
+        </RadzenCard>
+
+        <RadzenCard Variant="Variant.Outlined" Style="overflow-x: auto">
+            <RadzenDataGrid TItem="AvaliacaoTabulada" Data="@_tabulacao.Linhas"
+                            AllowPaging="true" PageSize="25" Density="Density.Compact"
+                            AllowSorting="true" data-test="grid-avaliacoes">
+                <Columns>
+                    <RadzenDataGridColumn TItem="AvaliacaoTabulada" Title="Execução" Width="130px" Sortable="false">
+                        <HeaderTemplate>
+                            <span>Execução</span>
+                            <HelpTip Size="0.85rem"
+                                     Text="Os oito primeiros caracteres do identificador da execução. A planilha traz o identificador inteiro, que é o campo pelo qual as respostas se relacionam com qualquer outro recorte." />
+                        </HeaderTemplate>
+                        <Template Context="l">
+                            <RadzenLink Path="@($"/comparacoes/{l.SessaoId}/resumo")"
+                                        Text="@l.SessaoId.ToString()[..8]" />
+                        </Template>
+                    </RadzenDataGridColumn>
+
+                    <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="CriadoEm" Title="Data" Width="140px">
+                        <Template Context="l">@l.CriadoEm.ToLocalTime().ToString("dd/MM/yy HH:mm")</Template>
+                    </RadzenDataGridColumn>
+
+                    <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="SugestaoId" Title="Sugestão" Width="120px">
+                        <Template Context="l">@(l.SugestaoId?.ToString() ?? "—")</Template>
+                    </RadzenDataGridColumn>
+
+                    <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="AvaliacaoVeredito"
+                                          Title="Avaliação (G)" Width="170px">
+                        <Template Context="l">
+                            @if (l.AvaliacaoVeredito is { } v)
+                            {
+                                <span style="@($"color: {CorDoVeredito(v)}")" data-test="veredito">@VereditoLegivel(v)</span>
+                            }
+                            else
+                            {
+                                <span style="color: var(--rz-text-tertiary-color)">não avaliada</span>
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+
+                    <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="AvaliacaoComentario"
+                                          Title="Comentário" Width="260px" Sortable="false">
+                        <Template Context="l">
+                            @(string.IsNullOrWhiteSpace(l.AvaliacaoComentario) ? "" : l.AvaliacaoComentario)
+                        </Template>
+                    </RadzenDataGridColumn>
+
+                    <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="Avaliador"
+                                          Title="Avaliador" Width="200px">
+                        <Template Context="l">@(l.Avaliador ?? "")</Template>
+                    </RadzenDataGridColumn>
+
+                    <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="QuestionarioEnviadoEm"
+                                          Title="Questionário" Width="150px">
+                        <Template Context="l">
+                            @if (l.QuestionarioEnviadoEm is { } q)
+                            {
+                                <span>@q.ToLocalTime().ToString("dd/MM/yy HH:mm")</span>
+                            }
+                            else
+                            {
+                                <span style="color: var(--rz-text-tertiary-color)">não respondido</span>
+                            }
+                        </Template>
+                    </RadzenDataGridColumn>
+
+                    <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="VersaoCatalogo"
+                                          Title="Versão" Width="100px" TextAlign="TextAlign.Right">
+                        <HeaderTemplate>
+                            <span>Versão</span>
+                            <HelpTip Size="0.85rem"
+                                     Text="Versão do questionário sob a qual esta linha foi respondida. Não é enfeite: o instrumento já foi renumerado duas vezes, e o mesmo código designa afirmações diferentes entre versões." />
+                        </HeaderTemplate>
+                        <Template Context="l">@(l.VersaoCatalogo?.ToString() ?? "")</Template>
+                    </RadzenDataGridColumn>
+
+                    <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="Respondente"
+                                          Title="Respondente" Width="200px">
+                        <Template Context="l">@(l.Respondente ?? "")</Template>
+                    </RadzenDataGridColumn>
+
+                    @foreach (var codigo in _tabulacao.Codigos)
+                    {
+                        <RadzenDataGridColumn TItem="AvaliacaoTabulada" Title="@codigo"
+                                              Width="@(codigo.StartsWith('A') ? "170px" : "80px")"
+                                              TextAlign="@(codigo.StartsWith('A') ? TextAlign.Left : TextAlign.Right)"
+                                              Sortable="false">
+                            <HeaderTemplate>
+                                <span>@codigo</span>
+                                @if (Enunciado(codigo) is { } texto)
+                                {
+                                    <HelpTip Size="0.85rem" Text="@texto" />
+                                }
+                            </HeaderTemplate>
+                            <Template Context="l">
+                                @* Célula vazia é ausência de resposta, nunca zero: zero seria uma
+                                   posição na escala, e a mais baixa delas. *@
+                                @l.Valor(codigo)
+                            </Template>
+                        </RadzenDataGridColumn>
+                    }
+                </Columns>
+            </RadzenDataGrid>
+        </RadzenCard>
+    }
+</RadzenStack>
+
+@code {
+    private TabulacaoView? _tabulacao;
+    private CatalogoView? _catalogo;
+    private string? _erro;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _tabulacao = await QuestionariosApi.GetTabulacaoAsync();
+            _catalogo = await QuestionariosApi.GetCatalogoAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Falha ao carregar a tabulação das avaliações.");
+            _erro = "Não foi possível carregar as avaliações. Tente novamente.";
+        }
+    }
+
+    private void Exportar()
+    {
+        // forceLoad: é endpoint HTTP comum, não rota Blazor — mesmo padrão das outras duas
+        // exportações. Sem ele o Blazor tenta resolver como página e não baixa nada.
+        Nav.NavigateTo("/avaliacoes/excel", forceLoad: true);
+    }
+
+    /// <summary>
+    /// Enunciado do código, para o cabeçalho não ser só "B7". Sai do catálogo <b>atual</b>, então
+    /// devolve nulo para código que só existe em versão anterior — e aí o cabeçalho fica sem
+    /// tooltip em vez de exibir a pergunta errada. O enunciado histórico de cada versão está na
+    /// aba <em>Perguntas</em> da planilha, que sai do retrato gravado com a resposta.
+    /// </summary>
+    private string? Enunciado(string codigo) =>
+        _catalogo?.Secoes
+            .SelectMany(s => s.Perguntas)
+            .FirstOrDefault(p => p.Codigo == codigo)
+            ?.Texto;
+
+    private static string VereditoLegivel(string veredito) => veredito switch
+    {
+        "Valido" => "Válido",
+        "ValidoComRessalvas" => "Válido com ressalvas",
+        "NaoValido" => "Não válido",
+        _ => veredito,
+    };
+
+    private static string CorDoVeredito(string veredito) => veredito switch
+    {
+        "Valido" => "var(--rz-success)",
+        "ValidoComRessalvas" => "var(--rz-warning)",
+        "NaoValido" => "var(--rz-danger)",
+        _ => "var(--rz-text-secondary-color)",
+    };
+}

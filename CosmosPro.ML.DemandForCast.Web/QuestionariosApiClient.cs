@@ -40,6 +40,22 @@ public class QuestionariosApiClient(HttpClient httpClient, IRedeContext redeCont
         return await resp.Content.ReadFromJsonAsync<QuestionarioView>(cancellationToken: cts.Token);
     }
 
+    /// <summary>
+    /// A tabulação da rede: uma linha por execução, com a seção G e as respostas do
+    /// questionário. É a fonte da tela de tabulação e da planilha.
+    /// </summary>
+    public async Task<TabulacaoView> GetTabulacaoAsync(CancellationToken ct = default)
+    {
+        var redeId = await redeContext.GetRedeIdAtualAsync();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(LeituraTimeout);
+
+        var resp = await httpClient.GetFromJsonAsync<TabulacaoView>(
+            $"/api/comparacoes/avaliacoes?redeId={redeId}", cts.Token);
+
+        return resp ?? new TabulacaoView(redeId, [], []);
+    }
+
     /// <summary>Grava o rascunho. Idempotente: manda o estado completo do wizard.</summary>
     public Task<QuestionarioResult> SalvarAsync(
         Guid sessaoId, int passoAtual, IReadOnlyList<RespostaEnviada> respostas, CancellationToken ct = default)
@@ -127,3 +143,70 @@ public sealed record QuestionarioView(
 
 public sealed record RespostaView(
     string PerguntaCodigo, string OpcaoCodigo, int? OpcaoValor, string? TextoLivre);
+
+// --- Tabulação das avaliações ---------------------------------------------------------
+
+public sealed record TabulacaoView(
+    int RedeId,
+    IReadOnlyList<string> Codigos,
+    IReadOnlyList<AvaliacaoTabulada> Linhas)
+{
+    public int ComAvaliacao => Linhas.Count(l => l.AvaliacaoVeredito is not null);
+
+    public int ComQuestionario => Linhas.Count(l => l.QuestionarioEnviadoEm is not null);
+
+    /// <summary>
+    /// Quantas versões distintas do instrumento aparecem nas respostas. <b>Mais de uma é
+    /// aviso</b>, não curiosidade: o mesmo código designa afirmação diferente entre versões, e
+    /// somar a coluna inteira misturaria perguntas. A tela declara isso em vez de deixar quem
+    /// tabula descobrir depois.
+    /// </summary>
+    public IReadOnlyList<int> VersoesPresentes =>
+        [.. Linhas.Select(l => l.VersaoCatalogo).OfType<int>().Distinct().Order()];
+}
+
+public sealed record AvaliacaoTabulada(
+    Guid SessaoId,
+    DateTimeOffset CriadoEm,
+    string Status,
+    long? SugestaoId,
+    string? SugestaoDescricao,
+    string? AvaliacaoVeredito,
+    string? AvaliacaoComentario,
+    DateTimeOffset? AvaliacaoEm,
+    string? Avaliador,
+    DateTimeOffset? QuestionarioEnviadoEm,
+    int? VersaoCatalogo,
+    string? Respondente,
+    IReadOnlyList<RespostaTabulada> Respostas)
+{
+    /// <summary>
+    /// O que exportar na coluna de um código: o <b>número</b> da escala quando a pergunta é
+    /// ordinal e o <b>texto</b> quando é nominal — exatamente o formato pedido. Devolve string
+    /// vazia quando não há resposta, e nunca "0": zero seria uma posição na escala.
+    /// </summary>
+    public string Valor(string codigo)
+    {
+        var r = Respostas.FirstOrDefault(x => x.PerguntaCodigo == codigo);
+        if (r is null) return "";
+        return r.OpcaoValor is { } v ? v.ToString() : r.OpcaoTexto;
+    }
+
+    /// <summary>Complemento de "Outro:", quando existe. Vai numa coluna própria na planilha.</summary>
+    public string? TextoLivre(string codigo) =>
+        Respostas.FirstOrDefault(x => x.PerguntaCodigo == codigo)?.TextoLivre;
+
+    public bool Respondido => QuestionarioEnviadoEm is not null;
+}
+
+public sealed record RespostaTabulada(
+    string PerguntaCodigo,
+    /// <summary>
+    /// Retrato do enunciado como foi exibido. Viaja junto porque e a UNICA forma de
+    /// interpretar resposta de versao anterior do instrumento: o codigo B7 designou tres
+    /// afirmacoes diferentes, e o catalogo atual so conhece a ultima.
+    /// </summary>
+    string PerguntaTexto,
+    string OpcaoTexto,
+    int? OpcaoValor,
+    string? TextoLivre);

@@ -202,6 +202,7 @@ app.MapExtratorEndpoints();
 app.MapComparacoesDownloadEndpoints();
 app.MapComparacaoItensExcelEndpoints();
 app.MapOportunidadesExcelEndpoints();
+app.MapAvaliacoesExcelEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

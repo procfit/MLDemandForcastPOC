@@ -305,6 +305,85 @@ public sealed class QuestionarioIntegrationTests(AppHostFixture fixture)
             .Select(p => new RespostaBody(p.Codigo, p.Opcoes[0].Codigo, null))
     ];
 
+    // --- Tabulação das avaliações -------------------------------------------------------
+
+    /// <summary>
+    /// A tabulação parte da execução, e traz a execução <b>não avaliada</b> também. É o
+    /// denominador: "12 avaliações" não diz nada sem as execuções de onde saíram, e filtrar as
+    /// respondidas esconderia a taxa de resposta — que é justamente o que a pesquisa reporta.
+    /// </summary>
+    [Fact]
+    public async Task Tabulacao_lista_execucao_sem_avaliacao_e_sem_questionario()
+    {
+        var (rede, sessaoId) = await SessaoAguardandoAsync("q-tab-vazia");
+
+        var resp = await fixture.QuestionariosApi.TabulacaoAsync(rede, TestContext.Current.CancellationToken);
+
+        resp.IsSuccessStatusCode.Should().BeTrue();
+        var linha = resp.Content!.Linhas.Should().ContainSingle(l => l.SessaoId == sessaoId).Subject;
+
+        linha.AvaliacaoVeredito.Should().BeNull();
+        linha.QuestionarioEnviadoEm.Should().BeNull();
+        linha.VersaoCatalogo.Should().BeNull("sem questionário não há versão a declarar");
+        linha.Respostas.Should().BeEmpty();
+
+        resp.Content.Codigos.Should().Equal(
+            [.. QuestionarioCatalogo.Perguntas.Select(p => p.Codigo)],
+            "as colunas saem do catálogo, para tela e planilha não decidirem cada uma a sua ordem");
+    }
+
+    /// <summary>
+    /// Depois do envio, a linha traz o retrato do que foi respondido: o valor da escala nas
+    /// afirmações e a versão do instrumento, sem a qual a planilha soma perguntas diferentes na
+    /// mesma coluna.
+    /// </summary>
+    [Fact]
+    public async Task Tabulacao_traz_valor_da_escala_versao_e_o_enunciado_exibido()
+    {
+        var (rede, sessaoId) = await SessaoAguardandoAsync("q-tab-cheia");
+
+        var envio = await fixture.QuestionariosApi.EnviarAsync(
+            sessaoId, new SalvarQuestionarioBody(1, Respostas()), rede, Usuario,
+            TestContext.Current.CancellationToken);
+        envio.IsSuccessStatusCode.Should().BeTrue();
+
+        var resp = await fixture.QuestionariosApi.TabulacaoAsync(rede, TestContext.Current.CancellationToken);
+        var linha = resp.Content!.Linhas.Should().ContainSingle(l => l.SessaoId == sessaoId).Subject;
+
+        linha.QuestionarioEnviadoEm.Should().NotBeNull();
+        linha.VersaoCatalogo.Should().Be(QuestionarioCatalogo.Versao);
+        linha.Respondente.Should().NotBeNullOrWhiteSpace("o e-mail é o que identifica quem respondeu");
+        linha.Respostas.Should().HaveCount(QuestionarioCatalogo.Perguntas.Count);
+
+        // As afirmações da Parte B são ordinais: valor preenchido é o que a planilha exporta.
+        var likert = linha.Respostas.Where(r => r.PerguntaCodigo.StartsWith('B')).ToList();
+        likert.Should().NotBeEmpty();
+        likert.Should().OnlyContain(r => r.OpcaoValor >= 1 && r.OpcaoValor <= 5);
+
+        // O enunciado viaja junto porque é a única forma de interpretar resposta de versão
+        // anterior: o código B7 já designou três afirmações diferentes.
+        linha.Respostas.Should().OnlyContain(r => r.PerguntaTexto.Length > 0);
+    }
+
+    /// <summary>
+    /// Escopo por rede. A tabulação lista a rede inteira, então um vazamento aqui entregaria a
+    /// avaliação e o comentário do comprador de um inquilino a outro.
+    /// </summary>
+    [Fact]
+    public async Task Tabulacao_nao_mistura_redes()
+    {
+        var (redeA, sessaoA) = await SessaoAguardandoAsync("q-tab-rede-a");
+        var (redeB, sessaoB) = await SessaoAguardandoAsync("q-tab-rede-b");
+        redeA.Should().NotBe(redeB);
+
+        var daA = await fixture.QuestionariosApi.TabulacaoAsync(redeA, TestContext.Current.CancellationToken);
+
+        daA.Content!.RedeId.Should().Be(redeA);
+        daA.Content.Linhas.Should().Contain(l => l.SessaoId == sessaoA);
+        daA.Content.Linhas.Should().NotContain(l => l.SessaoId == sessaoB,
+            "a sessão da outra rede não pode aparecer nem como linha vazia");
+    }
+
     /// <summary>
     /// Cria a sessão pela API e a move para <c>AguardandoQuestionario</c> por escrita direta.
     /// Ver a nota da classe para por que o caminho legítimo não é usado aqui.

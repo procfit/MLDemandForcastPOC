@@ -4,6 +4,8 @@
 @inject QuestionariosApiClient QuestionariosApi
 @inject NotificationService Notifications
 @inject NavigationManager Nav
+@inject IJSRuntime Js
+@inject ILogger<Questionario> Logger
 @using CosmosPro.ML.DemandForCast.Engine.Questionarios
 
 <PageTitle>Avaliação da comparação</PageTitle>
@@ -146,6 +148,9 @@
             @* Botões próprios em vez de ShowStepsButtons: avançar precisa gravar o rascunho, e o
                último passo troca "Próximo" por "Enviar". A guarda de completude vive nos dois
                caminhos — aqui e no CanChange, que cobre o clique direto no cabeçalho do passo. *@
+            @* data-print num DIV puro, e nao no RadzenStack: atributo desconhecido em componente
+               Radzen nao chega ao DOM, e a regra de impressao falharia sem sintoma. *@
+            <div data-print="ocultar">
             <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween"
                          AlignItems="AlignItems.Center" Gap="1rem" Style="margin-top: 1.5rem">
                 <RadzenButton Text="Voltar" Icon="chevron_left" ButtonStyle="ButtonStyle.Light"
@@ -157,8 +162,16 @@
 
                 @if (_questionario.Selado)
                 {
-                    <RadzenButton Text="Ver o resultado" Icon="insights" ButtonStyle="ButtonStyle.Secondary"
-                                  Click="@Voltar" />
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                        @* Um botao para os dois pedidos: salvar em PDF e um destino dentro do
+                           dialogo de impressao. Prometer duas acoes distintas na tela levaria o
+                           participante a procurar um gerador de PDF que nao existe. *@
+                        <RadzenButton Text="Imprimir / salvar em PDF" Icon="print"
+                                      ButtonStyle="ButtonStyle.Light" Variant="Variant.Outlined"
+                                      data-test="imprimir-respostas" Click="@Imprimir" />
+                        <RadzenButton Text="Ver o resultado" Icon="insights" ButtonStyle="ButtonStyle.Secondary"
+                                      Click="@Voltar" />
+                    </RadzenStack>
                 }
                 else if (UltimoPasso)
                 {
@@ -173,6 +186,7 @@
                                   Click="@Proximo" />
                 }
             </RadzenStack>
+            </div>
         </RadzenCard>
     }
 </RadzenStack>
@@ -410,5 +424,32 @@
         }
     }
 
-    private void Voltar() => Nav.NavigateTo($"/comparacoes/{Id}");
+    /// <summary>
+    /// "Ver o resultado" leva a TABULACAO, e nao a tela da comparacao — pedido do patrocinador
+    /// em 07/09/2026. A pergunta de quem acabou de responder e "onde foi parar o que eu
+    /// respondi", e o painel da comparacao nao respondia isso: ele mostra a comparacao, nao as
+    /// respostas. A tabulacao ordena por execucao mais recente, entao a linha de quem acabou de
+    /// enviar aparece no topo.
+    /// </summary>
+    private void Voltar() => Nav.NavigateTo("/avaliacoes");
+
+    /// <summary>
+    /// Item 4 do documento: "imprimir resposta" e "permitir que seja salvo em PDF". <b>Os dois
+    /// sao a mesma caixa de dialogo</b> — salvar em PDF e uma escolha de destino dentro do
+    /// dialogo de impressao do navegador, e o botao diz isso em vez de prometer duas coisas
+    /// diferentes. Gerar PDF no servidor exigiria um motor de renderizacao inteiro para
+    /// produzir o que o navegador ja produz.
+    /// </summary>
+    private async Task Imprimir()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("window.print");
+        }
+        catch (Exception ex)
+        {
+            // Falha de interop nao pode derrubar a tela de um questionario ja respondido.
+            Logger.LogWarning(ex, "Nao foi possivel abrir o dialogo de impressao.");
+        }
+    }
 }

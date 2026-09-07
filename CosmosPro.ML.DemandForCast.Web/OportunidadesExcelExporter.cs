@@ -33,10 +33,11 @@ internal static class OportunidadesExcelExporter
         string? brick,
         string? area,
         string? laboratorio,
+        bool truncado,
         DateTimeOffset geradoEm)
     {
         using var wb = new XLWorkbook();
-        Capa(wb, pagina, corteMinimo, brick, area, laboratorio, geradoEm);
+        Capa(wb, pagina, corteMinimo, brick, area, laboratorio, truncado, geradoEm);
         Itens(wb, pagina);
 
         using var ms = new MemoryStream();
@@ -46,7 +47,7 @@ internal static class OportunidadesExcelExporter
 
     private static void Capa(
         XLWorkbook wb, OportunidadesPagina pagina, decimal corteMinimo,
-        string? brick, string? area, string? laboratorio, DateTimeOffset geradoEm)
+        string? brick, string? area, string? laboratorio, bool truncado, DateTimeOffset geradoEm)
     {
         var ws = wb.Worksheets.Add("Recorte");
         var l = 1;
@@ -76,6 +77,21 @@ internal static class OportunidadesExcelExporter
         Par("Área da farmácia", string.IsNullOrWhiteSpace(area) ? "todas" : area);
         Par("Laboratório", string.IsNullOrWhiteSpace(laboratorio) ? "todos" : laboratorio);
         Par("Oportunidades no recorte", $"{pagina.Total:N0}");
+        Par("Linhas nesta planilha", $"{pagina.Itens.Count:N0}");
+
+        // Planilha incompleta que se apresenta como completa e o pior desfecho: quem levar este
+        // arquivo para reuniao tem de saber que o numero da capa e maior que o das linhas.
+        if (truncado)
+        {
+            ws.Cell(l, 1).Value = "ATENÇÃO";
+            ws.Cell(l, 1).Style.Font.Bold = true;
+            ws.Cell(l, 2).Value =
+                "A lista foi truncada: o recorte tem mais oportunidades do que esta planilha "
+                + "carrega. Aumente o corte de unidades ou filtre por bairro, área ou "
+                + "laboratório para reduzir o recorte.";
+            l++;
+        }
+
         l += 2;
 
         ws.Cell(l, 1).Value =

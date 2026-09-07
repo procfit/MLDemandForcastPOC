@@ -11,3 +11,41 @@ html, body {
 .blazor-error-boundary::after {
     content: "Ocorreu um erro inesperado."
 }
+
+/* Impressao do questionario (item 4 do documento do patrocinador, 07/09/2026).
+
+   "Imprimir resposta" e "salvar em PDF" sao o mesmo dialogo do navegador; o que falta para o
+   resultado servir e o papel nao sair com o menu lateral, a barra do topo e os botoes ocupando
+   metade da folha. So-leitura ja e o estado da tela quando ela e impressa (o questionario esta
+   selado), entao nao ha campo interativo a esconder alem dos botoes.
+
+   Duas familias de seletor, por motivos diferentes:
+
+   - `[data-print="ocultar"]` para o que este repositorio escreve. E atributo em elemento HTML
+     puro de proposito: atributo desconhecido posto num componente Radzen NAO chega ao DOM, e a
+     regra falharia sem sintoma nenhum (a mesma armadilha ja documentada para `data-test`).
+
+   - `.rz-header` / `.rz-sidebar` para a moldura do layout, que sao componentes Radzen e nao
+     elementos nossos. Sao as classes estruturais do RadzenLayout, e nao classes de tema — se uma
+     atualizacao do pacote as trocar, a folha sai com o menu impresso, que e feio e nao quebra
+     nada. */
+@media print {
+    [data-print="ocultar"],
+    .rz-header,
+    .rz-sidebar {
+        display: none !important;
+    }
+
+    /* Sem a moldura, o corpo nao pode ficar deslocado pela largura do menu. */
+    .rz-body {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* O layout rola num container interno; na impressao ele tem de deixar o conteudo fluir,
+       senao a folha sai com a primeira tela e nada depois. */
+    html, body, .rz-body, main {
+        overflow: visible !important;
+        height: auto !important;
+    }
+}

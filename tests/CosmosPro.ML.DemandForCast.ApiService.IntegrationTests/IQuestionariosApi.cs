@@ -22,6 +22,10 @@ public interface IQuestionariosApi
         [Query] Guid usuarioId,
         CancellationToken ct = default);
 
+    [Get("/api/comparacoes/avaliacoes")]
+    Task<IApiResponse<TabulacaoResposta>> TabulacaoAsync(
+        [Query] int redeId, CancellationToken ct = default);
+
     [Post("/api/comparacoes/{sessaoId}/questionario/enviar")]
     Task<IApiResponse<QuestionarioResposta>> EnviarAsync(
         Guid sessaoId,
@@ -54,3 +58,30 @@ public sealed record QuestionarioResposta(
 
 public sealed record RespostaItemResposta(
     string PerguntaCodigo, string OpcaoCodigo, int? OpcaoValor, string? TextoLivre);
+
+public sealed record TabulacaoResposta(
+    int RedeId,
+    List<string> Codigos,
+    List<AvaliacaoTabuladaResposta> Linhas);
+
+public sealed record AvaliacaoTabuladaResposta(
+    Guid SessaoId,
+    DateTimeOffset CriadoEm,
+    string Status,
+    long? SugestaoId,
+    string? SugestaoDescricao,
+    string? AvaliacaoVeredito,
+    string? AvaliacaoComentario,
+    DateTimeOffset? AvaliacaoEm,
+    string? Avaliador,
+    DateTimeOffset? QuestionarioEnviadoEm,
+    int? VersaoCatalogo,
+    string? Respondente,
+    List<RespostaTabuladaResposta> Respostas);
+
+public sealed record RespostaTabuladaResposta(
+    string PerguntaCodigo,
+    string PerguntaTexto,
+    string OpcaoTexto,
+    int? OpcaoValor,
+    string? TextoLivre);
