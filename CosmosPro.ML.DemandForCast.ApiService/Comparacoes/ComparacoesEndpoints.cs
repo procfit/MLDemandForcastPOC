@@ -1061,6 +1061,14 @@ internal static class ComparacoesEndpoints
                 Chave = g.Key,
                 Itens = g.Count(),
                 ComPrevisaoMl = g.Count(x => x.DemandaDiaMl != null && x.DemandaDiaReal != null),
+                // Quantos dos itens medidos tiveram venda de verdade. Sem este numero a
+                // abertura por atributo do produto nao tem como ser lida: um grupo com
+                // 900 itens medidos e 40 com venda tem WAPE dominado pelos 860 zeros, e
+                // e por isso que o ML ganha nas aberturas por curva e por loja e perde na
+                // faixa de giro, que separa pelo proprio desfecho. O denominador do WAPE
+                // ja e a soma da demanda; este e o outro lado da mesma leitura, em itens.
+                ComVendaPositiva = g.Count(x =>
+                    x.DemandaDiaMl != null && x.DemandaDiaReal != null && x.DemandaDiaReal!.Value > 0m),
                 SomaDemandaRealDiaria = g.Sum(x =>
                     x.DemandaDiaMl != null && x.DemandaDiaReal != null ? x.DemandaDiaReal!.Value : 0m),
                 SomaErroAbsPbs = g.Sum(x =>
@@ -1084,7 +1092,7 @@ internal static class ComparacoesEndpoints
 
         return [.. brutas
             .Select(f => new SessaoFatiaView(
-                rotulo(f.Chave), f.Itens, f.ComPrevisaoMl,
+                rotulo(f.Chave), f.Itens, f.ComPrevisaoMl, f.ComVendaPositiva,
                 f.SomaDemandaRealDiaria, f.SomaErroAbsPbs, f.SomaErroAbsMl,
                 f.VitoriasMl, f.VitoriasPbs))
             .OrderByDescending(f => f.Itens)
@@ -1421,6 +1429,7 @@ internal sealed record SessaoFatiaView(
     string Chave,
     int Itens,
     int ItensComPrevisaoMl,
+    int ItensComVendaPositiva,
     decimal SomaDemandaRealDiaria,
     decimal SomaErroAbsPbs,
     decimal SomaErroAbsMl,

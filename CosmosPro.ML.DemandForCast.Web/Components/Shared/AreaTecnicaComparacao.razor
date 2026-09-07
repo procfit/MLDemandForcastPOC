@@ -181,15 +181,6 @@
         new("ML (LightGBM)", global.WapeMl, global.MaeMl, global.ItensComPrevisaoMl),
     ];
 
-    private sealed record Dimensao(string Rotulo, IReadOnlyList<SessaoFatia> Fatias);
-
-    private static IReadOnlyList<Dimensao> Dimensoes(SessaoAnalise analise) =>
-    [
-        new("Giro (un./dia)", analise.PorGiro ?? []),
-        new("Curva do ERP", analise.PorCurva ?? []),
-        new("Loja", analise.PorLoja ?? []),
-    ];
-
     /// <summary>Nulo vira texto, nunca traço: "—" numa métrica lê como zero.</summary>
     private static string Pct(double? v) => v is { } d ? d.ToString("P1") : "não apurado";
 

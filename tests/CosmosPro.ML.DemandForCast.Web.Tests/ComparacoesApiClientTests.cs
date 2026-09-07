@@ -239,7 +239,7 @@ public sealed class ComparacoesApiClientTests
     public void Fatia_deriva_mae_e_wape_das_somas_e_marca_onde_o_ML_perde()
     {
         var fatia = new SessaoFatia(
-            "A", Itens: 10, ItensComPrevisaoMl: 4,
+            "A", Itens: 10, ItensComPrevisaoMl: 4, ItensComVendaPositiva: 4,
             SomaDemandaRealDiaria: 20m, SomaErroAbsPbs: 2m, SomaErroAbsMl: 6m,
             VitoriasMl: 1, VitoriasPbs: 3);
 
@@ -253,7 +253,7 @@ public sealed class ComparacoesApiClientTests
     [Fact]
     public void Fatia_sem_item_medido_nao_apura_metrica_em_vez_de_apurar_zero()
     {
-        var fatia = new SessaoFatia("C", Itens: 900, ItensComPrevisaoMl: 0,
+        var fatia = new SessaoFatia("C", Itens: 900, ItensComPrevisaoMl: 0, ItensComVendaPositiva: 0,
             SomaDemandaRealDiaria: 0m, SomaErroAbsPbs: 0m, SomaErroAbsMl: 0m,
             VitoriasMl: 0, VitoriasPbs: 0);
 
@@ -736,7 +736,7 @@ public sealed class ComparacoesApiClientTests
 
     private static SessaoFatia Global(
         decimal somaDemanda, decimal erroPbs, decimal erroMl, int medidos = 4) => new(
-        Chave: null, Itens: 10, ItensComPrevisaoMl: medidos,
+        Chave: null, Itens: 10, ItensComPrevisaoMl: medidos, ItensComVendaPositiva: medidos,
         SomaDemandaRealDiaria: somaDemanda, SomaErroAbsPbs: erroPbs, SomaErroAbsMl: erroMl,
         VitoriasMl: 1, VitoriasPbs: 3);
 
@@ -752,8 +752,8 @@ public sealed class ComparacoesApiClientTests
             Itens: 30,
             PorCurva:
             [
-                new("A", 10, 4, 20m, 2m, 6m, 1, 3),
-                new("B", 20, 6, 30m, 3m, 3m, 4, 2),
+                new("A", 10, 4, 3, 20m, 2m, 6m, 1, 3),
+                new("B", 20, 6, 5, 30m, 3m, 3m, 4, 2),
             ],
             PorLoja: [],
             ItensComDecisaoMl: 0,
@@ -769,6 +769,9 @@ public sealed class ComparacoesApiClientTests
         analise.Empates.Should().Be(0);
         analise.Global.Itens.Should().Be(30, "o denominador é a população inteira da sessão");
         analise.Global.ItensComPrevisaoMl.Should().Be(10);
+        analise.Global.ItensComVendaPositiva.Should().Be(8,
+            "some tambem os itens com venda de verdade; sem isso a manchete nao diz se o "
+            + "WAPE global fala de itens que venderam ou de itens que nao venderam");
         analise.Global.WapeMl.Should().BeApproximately((double)(9m / 50m), 1e-9);
     }
 

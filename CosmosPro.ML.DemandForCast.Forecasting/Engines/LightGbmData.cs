@@ -11,6 +11,20 @@ public sealed class LightGbmInput
 {
     public float Label { get; set; }
 
+    /// <summary>
+    /// Rótulo do portão do <see cref="HurdleForecastEngine"/>: houve venda no
+    /// dia-alvo.
+    ///
+    /// <para>
+    /// <b>É rótulo, nunca feature.</b> Está deliberadamente fora de
+    /// <see cref="NumericColumns"/>: entrar ali entregaria a resposta ao modelo — o
+    /// regressor leria "vendeu" para prever quanto vendeu, e o WAPE despencaria de
+    /// forma que nenhum teste de erro acusaria como leakage. É a mesma classe de
+    /// armadilha do preço realizado descrita no FeatureBuilder.
+    /// </para>
+    /// </summary>
+    public bool Vendeu { get; set; }
+
     // Numéricas
     public float Lag7 { get; set; }
     public float Lag14 { get; set; }
@@ -58,6 +72,7 @@ public sealed class LightGbmInput
     public static LightGbmInput From(FeatureVector f) => new()
     {
         Label = (float)f.Target,
+        Vendeu = f.Target > 0m,
         Lag7 = (float)f.Lag7,
         Lag14 = (float)f.Lag14,
         Lag21 = (float)f.Lag21,

@@ -534,6 +534,10 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
         var medidos = conteudo.PorCurva.Sum(f => f.ItensComPrevisaoMl);
         medidos.Should().Be(1, "só o primeiro item entrou na camada A");
 
+        conteudo.PorCurva.Sum(f => f.ItensComVendaPositiva).Should().Be(1,
+            "o item medido teve venda real de 2/dia; sem esta contagem a fatia nao diz se o "
+            + "WAPE dela fala de itens que venderam ou de itens que nao venderam");
+
         conteudo.PorCurva.Sum(f => f.SomaDemandaRealDiaria).Should().Be(2m);
         conteudo.PorCurva.Sum(f => f.SomaErroAbsPbs).Should().Be(0m, "o ERP previu 2 e a real foi 2");
         conteudo.PorCurva.Sum(f => f.SomaErroAbsMl).Should().Be(0.4m, "o ML previu 2,4 e a real foi 2");

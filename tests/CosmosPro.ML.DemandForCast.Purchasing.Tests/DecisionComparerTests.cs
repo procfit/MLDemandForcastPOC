@@ -582,6 +582,26 @@ public sealed class DecisionComparerTests
             "a taxa sai dos 7 primeiros dias (2,0/dia x 15 dias - 4 de posicao), nao dos 1000/dia dos dias que violam a regra de informacao");
     }
 
+    /// <summary>
+    /// Dia com previsao negativa nao pode abater dia positivo, porque aqui a taxa
+    /// multiplica a cobertura e vira QUANTIDADE COMPRADA. Janela de 7 dias com -4 no
+    /// primeiro e +6 nos outros seis: com clamp por dia a taxa e 36/7 e a compra da
+    /// 32; com clamp depois da media a taxa cai para 32/7 e a compra da 28 — quatro
+    /// unidades que o modelo nunca deixou de pedir em nenhum dia.
+    /// </summary>
+    [Fact]
+    public void Dia_com_previsao_negativa_nao_reduz_a_compra_do_ml()
+    {
+        var result = new DecisionComparer().Compare(
+            [Item(2m, compraSugerida: 10m, vendaDia: 2m, mlDia: 0.0,
+                  mlPorDia: i => i == 0 ? -4.0 : 6.0)]);
+
+        var par = result.Detalhe.Single();
+        par.CompraMl.Should().BeApproximately(32m, 0.01m);
+        par.CompraMl.Should().NotBe(28m,
+            "28 e o que a media contaminada pelo dia negativo produz, e e numero plausivel");
+    }
+
     [Fact]
     public void Sem_item_fora_do_horizonte_o_motivo_nao_e_inventado()
     {

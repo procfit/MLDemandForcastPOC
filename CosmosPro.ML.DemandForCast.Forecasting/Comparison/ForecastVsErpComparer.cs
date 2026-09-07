@@ -90,7 +90,21 @@ public sealed class ForecastVsErpComparer(ComparisonOptions? options = null)
             }
 
             var real = dias.Average(d => (double)d.Features.Target);
-            var ml = Math.Max(0, dias.Average(d => d.PrevisaoMl));
+            // Clamp POR DIA, e nunca depois da média: unidade negativa não existe, e
+            // deixar um dia negativo abater um dia positivo faz a taxa do ML cair abaixo
+            // do que qualquer dia isolado justifica.
+            //
+            // O regressor por erro quadrático produz negativo justamente onde a série é
+            // esparsa, que é o caso do dado real: medido no histórico da rede,
+            // 12,5% dos dias no recorte dos 1.200 SKUs de maior volume e 4,6% no de
+            // 4.000, valendo de 0,2% a 1,1% do volume do braço. A ordem errada só erra
+            // numa direção — comprar menos.
+            //
+            // O WalkForwardBacktest sempre fez o clamp por dia; era esta ponta que
+            // pontuava o mesmo modelo por outra conta. E o clamp fica DEPOIS de
+            // ValidarItem de propósito: truncar antes transformaria um NaN em zero
+            // silencioso e desarmaria a checagem de finitude, que hoje estoura alto.
+            var ml = dias.Average(d => Math.Max(0, d.PrevisaoMl));
             var erp = Math.Max(0, item.DemandaDiaErp);
 
             var erroErp = Math.Abs(erp - real);

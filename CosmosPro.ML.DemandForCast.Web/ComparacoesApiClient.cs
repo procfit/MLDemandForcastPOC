@@ -824,6 +824,8 @@ public sealed record SessaoAnalise(
 
     public int ItensComPrevisaoMl => PorCurva?.Sum(f => f.ItensComPrevisaoMl) ?? 0;
 
+    public int ItensComVendaPositiva => PorCurva?.Sum(f => f.ItensComVendaPositiva) ?? 0;
+
     public decimal SomaDemandaRealDiaria => PorCurva?.Sum(f => f.SomaDemandaRealDiaria) ?? 0m;
 
     public decimal SomaErroAbsPbs => PorCurva?.Sum(f => f.SomaErroAbsPbs) ?? 0m;
@@ -842,7 +844,7 @@ public sealed record SessaoAnalise(
     /// mesmo número seriam duas versões dele.
     /// </summary>
     public SessaoFatia Global => new(
-        "total", Itens, ItensComPrevisaoMl, SomaDemandaRealDiaria,
+        "total", Itens, ItensComPrevisaoMl, ItensComVendaPositiva, SomaDemandaRealDiaria,
         SomaErroAbsPbs, SomaErroAbsMl, VitoriasMl, VitoriasPbs);
 }
 
@@ -855,6 +857,7 @@ public sealed record SessaoFatia(
     string? Chave,
     int Itens,
     int ItensComPrevisaoMl,
+    int ItensComVendaPositiva,
     decimal SomaDemandaRealDiaria,
     decimal SomaErroAbsPbs,
     decimal SomaErroAbsMl,

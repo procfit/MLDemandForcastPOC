@@ -198,7 +198,11 @@ public sealed class DecisionComparer
             // Venda real: cobertura inteira, porque é contra ela que uma compra dimensionada
             // para a cobertura tem de ser pontuada. Taxa do ML: só a janela válida.
             var vendaReal = dias.Sum(d => d.Features.Target);
-            var demandaDiaMl = Math.Max(0m, (decimal)diasDaTaxa.Average(d => d.PrevisaoMl));
+            // Clamp por dia, e não depois da média — ver a nota em ForecastVsErpComparer.
+            // Aqui o efeito é mais direto que na previsão: esta taxa multiplica a
+            // cobertura para virar QUANTIDADE COMPRADA, então uma média contaminada por
+            // um dia negativo compra menos do que o modelo pediu em qualquer dia.
+            var demandaDiaMl = (decimal)diasDaTaxa.Average(d => Math.Max(0, d.PrevisaoMl));
 
             if (item.DiasEstoque > diasDaTaxa.Count)
             {

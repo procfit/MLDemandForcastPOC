@@ -59,6 +59,7 @@ internal sealed class TreinoProcessor(
             new NaiveSeasonalEngine(),
             new MovingAverageEngine(),
             new LightGbmForecastEngine(),
+            new HurdleForecastEngine(),
         };
 
         var engineResults = new List<EngineResult>();
@@ -76,9 +77,20 @@ internal sealed class TreinoProcessor(
             .OrderBy(e => e.Global.Wape)
             .FirstOrDefault()?.Engine ?? "n/d";
 
-        // Treina o modelo "de produção" (LightGBM) em TODAS as features válidas.
+        // Treina o modelo "de produção" em TODAS as features válidas.
+        //
+        // O ENGINE SALVO NÃO É "O QUE GANHOU O BACKTEST", e o resultado declara os
+        // dois separadamente de propósito. Menor WAPE é um critério bom para erro por
+        // unidade e insuficiente para decidir compra: um engine que encolhe tudo na
+        // direção do zero melhora o WAPE numa série com 86,6% de dias-item sem venda
+        // — o que o dado real da rede tem — e compra menos do que a loja precisa: o
+        // erro fica menor e a ruptura fica maior. Enquanto a escolha não for feita com
+        // a DECISÃO de compra medida, e não só o erro de previsão,
+        // quem vai para o MinIO é o LightGBM de sempre, e a tela tem de dizer isso em
+        // vez de deixar o troféu do backtest passar por declaração de produção.
         var validas = features.Where(f => f.IsValidTarget).ToList();
-        using var finalModel = (LightGbmForecastModel)new LightGbmForecastEngine().Fit(validas);
+        var engineDeProducao = new LightGbmForecastEngine();
+        using var finalModel = (LightGbmForecastModel)engineDeProducao.Fit(validas);
 
         var blobKey = $"modelo-{job.Id}.zip";
         await SaveModelAsync(finalModel, blobKey, ct);
@@ -95,6 +107,7 @@ internal sealed class TreinoProcessor(
             TestWindowDias: Backtest.TestWindowDays,
             Engines: engineResults,
             MelhorEngine: melhor,
+            ModeloSalvo: engineDeProducao.Name,
             TreinoAte: job.TreinoAte,
             UltimaDataTreinada: ultimaDataTreinada);
 

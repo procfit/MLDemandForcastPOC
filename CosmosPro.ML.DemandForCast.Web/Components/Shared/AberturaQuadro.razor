@@ -21,6 +21,23 @@ else
             <RadzenDataGridColumn TItem="SessaoFatia" Property="ItensComPrevisaoMl" Title="Medidos" Width="110px" TextAlign="TextAlign.Right">
                 <Template Context="f">@f.ItensComPrevisaoMl.ToString("N0")</Template>
             </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SessaoFatia" Property="ItensComVendaPositiva" Title="Com venda" Width="140px" TextAlign="TextAlign.Right">
+                <HeaderTemplate>
+                    <span>Com venda</span>
+                    <HelpTip Size="0.85rem" Text="Dos itens medidos, quantos tiveram venda de verdade no periodo. E a chave para ler as linhas: num grupo onde quase ninguem vendeu, o WAPE fala sobre os itens sem venda, e prever perto de zero basta para ganhar. As aberturas por curva e por loja mantem essa mistura dentro de cada linha; a abertura por giro separa pelo proprio desfecho, e e por isso que os dois metodos trocam de posicao entre elas." />
+                </HeaderTemplate>
+                <Template Context="f">
+                    @* Zero medido e zero, nunca traco: "nenhum item deste grupo vendeu" e o
+                       proprio achado da linha, e traco leria como "nao apurado". *@
+                    @f.ItensComVendaPositiva.ToString("N0")
+                    @if (f.ItensComPrevisaoMl > 0)
+                    {
+                        <span style="color: var(--rz-text-tertiary-color)">
+                            (@((100.0 * f.ItensComVendaPositiva / f.ItensComPrevisaoMl).ToString("F0"))%)
+                        </span>
+                    }
+                </Template>
+            </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoFatia" Title="WAPE PBS" Width="130px" TextAlign="TextAlign.Right" Sortable="false">
                 <Template Context="f">@Pct(f.WapePbs)</Template>
             </RadzenDataGridColumn>

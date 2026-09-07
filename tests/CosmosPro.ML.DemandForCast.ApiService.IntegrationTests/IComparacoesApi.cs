@@ -156,6 +156,7 @@ public sealed record SessaoFatiaResposta(
     string Chave,
     int Itens,
     int ItensComPrevisaoMl,
+    int ItensComVendaPositiva,
     decimal SomaDemandaRealDiaria,
     decimal SomaErroAbsPbs,
     decimal SomaErroAbsMl,

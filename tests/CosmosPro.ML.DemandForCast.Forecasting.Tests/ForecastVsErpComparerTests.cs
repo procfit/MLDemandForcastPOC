@@ -61,6 +61,41 @@ public sealed class ForecastVsErpComparerTests
     private static (int, decimal, double, bool)[] UmDia(decimal real, double ml, int offset = 0) =>
         [(offset, real, ml, false)];
 
+    // --- Ordem do clamp ------------------------------------------------------
+
+    /// <summary>
+    /// Dia negativo nao pode abater dia positivo. Dois dias, -4 e +6: com clamp por
+    /// dia a taxa e (0+6)/2 = 3; com clamp depois da media seria (-4+6)/2 = 1.
+    ///
+    /// <para>
+    /// A asserção nega explicitamente o 1,0 porque as duas contas devolvem numero
+    /// plausivel e positivo — sem o NotBe, a aritmetica antiga voltaria calada.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Dia_com_previsao_negativa_nao_abate_o_dia_positivo()
+    {
+        var result = new ForecastVsErpComparer().Compare(
+            [Item(3.0, [(0, 3m, -4.0, false), (1, 3m, 6.0, false)])]);
+
+        var par = result.Detalhe.Single();
+        par.DemandaDiaMl.Should().BeApproximately(3.0, 1e-9);
+        par.DemandaDiaMl.Should().NotBe(1.0);
+    }
+
+    /// <summary>
+    /// Todos os dias negativos continuam dando zero — o clamp por dia nao inverte
+    /// sinal, so impede a compensacao.
+    /// </summary>
+    [Fact]
+    public void Janela_inteiramente_negativa_da_zero()
+    {
+        var result = new ForecastVsErpComparer().Compare(
+            [Item(3.0, [(0, 3m, -2.0, false), (1, 3m, -5.0, false)])]);
+
+        result.Detalhe.Single().DemandaDiaMl.Should().Be(0.0);
+    }
+
     // --- Caso do brief -------------------------------------------------------
 
     [Fact]

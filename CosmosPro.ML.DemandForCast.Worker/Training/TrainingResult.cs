@@ -47,6 +47,7 @@ public sealed record TrainingResult(
     int TestWindowDias,
     IReadOnlyList<EngineResult> Engines,
     string MelhorEngine,
+    string? ModeloSalvo = null,
     DateOnly? TreinoAte = null,
     DateOnly? UltimaDataTreinada = null);
 

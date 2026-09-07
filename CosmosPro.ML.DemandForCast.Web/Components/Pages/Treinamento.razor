@@ -83,8 +83,12 @@
             <RadzenStack Gap="1rem">
                 <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
                     <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">Comparação walk-forward</RadzenText>
-                    <HelpTip Text="@($"WAPE e MAE são as métricas primárias (MAPE quebra em demanda baixa). Menor é melhor. O backtest usa {r.Folds} janelas de {r.TestWindowDias} dias. O melhor engine por WAPE fica destacado.")" />
-                    <RadzenBadge Text="@($"melhor: {r.MelhorEngine}")" BadgeStyle="BadgeStyle.Success" IsPill="true" />
+                    <HelpTip Text="@($"WAPE e MAE são as métricas primárias (MAPE quebra em demanda baixa). Menor é melhor. O backtest usa {r.Folds} janelas de {r.TestWindowDias} dias. O troféu marca o menor WAPE — que não é necessariamente o modelo que ficou salvo: menor erro por unidade e melhor decisão de compra não são a mesma coisa em série com muitos dias sem venda.")" />
+                    <RadzenBadge Text="@($"menor WAPE: {r.MelhorEngine}")" BadgeStyle="BadgeStyle.Info" IsPill="true" />
+                    @if (!string.IsNullOrWhiteSpace(r.ModeloSalvo))
+                    {
+                        <RadzenBadge Text="@($"modelo salvo: {r.ModeloSalvo}")" BadgeStyle="BadgeStyle.Success" IsPill="true" />
+                    }
                 </RadzenStack>
 
                 <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
@@ -254,6 +258,12 @@
             ["lightgbm"] =
                 "Engine principal: LightGBM regressão (modelo global, SKU como feature) sobre lags, médias móveis, " +
                 "sazonalidade semanal/anual, promoção, calendário e hierarquia categórica.",
+            ["lightgbm-hurdle"] =
+                "Variante em dois estágios sobre as mesmas features: um modelo estima a chance de haver venda no dia " +
+                "e outro, treinado só nos dias em que houve, estima quantas unidades. A previsão é o produto dos dois. " +
+                "Existe para atacar o excesso de dias sem venda, que puxa o regressor único para baixo. " +
+                "Atenção ao ler: ele costuma melhorar o WAPE e, quanto mais esparsa a série, mais subestima o volume " +
+                "total — o que reduz o erro medido e aumenta o risco de ruptura. Está aqui para ser medido, não como padrão.",
         };
 
     /// <summary>Linha pivotada do drill-down: chave + métrica por engine + flags.</summary>
