@@ -101,7 +101,7 @@ internal static class AvaliacoesExcelExporter
             ws.Cell(l, 1).Style.Font.Bold = true;
             ws.Cell(l, 2).Value =
                 $"Há respostas de {t.VersoesPresentes.Count} versões diferentes do questionário "
-                + $"({string.Join(", ", t.VersoesPresentes.Select(v => $"v{v}"))}). O mesmo código "
+                + $"({string.Join(", ", t.NomesDasVersoes)}). O mesmo código "
                 + "designa afirmações diferentes entre versões, então NÃO some uma coluna inteira "
                 + "sem antes separar por 'Versão do questionário'. A aba Perguntas mostra o "
                 + "enunciado de cada código em cada versão.";
@@ -170,7 +170,11 @@ internal static class AvaliacoesExcelExporter
             ws.Cell(linha, c++).Value = l.QuestionarioEnviadoEm is { } qe
                 ? qe.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
                 : "";
-            ws.Cell(linha, c++).Value = l.VersaoCatalogo is { } v ? v : Vazio;
+            // NOME do instrumento (V3, V5, V6), e nao o contador interno. Quem tabula filtra
+            // por esta coluna, e "4" nao e como o questionario se chama em lugar nenhum.
+            ws.Cell(linha, c++).Value = l.VersaoCatalogo is { } v
+                ? Engine.Questionarios.QuestionarioCatalogo.NomeDaVersao(v)
+                : Vazio;
             ws.Cell(linha, c++).Value = l.Respondente ?? "";
 
             foreach (var codigo in t.Codigos)
@@ -248,7 +252,8 @@ internal static class AvaliacoesExcelExporter
         var linha = 2;
         foreach (var item in legenda)
         {
-            ws.Cell(linha, 1).Value = item.Versao;
+            ws.Cell(linha, 1).Value =
+                Engine.Questionarios.QuestionarioCatalogo.NomeDaVersao(item.Versao);
             ws.Cell(linha, 2).Value = item.PerguntaCodigo;
             ws.Cell(linha, 3).Value = item.PerguntaTexto;
             ws.Cell(linha, 4).Value = item.Respostas;

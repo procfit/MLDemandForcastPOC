@@ -75,6 +75,14 @@
             </RadzenCard>
         }
 
+        @* O ASSISTENTE INTEIRO SAI DA IMPRESSAO, e nao so os botoes. Ele nao tem como ser
+           impresso: RadzenSteps renderiza SO o passo ativo, entao o passo inativo nao esta no
+           HTML -- nao e questao de esconder ou mostrar, a Parte A simplesmente nao esta la. Foi
+           o defeito que o patrocinador relatou em 09/09/2026: o PDF saia com UMA pagina, com a
+           Parte B e cortado no meio da segunda pergunta.
+
+           Quem imprime e o bloco `apenas-impressao` mais abaixo, que lista tudo plano. *@
+        <div data-print="ocultar">
         <RadzenCard Variant="Variant.Outlined">
             <RadzenSteps @bind-SelectedIndex="_passo" ShowStepsButtons="false" CanChange="@PodeTrocarDePasso">
                 <Steps>
@@ -166,12 +174,19 @@
                         @* Um botao para os dois pedidos: salvar em PDF e um destino dentro do
                            dialogo de impressao. Prometer duas acoes distintas na tela levaria o
                            participante a procurar um gerador de PDF que nao existe. *@
-                        @* ButtonStyle.Light saiu: o patrocinador leu o botao como DESABILITADO
-                           (07/09/2026). Contorno na cor primaria e o mesmo vocabulario dos botoes
-                           de exportacao do resto do sistema — visivel, e ainda subordinado ao
-                           "Ver o resultado", que e preenchido. *@
+                        @* SEGUNDA correcao do mesmo botao. Em 07/09 ele leu ButtonStyle.Light
+                           como DESABILITADO e eu troquei por contorno na cor primaria; em
+                           09/09 ele repetiu o pedido -- contorno neste tema ainda sai lavado ao
+                           lado do "Ver o resultado", que e preenchido e saturado.
+
+                           Agora e PREENCHIDO. O preco e que dois botoes cheios competem pela
+                           atencao, e a acao principal deixa de ser obvia pelo peso visual; a
+                           ordem (imprimir a esquerda, resultado a direita) e a saturacao do
+                           tema resolvem o suficiente. Preferivel a um botao que o participante
+                           acha que nao funciona -- e TODOS os participantes passam por esta
+                           tela, como ele fez questao de anotar duas vezes. *@
                         <RadzenButton Text="Imprimir / salvar em PDF" Icon="print"
-                                      Variant="Variant.Outlined"
+                                      Variant="Variant.Filled" ButtonStyle="ButtonStyle.Primary"
                                       data-test="imprimir-respostas" Click="@Imprimir" />
                         <RadzenButton Text="Ver o resultado" Icon="insights" ButtonStyle="ButtonStyle.Secondary"
                                       Click="@Voltar" />
@@ -192,6 +207,48 @@
             </RadzenStack>
             </div>
         </RadzenCard>
+        </div>
+
+        @* --- VISAO DE IMPRESSAO -------------------------------------------------------
+           Invisivel na tela, e a unica coisa que sai no papel. Lista plana: cada pergunta
+           com o codigo, o enunciado e a resposta escolhida, na ordem do instrumento.
+
+           E melhor no papel do que a tela seria mesmo que a tela imprimisse: um registro
+           le-se como "B1 — enunciado → 4 - Concordo", e nao como uma foto de botoes de
+           radio em que so um esta marcado. *@
+        <div class="apenas-impressao" data-test="impressao-respostas">
+            <h1 style="font-size:1.4rem;margin:0 0 0.25rem">Avaliação da comparação</h1>
+            <p style="margin:0 0 0.25rem">
+                Execução @Id.ToString()[..8] · Questionário @NomeDoInstrumento
+            </p>
+            <p style="margin:0 0 1.25rem">
+                @if (_questionario?.EnviadoEm is { } enviado)
+                {
+                    <text>Respondido em @enviado.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</text>
+                }
+                else
+                {
+                    <text>Rascunho — ainda não enviado</text>
+                }
+            </p>
+
+            @foreach (var secao in _catalogo.Secoes)
+            {
+                <h2 style="font-size:1.05rem;margin:1.25rem 0 0.5rem">@secao.Titulo</h2>
+
+                @foreach (var pergunta in secao.Perguntas)
+                {
+                    <div class="linha-impressa">
+                        <p style="margin:0"><strong>@pergunta.Codigo</strong> @pergunta.Texto</p>
+                        <p style="margin:0.15rem 0 0 1.5rem">
+                            @* Sem resposta e dito, nunca deixado em branco: linha vazia no papel
+                               nao distingue "nao respondeu" de "a impressao falhou". *@
+                            @(RespostaLegivel(pergunta) ?? "(sem resposta)")
+                        </p>
+                    </div>
+                }
+            }
+        </div>
     }
 </RadzenStack>
 
@@ -255,6 +312,28 @@
 
     private string? Escolha(string perguntaCodigo) =>
         _respostas.TryGetValue(perguntaCodigo, out var r) ? r.OpcaoCodigo : null;
+
+    /// <summary>
+    /// A resposta como ela vai no papel: o texto da opção escolhida, com o complemento livre
+    /// quando existe. <c>null</c> quando a pergunta não foi respondida — quem renderiza escreve
+    /// "(sem resposta)", porque célula vazia no papel não distingue isso de falha de impressão.
+    /// </summary>
+    private string? RespostaLegivel(PerguntaView pergunta)
+    {
+        if (Escolha(pergunta.Codigo) is not { } codigo) return null;
+        if (pergunta.Opcoes.FirstOrDefault(o => o.Codigo == codigo) is not { } opcao) return null;
+
+        var livre = _respostas.TryGetValue(pergunta.Codigo, out var r) ? r.TextoLivre : null;
+        return string.IsNullOrWhiteSpace(livre) ? opcao.Texto : $"{opcao.Texto} — {livre}";
+    }
+
+    /// <summary>
+    /// Nome do instrumento, e não o contador interno do catálogo. O patrocinador leu "4" e
+    /// perguntou por que não era V6: os dois números nunca bateram, e não há como mapear um no
+    /// outro fora do código. Ver <c>QuestionarioCatalogo.NomeDaVersao</c>.
+    /// </summary>
+    private string NomeDoInstrumento =>
+        QuestionarioCatalogo.NomeDaVersao(_questionario?.VersaoCatalogo ?? QuestionarioCatalogo.Versao);
 
     private bool PedeTextoLivre(PerguntaView pergunta)
     {

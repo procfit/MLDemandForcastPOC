@@ -177,6 +177,14 @@ public sealed record TabulacaoView(
     /// </summary>
     public IReadOnlyList<int> VersoesPresentes =>
         [.. Linhas.Select(l => l.VersaoCatalogo).OfType<int>().Distinct().Order()];
+
+    /// <summary>
+    /// As versões presentes pelos <b>nomes do instrumento</b> — "V3", "V5", "V6" —, e não pelos
+    /// números do catálogo interno. O aviso da tela dizia "v2, v3, v4", que não é como o
+    /// questionário se chama em lugar nenhum fora deste código.
+    /// </summary>
+    public IReadOnlyList<string> NomesDasVersoes =>
+        [.. VersoesPresentes.Select(Engine.Questionarios.QuestionarioCatalogo.NomeDaVersao)];
 }
 
 /// <param name="Avaliador">

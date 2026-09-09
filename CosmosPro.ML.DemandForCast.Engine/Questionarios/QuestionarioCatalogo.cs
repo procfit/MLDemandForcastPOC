@@ -98,6 +98,36 @@ public static class QuestionarioCatalogo
     public const int Versao = 4;
 
     /// <summary>
+    /// Nome do instrumento correspondente a um número de catálogo — <c>4</c> devolve
+    /// <c>"V6"</c>.
+    ///
+    /// <para>
+    /// <b>Existe porque os dois números nunca bateram, e ninguém fora do código consegue
+    /// mapeá-los.</b> O contador aqui é uma sequência interna (1, 2, 3, 4); o instrumento se
+    /// chama V3, V5, V6, pelos nomes que quem conduz a pesquisa usa no documento. A tabulação
+    /// mostrava o contador sob o rótulo "Versão do questionário", e o patrocinador leu o número
+    /// e perguntou por que não era V6 (09/09/2026) — pergunta justa, porque a tela afirmava uma
+    /// versão que não é a que ele conhece.
+    /// </para>
+    ///
+    /// <para>
+    /// Número desconhecido devolve <c>"catálogo N"</c>, e não um palpite: resposta gravada sob
+    /// uma versão que este código não conhece existe de verdade — é o que acontece ao ler dado
+    /// antigo depois de um rollback —, e inventar um nome ali seria pior que admitir a lacuna.
+    /// </para>
+    /// </summary>
+    public static string NomeDaVersao(int versao) => versao switch
+    {
+        // 1 foi o catálogo provisório, que existiu enquanto o documento não estava disponível;
+        // nenhuma resposta foi coletada sob ele.
+        1 => "provisório",
+        2 => "V3",
+        3 => "V5",
+        4 => "V6",
+        _ => $"catálogo {versao}",
+    };
+
+    /// <summary>
     /// Apresentação e termo de consentimento, exibidos <b>antes</b> do primeiro passo. Não é
     /// seção do wizard porque não tem pergunta: um passo vazio quebraria a navegação e a
     /// contagem de "passo N de M".

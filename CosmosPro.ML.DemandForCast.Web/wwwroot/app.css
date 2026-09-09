@@ -29,7 +29,27 @@ html, body {
      elementos nossos. Sao as classes estruturais do RadzenLayout, e nao classes de tema — se uma
      atualizacao do pacote as trocar, a folha sai com o menu impresso, que e feio e nao quebra
      nada. */
+/* Bloco que existe SO para o papel. Fora da impressao ele nao ocupa espaco nenhum; na
+   impressao e a unica coisa que sai. Ver o comentario em Questionario.razor: o assistente
+   nao tem como ser impresso porque renderiza apenas o passo ativo, entao o passo inativo
+   nao esta no HTML -- nao da para resolver com regra de visibilidade. */
+.apenas-impressao { display: none; }
+
 @media print {
+    .apenas-impressao {
+        display: block !important;
+        font-family: 'Roboto', Arial, sans-serif;
+        color: #000;
+    }
+
+    /* Pergunta e resposta nao se separam entre paginas: um enunciado no pe de uma folha
+       com a resposta na seguinte e um registro que se le errado. */
+    .linha-impressa {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        margin: 0 0 0.6rem;
+    }
+
     [data-print="ocultar"],
     .rz-header,
     .rz-sidebar {

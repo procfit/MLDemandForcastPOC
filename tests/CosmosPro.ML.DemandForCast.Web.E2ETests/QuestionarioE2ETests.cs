@@ -115,6 +115,59 @@ public sealed class QuestionarioE2ETests(AppHostFixture fixture)
         await page.Locator("[data-test=questionario-selado]")
                   .WaitForAsync(new() { Timeout = 30_000 });
 
+        // 4b. A VISAO DE IMPRESSAO TEM TODAS AS PERGUNTAS, e nao so as do passo ativo.
+        //
+        // E o defeito que o patrocinador relatou em 09/09/2026: o PDF saia com UMA pagina, com
+        // a Parte B e cortado no meio da segunda pergunta. A causa e que RadzenSteps renderiza
+        // somente o passo ativo -- o passo inativo NAO ESTA no HTML, entao nenhuma regra de
+        // @media print podia recupera-lo. Quem imprime passou a ser um bloco plano proprio.
+        //
+        // O teste percorre o catalogo inteiro de proposito: preso a uma lista fixa de codigos,
+        // ele passaria a afirmar menos do que precisa na proxima renumeracao do instrumento --
+        // e o instrumento ja foi renumerado duas vezes.
+        var impresso = await page.Locator("[data-test=impressao-respostas]").InnerTextAsync();
+
+        foreach (var pergunta in QuestionarioCatalogo.Perguntas)
+        {
+            impresso.Should().Contain(pergunta.Codigo,
+                $"'{pergunta.Codigo}' e do instrumento e tem de sair no papel, esteja em que passo estiver");
+            impresso.Should().Contain(pergunta.Texto,
+                $"o enunciado de '{pergunta.Codigo}' e o que torna a folha um registro legivel");
+        }
+
+        // E a resposta escolhida, nao so a pergunta. O laco do wizard marcou sempre a PRIMEIRA
+        // alternativa, entao e o texto dela que tem de estar no papel.
+        foreach (var pergunta in QuestionarioCatalogo.Perguntas)
+        {
+            impresso.Should().Contain(pergunta.Opcoes[0].Texto,
+                $"a resposta marcada em '{pergunta.Codigo}' precisa aparecer ao lado do enunciado");
+        }
+
+        impresso.Should().NotContain("(sem resposta)",
+            "o questionario foi respondido inteiro; '(sem resposta)' aqui denunciaria pergunta perdida");
+
+        // 4c. E A REGRA DE IMPRESSAO DE FATO TROCA OS DOIS BLOCOS. O conteudo estar no HTML nao
+        // basta: `.apenas-impressao` nasce com display:none e so aparece sob @media print. Ja
+        // aconteceu neste repositorio um caso de CSS que compila, publica e renderiza errado sem
+        // teste nenhum acusar (as faixas de secao do Quadro Resumo sairam como retangulos
+        // vazios), e a folha impressa e justamente o que ninguem olha antes de entregar.
+        var blocoImpresso = page.Locator("[data-test=impressao-respostas]");
+        var botoes = page.Locator("[data-print=ocultar]").First;
+
+        await Assertions.Expect(blocoImpresso).ToBeHiddenAsync();
+        await Assertions.Expect(botoes).ToBeVisibleAsync();
+
+        await page.EmulateMediaAsync(new() { Media = Media.Print });
+        try
+        {
+            await Assertions.Expect(blocoImpresso).ToBeVisibleAsync();
+            await Assertions.Expect(botoes).ToBeHiddenAsync();
+        }
+        finally
+        {
+            await page.EmulateMediaAsync(new() { Media = Media.Screen });
+        }
+
         // 5. E a sessão de fato concluiu — a transição é feita pelo endpoint de envio, e é a
         //    única da máquina de estados que não sai do Worker.
         await page.GotoAsync($"{baseUrl}/comparacoes/{sessaoId}");

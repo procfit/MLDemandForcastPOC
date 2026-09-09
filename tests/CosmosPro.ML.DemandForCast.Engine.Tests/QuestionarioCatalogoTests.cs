@@ -170,6 +170,41 @@ public sealed class QuestionarioCatalogoTests
         apresentacao.Should().Contain("confidencial", "o que se promete e confidencialidade");
     }
 
+    /// <summary>
+    /// O contador do catálogo e o nome do instrumento são coisas diferentes, e a tela precisa
+    /// mostrar o nome.
+    ///
+    /// <para>
+    /// A tabulação exibia <c>4</c> sob o rótulo "Versão do questionário" e o patrocinador
+    /// perguntou por que não era V6 (09/09/2026) — pergunta justa: os dois números nunca
+    /// bateram, e ninguém fora deste código consegue mapear um no outro. Este teste trava o
+    /// mapa, porque errá-lo faria a tela afirmar uma versão do instrumento que não existe.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Nome_da_versao_traduz_o_contador_no_nome_do_instrumento()
+    {
+        QuestionarioCatalogo.NomeDaVersao(2).Should().Be("V3");
+        QuestionarioCatalogo.NomeDaVersao(3).Should().Be("V5");
+        QuestionarioCatalogo.NomeDaVersao(4).Should().Be("V6");
+
+        QuestionarioCatalogo.NomeDaVersao(QuestionarioCatalogo.Versao).Should().Be("V6",
+            "o catalogo corrente e o V6; ao subir a Versao, acrescente o nome no mapa");
+    }
+
+    /// <summary>
+    /// Versão desconhecida admite a lacuna em vez de chutar. Resposta gravada sob uma versão
+    /// que este código não conhece existe de verdade — é o que se lê depois de um rollback —, e
+    /// inventar um nome ali seria pior que dizer que não se sabe.
+    /// </summary>
+    [Fact]
+    public void Versao_desconhecida_nao_inventa_nome()
+    {
+        QuestionarioCatalogo.NomeDaVersao(99).Should().Be("catálogo 99");
+        QuestionarioCatalogo.NomeDaVersao(1).Should().Be("provisório",
+            "a versao 1 foi o catalogo provisorio, sem nenhuma resposta coletada");
+    }
+
     [Fact]
     public void Pergunta_resolve_por_codigo_e_opcao_resolve_dentro_dela()
     {

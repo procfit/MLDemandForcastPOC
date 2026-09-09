@@ -4,6 +4,7 @@
 @inject QuestionariosApiClient QuestionariosApi
 @inject ILogger<Avaliacoes> Logger
 @inject NavigationManager Nav
+@using CosmosPro.ML.DemandForCast.Engine.Questionarios
 
 <PageTitle>Avaliações do POC</PageTitle>
 
@@ -77,7 +78,7 @@
                     <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter"
                                  AllowClose="false" data-test="aviso-versoes">
                         Há respostas de @_tabulacao.VersoesPresentes.Count versões diferentes do
-                        questionário (@string.Join(", ", _tabulacao.VersoesPresentes.Select(v => $"v{v}"))).
+                        questionário (@string.Join(", ", _tabulacao.NomesDasVersoes)).
                         <strong>O mesmo código designa afirmações diferentes entre versões</strong>,
                         então não some uma coluna inteira sem separar por versão. A aba
                         <em>Perguntas</em> da planilha mostra o enunciado de cada código em cada versão.
@@ -157,13 +158,18 @@
                     </RadzenDataGridColumn>
 
                     <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="VersaoCatalogo"
-                                          Title="Versão" Width="100px" TextAlign="TextAlign.Right">
+                                          Title="Versão" Width="120px">
                         <HeaderTemplate>
                             <span>Versão</span>
                             <HelpTip Size="0.85rem"
-                                     Text="Versão do questionário sob a qual esta linha foi respondida. Não é enfeite: o instrumento já foi renumerado duas vezes, e o mesmo código designa afirmações diferentes entre versões." />
+                                     Text="Versão do questionário sob a qual esta linha foi respondida, pelo nome do instrumento (V3, V5, V6). Não é enfeite: o instrumento já foi renumerado duas vezes, e o mesmo código designa afirmações diferentes entre versões." />
                         </HeaderTemplate>
-                        <Template Context="l">@(l.VersaoCatalogo?.ToString() ?? "")</Template>
+                        @* NOME do instrumento, e nao o contador interno do catalogo. A coluna
+                           mostrava "4" sob o rotulo "Versao do questionario" e o patrocinador
+                           perguntou por que nao era V6 -- pergunta justa. *@
+                        <Template Context="l">
+                            @(l.VersaoCatalogo is { } v ? QuestionarioCatalogo.NomeDaVersao(v) : "")
+                        </Template>
                     </RadzenDataGridColumn>
 
                     <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="Respondente"
