@@ -14,12 +14,23 @@ internal sealed record SinalDoItem(
     decimal UnidadesRede,
     decimal UnidadesConcorrentes,
     // Valor ao consumidor sob a metodologia da IQVIA, somado no mesmo recorte das unidades.
-    // Serve para o preco medio (valor / unidades) que a tela exibe -- e que e PRECO-INDICE,
-    // nao preco de balcao: a IQVIA normaliza precos entre os participantes do painel. Os dois
-    // lados saem daqui, entao comparar um com o outro e legitimo; comparar qualquer um deles
-    // com preco praticado ou com PrecoCompra do Stage nao e.
+    //
+    // CORRECAO DE UM RACIOCINIO MEU QUE A MEDICAO DESMENTIU. O comentario anterior dizia que
+    // comparar os dois lados da IQVIA entre si era legitimo e compara-los com preco praticado
+    // nao era. E o contrario: `valor / unidades` devolve o preco de REFERENCIA que a IQVIA
+    // normaliza entre os participantes, entao os dois lados dao SEMPRE o mesmo numero -- 37.410
+    // pares medidos em agosto, zero diferenca, e foi o patrocinador quem viu na tela em
+    // 09/09/2026. Comparar um com o outro nao e legitimo, e uma tautologia.
+    //
+    // A comparacao util e contra `PrecoPraticadoRede`, abaixo. Ela mistura duas naturezas de
+    // numero -- referencia normalizada contra preco de balcao -- e essa ressalva tem de aparecer
+    // na tela; mas ela pelo menos INFORMA, e o patrocinador aprovou seguir por ela (Opcao B).
     decimal ValorRede,
     decimal ValorConcorrentes,
+    // Preco medio que a REDE de fato praticou no mes comparado, ponderado pela quantidade:
+    // SUM(ValorTotal) / SUM(Quantidade) de `Stage.Vendas`. Nulo quando a rede nao vendeu o item
+    // naquele mes -- e nulo NAO e zero: zero afirmaria que ela deu o produto.
+    decimal? PrecoPraticadoRede,
     decimal Indice,
     int? DiasSemEstoque,
     string Alerta);
@@ -178,6 +189,11 @@ internal sealed class MercadoSinalLoader(
         // --- ruptura no mês comparado (regra B3) ---------------------------------------
         var rupturas = await RupturaNoMesAsync(conn, redeId, mes, janelaInicio, escopo, ct);
 
+        // --- preço praticado pela rede no MESMO mês (Opção B) --------------------------
+        // O mesmo mês do preço de referência de propósito: comparar o praticado de um mês com a
+        // referência de outro mediria a passagem do tempo, não o posicionamento de preço.
+        var precosPraticados = await PrecoPraticadoNoMesAsync(conn, redeId, mes, escopo, ct);
+
         // --- montagem ------------------------------------------------------------------
         var sinais = new Dictionary<(int LojaId, string Sku), SinalDoItem>();
 
@@ -192,6 +208,10 @@ internal sealed class MercadoSinalLoader(
                 ? null
                 : rupturas.TryGetValue((lojaId, sku), out var d) ? d : (int?)null;
 
+            var precoPraticado = precosPraticados.TryGetValue((lojaId, sku), out var pp)
+                ? pp
+                : (decimal?)null;
+
             var calculado = MercadoAlertaCalculador.Calcular(new SinalBruto(
                 UnidadesRede: medida.Rede,
                 UnidadesConcorrentes: medida.Conc,
@@ -203,6 +223,7 @@ internal sealed class MercadoSinalLoader(
             sinais[(lojaId, sku)] = new SinalDoItem(
                 mes, brick, medida.Rede, medida.Conc,
                 medida.ValorRede, medida.ValorConc,
+                precoPraticado,
                 c.Indice, diasSemEstoque, c.Alerta);
         }
 
@@ -309,6 +330,57 @@ internal sealed class MercadoSinalLoader(
         while (await rd.ReadAsync(ct))
         {
             mapa[(rd.GetInt32(0), rd.GetString(1))] = rd.GetInt32(2);
+        }
+
+        return mapa;
+    }
+
+    /// <summary>
+    /// Preço médio que a rede <b>de fato praticou</b> por <c>(loja, sku)</c> no mês comparado,
+    /// ponderado pela quantidade.
+    ///
+    /// <para>
+    /// <b>Média ponderada, e não média das médias.</b> <c>SUM(ValorTotal) / SUM(Quantidade)</c>
+    /// dá o preço médio do que saiu; <c>AVG(PrecoUnitario)</c> daria peso igual ao dia que
+    /// vendeu uma caixa e ao que vendeu duzentas, e num item com remarcação no meio do mês os
+    /// dois números divergem de verdade.
+    /// </para>
+    ///
+    /// <para>
+    /// Chave ausente significa que a rede <b>não vendeu</b> o item naquele mês, e quem lê grava
+    /// nulo. Zero afirmaria que ela vendeu de graça — e esta é uma coluna pela qual o comprador
+    /// vai ordenar.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Não depende da janela de estoque</b>, ao contrário da ruptura: venda é registrada no
+    /// próprio dia e não precisa de reconstrução para trás. Um mês pode ter preço praticado e
+    /// ruptura "não apurada" ao mesmo tempo, e isso é correto.
+    /// </para>
+    /// </summary>
+    private static async Task<Dictionary<(int LojaId, string Sku), decimal>> PrecoPraticadoNoMesAsync(
+        SqlConnection conn, int redeId, DateOnly mes, EscopoDeSkus escopo, CancellationToken ct)
+    {
+        var fim = mes.AddMonths(1).AddDays(-1);
+        var mapa = new Dictionary<(int, string), decimal>();
+
+        await using var cmd = new SqlCommand($"""
+            SELECT v.LojaId, v.Sku, SUM(v.ValorTotal) / SUM(v.Quantidade)
+            FROM dbo.Vendas v
+            {escopo.Join("v")}
+            WHERE v.RedeId = @rede AND v.Data >= @ini AND v.Data <= @fim
+            GROUP BY v.LojaId, v.Sku
+            HAVING SUM(v.Quantidade) > 0;
+            """, conn);
+        cmd.Parameters.AddWithValue("@rede", redeId);
+        cmd.Parameters.Add("@ini", SqlDbType.Date).Value = mes.ToDateTime(TimeOnly.MinValue);
+        cmd.Parameters.Add("@fim", SqlDbType.Date).Value = fim.ToDateTime(TimeOnly.MinValue);
+        cmd.CommandTimeout = 300;
+
+        await using var rd = await cmd.ExecuteReaderAsync(ct);
+        while (await rd.ReadAsync(ct))
+        {
+            mapa[(rd.GetInt32(0), rd.GetString(1))] = rd.GetDecimal(2);
         }
 
         return mapa;

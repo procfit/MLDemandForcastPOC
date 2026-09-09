@@ -359,6 +359,7 @@ public sealed class SessaoResultadoMontadorTests
                 UnidadesConcorrentes: 988m,
                 ValorRede: 300m,
                 ValorConcorrentes: 19_760m,
+                PrecoPraticadoRede: 25m,
                 Indice: 0.1234m,
                 DiasSemEstoque: 3,
                 Alerta: MercadoAlertas.Ruptura),
@@ -370,6 +371,9 @@ public sealed class SessaoResultadoMontadorTests
         item.MercadoBrick.Should().Be("528-RJ VOLTA REDONDA RETIRO");
         item.MercadoUnidadesRede.Should().Be(12m);
         item.MercadoUnidadesConcorrentes.Should().Be(988m);
+        item.PrecoVendaPraticado.Should().Be(25m,
+            "o preco praticado vem do sinal e e a unica coluna de preco REAL da tabela; "
+            + "o da IQVIA e indice normalizado, igual para qualquer bandeira");
         item.MercadoIndiceDesempenho.Should().Be(0.1234m);
         item.MercadoDiasSemEstoque.Should().Be(3);
         item.MercadoAlerta.Should().Be(MercadoAlertas.Ruptura);
@@ -402,7 +406,7 @@ public sealed class SessaoResultadoMontadorTests
         var sinais = new Dictionary<(int LojaId, string Sku), SinalDoItem>
         {
             [(LojaId + 999, Sku)] = new(
-                new DateOnly(2025, 6, 1), "outro brick", 1m, 1m, 10m, 10m, 0.1m, 0,
+                new DateOnly(2025, 6, 1), "outro brick", 1m, 1m, 10m, 10m, 9m, 0.1m, 0,
                 MercadoAlertas.SemCausa),
         };
 

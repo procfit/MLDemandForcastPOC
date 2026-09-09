@@ -205,8 +205,8 @@
                 @if (_totais is { TemPlacarDePreco: true } tp)
                 {
                     <div data-test="placar-de-preco">
-                        <Totalizador Rotulo="Preço da rede vs IQVIA"
-                                     Valor="@($"{tp.ItensComPrecoRedeMenor:N0} menor · {tp.ItensComPrecoRedeMaior:N0} maior")"
+                        <Totalizador Rotulo="Seu preço vs referência"
+                                     Valor="@($"{tp.ItensComPrecoRedeMenor:N0} abaixo · {tp.ItensComPrecoRedeMaior:N0} acima")"
                                      Nota="@PlacarDePrecoNota(tp)"
                                      Ajuda="@AjudaDoPlacarDePreco" />
                     </div>
@@ -525,25 +525,39 @@
                lados, tirados da mesma planilha. Foi a opcao certa entre as duas que ele
                levantou: a alternativa (preco da rede vindo da base de vendas dela) compararia
                um numero normalizado pela IQVIA com um numero real, e a diferenca passaria a
-               medir metodologia em vez de posicionamento de preco. *@
+               medir metodologia em vez de posicionamento de preco.
+
+               ESSA ESCOLHA FOI REVERTIDA EM 09/09/2026, e o paragrafo acima fica como registro
+               do raciocinio errado. Tirar os dois lados da IQVIA nao produz uma comparacao
+               conservadora: produz uma TAUTOLOGIA. `valor / unidades` devolve o preco de
+               referencia que a IQVIA normaliza entre os participantes, entao os dois lados dao
+               sempre o mesmo numero -- 37.410 pares medidos em agosto, zero diferenca. O
+               patrocinador viu as duas colunas iguais na tela e reportou; ele mesmo mediu 4.689
+               registros e chegou a mesma conclusao.
+
+               Agora o lado da rede e o PRECO PRATICADO, da base de vendas dela, no mesmo mes.
+               A ressalva que eu usei para descartar essa opcao continua verdadeira -- mistura
+               preco de balcao com indice normalizado --, mas ela e uma RESSALVA A DECLARAR, e
+               nao um motivo para preferir um numero vazio. Esta e a Opcao B do documento de
+               09/09, aprovada por ele. *@
             <RadzenDataGridColumn TItem="SessaoItem" Property="PrecoMedioConcorrentes"
-                                  Title="Preço unit. IQVIA" Width="150px" TextAlign="TextAlign.Right"
+                                  Title="Referência do mercado" Width="180px" TextAlign="TextAlign.Right"
                                   Sortable="false">
                 <HeaderTemplate>
                     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
-                        <span>Preço unit. IQVIA</span>
-                        <HelpTip Text="Preço médio dos CONCORRENTES neste item, no bairro e mês comparados: o valor que a IQVIA reporta dividido pelas unidades que ela reporta. ATENÇÃO: a IQVIA normaliza preços entre os participantes do painel, então este NÃO é o preço que passou no caixa — é um índice. Ele serve para comparar com a coluna ao lado, que sai do mesmo arquivo e da mesma normalização. Não compare com preço de compra." />
+                        <span>Referência do mercado</span>
+                        <HelpTip Text="Preço de REFERÊNCIA que a IQVIA usa para este item no bairro e mês comparados: o valor que ela reporta dividido pelas unidades que ela reporta. NÃO é o preço que cada concorrente cobrou — a IQVIA normaliza preços entre os participantes do painel, então este número é o mesmo para todas as bandeiras. O relatório não contém o preço praticado por concorrente, e por isso esta tela NÃO consegue dizer se a concorrência está mais barata que você. Serve para dimensionar o item e para ser o outro lado da comparação com o seu preço praticado." />
                     </RadzenStack>
                 </HeaderTemplate>
                 <Template Context="i">@Dinheiro(i.PrecoMedioConcorrentes)</Template>
             </RadzenDataGridColumn>
             <RadzenDataGridColumn TItem="SessaoItem" Property="PrecoMedioRede"
-                                  Title="Preço unit. rede" Width="170px" TextAlign="TextAlign.Right"
+                                  Title="Seu preço praticado" Width="180px" TextAlign="TextAlign.Right"
                                   Sortable="false">
                 <HeaderTemplate>
                     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.25rem">
-                        <span>Preço unit. rede</span>
-                        <HelpTip Text="Mesmo cálculo, para as bandeiras da própria rede, no mesmo bairro e mês. Travessão quando a rede não vendeu nenhuma unidade daquele item no recorte: sem venda não há preço a calcular, e zero afirmaria que a rede vende de graça." />
+                        <span>Seu preço praticado</span>
+                        <HelpTip Text="Preço que a sua rede DE FATO praticou neste item no mês comparado, tirado da sua base de vendas e ponderado pela quantidade — é preço de caixa, não índice. A seta compara com a referência do mercado ao lado. ATENÇÃO ao ler a diferença: ela põe um preço real de um lado e um índice normalizado do outro, então ela diz se você está acima ou abaixo da referência que o mercado usa — e NÃO se a concorrência está mais barata, porque esse número não existe no relatório. Travessão quando a rede não vendeu o item naquele mês: sem venda não há preço praticado, e zero afirmaria que você vendeu de graça." />
                     </RadzenStack>
                 </HeaderTemplate>
                 <Template Context="i">
@@ -556,16 +570,23 @@
                         <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
                                      JustifyContent="JustifyContent.End" Gap="0.3rem">
                             <span>@Dinheiro(i.PrecoMedioRede)</span>
-                            @* A seta compara os dois indices entre si, que e a unica comparacao
-                               que a metodologia da IQVIA autoriza. Nulo nao acende nada. *@
+                            @* A seta compara o preco praticado com a referencia. Nulo nao
+                               acende nada -- sem os dois lados nao ha comparacao, e uma seta
+                               para baixo afirmaria "esta abaixo", que nao e "nao se sabe".
+
+                               COR: acima da referencia em vermelho e abaixo em verde le-se
+                               como "barato e bom", que nao e verdade em farma -- margem tambem
+                               importa. Fica assim porque o comprador desta tela esta olhando
+                               perda de participacao no bairro, e nesse contexto preco acima da
+                               referencia e a hipotese a investigar. *@
                             @if (i.RedeMaisCaraQueOMercado is true)
                             {
-                                <RadzenIcon Icon="arrow_upward" title="Acima do índice dos concorrentes"
+                                <RadzenIcon Icon="arrow_upward" title="Acima da referência do mercado"
                                             Style="color: var(--rz-danger); font-size: 0.9rem" />
                             }
                             else if (i.RedeMaisCaraQueOMercado is false)
                             {
-                                <RadzenIcon Icon="arrow_downward" title="Abaixo do índice dos concorrentes"
+                                <RadzenIcon Icon="arrow_downward" title="Abaixo da referência do mercado"
                                             Style="color: var(--rz-success); font-size: 0.9rem" />
                             }
                         </RadzenStack>
@@ -685,8 +706,8 @@
 
     private static readonly OpcaoDeFiltro[] OpcoesDePreco =
     [
-        new("RedeMenor", "rede mais barata que o mercado"),
-        new("IqviaMenor", "mercado mais barato que a rede"),
+        new("RedeMenor", "seu preço abaixo da referência"),
+        new("IqviaMenor", "seu preço acima da referência"),
     ];
 
     private IReadOnlyList<OpcaoDeFiltro> _fabricantesDisponiveis = [];
@@ -961,20 +982,22 @@
 
         if (t.ItensSemPrecoComparavel > 0)
         {
-            partes.Add($"{t.ItensSemPrecoComparavel:N0} sem preço da rede");
+            partes.Add($"{t.ItensSemPrecoComparavel:N0} sem venda sua no mês");
         }
 
         return string.Join(" · ", partes);
     }
 
     private const string AjudaDoPlacarDePreco =
-        "Preço médio de cada lado no bairro e mês comparados: o valor que a IQVIA reporta dividido " +
-        "pelas unidades que ela reporta. ATENÇÃO: a IQVIA normaliza preços entre os participantes " +
-        "do painel, então estes NÃO são preços de balcão — são índices. Comparar um com o outro é " +
-        "legítimo porque saem do mesmo arquivo e da mesma normalização; comparar qualquer um deles " +
-        "com o seu preço de compra, ou com a sua base de vendas, mede metodologia e não preço. " +
-        "Os itens “sem preço da rede” são aqueles em que a rede não vendeu nenhuma unidade no " +
-        "recorte: sem venda não há preço, e eles não entram em nenhum dos dois lados.";
+        "Compara o preço que você DE FATO praticou no mês (da sua base de vendas, ponderado pela " +
+        "quantidade) com o preço de REFERÊNCIA que a IQVIA usa para o item naquele bairro e mês. " +
+        "ATENÇÃO ao ler: a referência da IQVIA é normalizada entre os participantes do painel, " +
+        "então ela é a mesma para todas as bandeiras — o relatório NÃO traz o preço que cada " +
+        "concorrente cobrou. Este placar diz em quantos itens você está acima ou abaixo da " +
+        "referência do mercado; ele NÃO diz se a concorrência está mais barata que você, porque " +
+        "esse número não existe na fonte. Os itens “sem venda sua no mês” são aqueles em que a " +
+        "rede não vendeu nenhuma unidade no recorte: sem venda não há preço praticado, e eles não " +
+        "entram em nenhum dos dois lados.";
 
     private static string Texto(string? valor) =>
         string.IsNullOrWhiteSpace(valor) ? "—" : valor;

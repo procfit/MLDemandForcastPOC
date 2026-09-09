@@ -61,3 +61,11 @@ appsettings.*.local.json
 
 # Artefatos de publicacao do Aspire (compose + .env) — gerados, nunca versionados
 aspire-output/
+
+# ---- Exports gerados a partir dos .md de Docs/ (markdown-pdf) ----
+# A fonte versionada e o .md; o PDF/HTML e regerado sob demanda.
+# Um nivel so: Docs/imgs/ continua versionado.
+/Docs/*.pdf
+/Docs/*.html
+/Docs/*.png
+/Docs/*.jpeg

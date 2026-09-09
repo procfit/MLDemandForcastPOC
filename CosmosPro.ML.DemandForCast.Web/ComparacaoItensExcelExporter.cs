@@ -174,7 +174,7 @@ public static class ComparacaoItensExcelExporter
             "R$ parado (PBS)", "R$ parado (ML)", "Quem ficou mais perto", "Ressalva",
             "Mês IQVIA", "Bairro (brick)", "Vendemos no bairro (un.)",
             "Concorrentes no bairro (un.)", "Índice vs bairro",
-            "Preço unit. IQVIA", "Preço unit. rede",
+            "Referência do mercado", "Seu preço praticado",
             "Dias sem estoque",
             "Alerta de mercado",
         ];
@@ -314,8 +314,8 @@ public static class ComparacaoItensExcelExporter
 
     private static string RotuloDePreco(string? valor) => valor switch
     {
-        "RedeMenor" => "rede mais barata que o mercado",
-        "IqviaMenor" => "mercado mais barato que a rede",
+        "RedeMenor" => "seu preço abaixo da referência",
+        "IqviaMenor" => "seu preço acima da referência",
         _ => "todos",
     };
 

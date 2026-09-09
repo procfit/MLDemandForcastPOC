@@ -533,14 +533,14 @@ public sealed class AppHostFixture : IAsyncLifetime
                      MercadoMes, MercadoBrick, MercadoUnidadesRede, MercadoUnidadesConcorrentes,
                      MercadoIndiceDesempenho, MercadoDiasSemEstoque, MercadoAlerta,
                      Fabricante, Ean, EstoqueNaSugestao, EstoqueNoFimDoPeriodo, VendaMediaDiaria,
-                     MercadoValorRede, MercadoValorConcorrentes)
+                     MercadoValorRede, MercadoValorConcorrentes, PrecoVendaPraticado)
                 VALUES
                     (@sessaoId, @lojaId, @sku, @nomeProduto, @curva, @compraPbs, @compraMl,
                      @vendido, @demandaPbs, @demandaMl, @demandaReal,
                      @sobraPbsUn, @sobraMlUn, @sobraPbsVl, @sobraMlVl, @alemDoHistorico,
                      @mercadoMes, @mercadoBrick, @mercadoUnRede, @mercadoUnConc,
                      @mercadoIndice, @mercadoDiasSemEstoque, @mercadoAlerta,
-                     @fabricante, @ean, @estoqueNaSugestao, @estoqueNoFim, @vendaMedia, @mercadoValorRede, @mercadoValorConc);
+                     @fabricante, @ean, @estoqueNaSugestao, @estoqueNoFim, @vendaMedia, @mercadoValorRede, @mercadoValorConc, @precoPraticado);
                 """;
             insertItem.Parameters.AddWithValue("@sessaoId", id);
             insertItem.Parameters.AddWithValue("@lojaId", item.LojaId);
@@ -557,6 +557,7 @@ public sealed class AppHostFixture : IAsyncLifetime
             insertItem.Parameters.AddWithValue("@vendaMedia", (object?)item.VendaMediaDiaria ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@mercadoValorRede", (object?)item.MercadoValorRede ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@mercadoValorConc", (object?)item.MercadoValorConcorrentes ?? DBNull.Value);
+            insertItem.Parameters.AddWithValue("@precoPraticado", (object?)item.PrecoVendaPraticado ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@compraPbs", item.CompraSugeridaPbs);
             insertItem.Parameters.AddWithValue("@compraMl", (object?)item.CompraSugeridaMl ?? DBNull.Value);
             insertItem.Parameters.AddWithValue("@vendido", item.VendidoNaJanela);

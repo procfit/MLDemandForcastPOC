@@ -586,6 +586,7 @@ internal sealed class SessaoResultadoMaterializador(
         tabela.Columns.Add("MercadoUnidadesConcorrentes", typeof(decimal));
         tabela.Columns.Add("MercadoValorRede", typeof(decimal));
         tabela.Columns.Add("MercadoValorConcorrentes", typeof(decimal));
+        tabela.Columns.Add("PrecoVendaPraticado", typeof(decimal));
         tabela.Columns.Add("MercadoIndiceDesempenho", typeof(decimal));
         tabela.Columns.Add("MercadoDiasSemEstoque", typeof(int));
         tabela.Columns.Add("MercadoAlerta", typeof(string));
@@ -626,6 +627,7 @@ internal sealed class SessaoResultadoMaterializador(
                 item.MercadoUnidadesConcorrentes ?? (object)DBNull.Value,
                 item.MercadoValorRede ?? (object)DBNull.Value,
                 item.MercadoValorConcorrentes ?? (object)DBNull.Value,
+                item.PrecoVendaPraticado ?? (object)DBNull.Value,
                 item.MercadoIndiceDesempenho ?? (object)DBNull.Value,
                 item.MercadoDiasSemEstoque ?? (object)DBNull.Value,
                 item.MercadoAlerta ?? (object)DBNull.Value);

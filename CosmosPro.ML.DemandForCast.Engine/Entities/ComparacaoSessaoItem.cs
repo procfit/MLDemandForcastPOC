@@ -231,6 +231,34 @@ public sealed class ComparacaoSessaoItem
     /// </summary>
     public DateOnly? MercadoMes { get; set; }
 
+    /// <summary>
+    /// Preço médio que a rede <b>de fato praticou</b> neste item no mês comparado da IQVIA,
+    /// ponderado pela quantidade vendida. Nulo quando a rede não vendeu o item naquele mês.
+    ///
+    /// <para>
+    /// <b>É a única coluna de preço real desta tabela.</b> O preço da IQVIA
+    /// (<c>MercadoValorConcorrentes / MercadoUnidadesConcorrentes</c>) é preço de
+    /// <i>referência</i>: a IQVIA normaliza preços entre os participantes do painel, então ele
+    /// dá o mesmo número para qualquer bandeira — 37.410 pares medidos, zero diferença. Foi por
+    /// isso que as duas colunas de preço saíam idênticas na tela, e é por isso que esta coluna
+    /// existe: comparar referência com referência é tautologia; comparar o praticado com a
+    /// referência informa.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Nulo nunca é zero</b>, pelo mesmo contrato do resto da tabela: zero afirmaria que a
+    /// rede vendeu de graça, e esta é uma coluna pela qual o comprador ordena.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Ao ler a diferença, ela mistura duas naturezas de número</b> — preço de balcão contra
+    /// índice normalizado. A tela declara isso; não a apresente como "estamos mais caros que os
+    /// concorrentes", porque o preço praticado pelo concorrente não existe em nenhuma fonte que
+    /// temos.
+    /// </para>
+    /// </summary>
+    public decimal? PrecoVendaPraticado { get; set; }
+
     /// <summary>Brick da IQVIA da loja, resolvido pelo CNPJ dela no painel.</summary>
     public string? MercadoBrick { get; set; }
 

@@ -238,6 +238,8 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             // Espelha MercadoObservacoes.ValorCpp, que e DECIMAL(18,4) -- o valor do brick
             // inteiro soma muito mais que a sobra de um item, entao nao cabe em (14,4).
             b.Property(x => x.MercadoValorRede).HasPrecision(18, 4);
+            // Preco unitario praticado: espelha Stage.Vendas.PrecoUnitario DECIMAL(12,4).
+            b.Property(x => x.PrecoVendaPraticado).HasPrecision(12, 4);
             b.Property(x => x.MercadoValorConcorrentes).HasPrecision(18, 4);
             b.Property(x => x.MercadoIndiceDesempenho).HasPrecision(9, 4);
             // Espelha MercadoObservacao.Brick.

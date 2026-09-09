@@ -294,6 +294,7 @@ internal static class SessaoResultadoMontador
                 MercadoUnidadesConcorrentes = sinal?.UnidadesConcorrentes,
                 MercadoValorRede = sinal?.ValorRede,
                 MercadoValorConcorrentes = sinal?.ValorConcorrentes,
+                PrecoVendaPraticado = sinal?.PrecoPraticadoRede,
                 MercadoIndiceDesempenho = sinal?.Indice,
                 MercadoDiasSemEstoque = sinal?.DiasSemEstoque,
                 MercadoAlerta = sinal?.Alerta,

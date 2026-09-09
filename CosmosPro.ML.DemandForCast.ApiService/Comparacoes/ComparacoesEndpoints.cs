@@ -863,17 +863,22 @@ internal static class ComparacoesEndpoints
 
         if (!string.IsNullOrWhiteSpace(preco))
         {
-            // Exige unidades nos DOIS lados: sem venda nao ha preco, e o item nao pertence a
-            // nenhum dos lados da comparacao.
+            // O LADO DA REDE PASSOU A SER O PRECO PRATICADO (Opcao B, aprovada em
+            // 09/09/2026). Antes os dois lados saiam da IQVIA e a comparacao era tautologica:
+            // `valor / unidades` devolve o preco de referencia normalizado, igual para qualquer
+            // bandeira -- 37.410 pares medidos, zero diferenca. Este filtro nunca separava nada.
+            //
+            // Exige preco nos DOIS lados: sem venda da rede no mes nao ha preco praticado, e o
+            // item nao pertence a nenhum dos lados da comparacao.
             itens = preco switch
             {
                 "RedeMenor" => itens.Where(i =>
-                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
-                    && i.MercadoValorRede / i.MercadoUnidadesRede
+                    i.PrecoVendaPraticado != null && i.MercadoUnidadesConcorrentes > 0m
+                    && i.PrecoVendaPraticado
                        < i.MercadoValorConcorrentes / i.MercadoUnidadesConcorrentes),
                 "IqviaMenor" => itens.Where(i =>
-                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
-                    && i.MercadoValorRede / i.MercadoUnidadesRede
+                    i.PrecoVendaPraticado != null && i.MercadoUnidadesConcorrentes > 0m
+                    && i.PrecoVendaPraticado
                        > i.MercadoValorConcorrentes / i.MercadoUnidadesConcorrentes),
                 _ => itens,
             };
@@ -939,19 +944,21 @@ internal static class ComparacoesEndpoints
                 // Os TRES alertas de verdade, nunca "!= SemAlerta": nulo nao sobrevive a
                 // comparacao de desigualdade em SQL, e item sem dado de mercado nao e alerta —
                 // e "nao avaliado". Mesma clausula que o filtro "so com alerta" usa.
-                // Placar de preco: os itens com preco nos DOIS lados, e de que lado ele e menor.
-                // "Preco" aqui e valor / unidades, entao exige unidades > 0 nos dois -- item em
-                // que a rede nao vendeu nada nao tem preco, e nao pertence a nenhum dos lados.
+                // Placar de preco: PRECO PRATICADO pela rede contra o preco de REFERENCIA da
+                // IQVIA. Enquanto os dois lados saiam da IQVIA este placar nao tinha como sair
+                // de empate -- a normalizacao devolve o mesmo numero para qualquer bandeira.
+                // Exige preco nos dois lados: item que a rede nao vendeu no mes nao tem preco
+                // praticado, e nao pertence a nenhum dos lados.
                 ComPrecoComparavel = g.Count(i =>
-                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
-                    && i.MercadoValorRede != null && i.MercadoValorConcorrentes != null),
+                    i.PrecoVendaPraticado != null && i.MercadoUnidadesConcorrentes > 0m
+                    && i.MercadoValorConcorrentes != null),
                 PrecoRedeMenor = g.Count(i =>
-                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
-                    && i.MercadoValorRede / i.MercadoUnidadesRede
+                    i.PrecoVendaPraticado != null && i.MercadoUnidadesConcorrentes > 0m
+                    && i.PrecoVendaPraticado
                        < i.MercadoValorConcorrentes / i.MercadoUnidadesConcorrentes),
                 PrecoRedeMaior = g.Count(i =>
-                    i.MercadoUnidadesRede > 0m && i.MercadoUnidadesConcorrentes > 0m
-                    && i.MercadoValorRede / i.MercadoUnidadesRede
+                    i.PrecoVendaPraticado != null && i.MercadoUnidadesConcorrentes > 0m
+                    && i.PrecoVendaPraticado
                        > i.MercadoValorConcorrentes / i.MercadoUnidadesConcorrentes),
                 ComAlerta = g.Count(i =>
                     i.MercadoAlerta == MercadoAlertas.Ruptura
@@ -1204,7 +1211,8 @@ internal static class ComparacoesEndpoints
             i.EstoqueNoFimDoPeriodo,
             i.VendaMediaDiaria,
             i.MercadoValorRede,
-            i.MercadoValorConcorrentes);
+            i.MercadoValorConcorrentes,
+            i.PrecoVendaPraticado);
 
     private static readonly Expression<Func<ComparacaoSessao, SessaoView>> ProjectToView =
         s => new SessaoView(
@@ -1401,7 +1409,8 @@ internal sealed record SessaoItemView(
     // aqui: e conta de apresentacao, e materializar o quociente perderia a informacao de que
     // unidades zero nao tem preco.
     decimal? MercadoValorRede = null,
-    decimal? MercadoValorConcorrentes = null);
+    decimal? MercadoValorConcorrentes = null,
+    decimal? PrecoVendaPraticado = null);
 
 /// <param name="Itens">População inteira da sessão — o denominador de todo o resto.</param>
 /// <param name="SobraExtraMlUnidades">

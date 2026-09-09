@@ -422,39 +422,84 @@ public sealed class ComparacoesApiClientTests
         t.TemPlacarDePreco.Should().BeFalse();
     }
 
-    // --- Preco medio da IQVIA -------------------------------------------------
+    // --- Preco: praticado pela rede contra a referencia do mercado (Opcao B) ---
 
     /// <summary>
-    /// Preco medio = valor da IQVIA dividido pelas unidades da IQVIA, nos dois lados. Regra
-    /// definida pelo patrocinador em 06/09/2026, e ele confirmou a opcao de tirar OS DOIS
-    /// numeros da mesma planilha — que e o que torna a comparacao entre eles legitima.
+    /// O lado da rede e o preco PRATICADO, da base de vendas dela; o lado do mercado e o preco
+    /// de REFERENCIA da IQVIA (valor / unidades).
+    ///
+    /// <para>
+    /// <b>A versao anterior tirava os dois lados da IQVIA</b>, e o comentario do teste afirmava
+    /// que isso era o que "torna a comparacao entre eles legitima". Era o oposto: a IQVIA
+    /// normaliza preco entre os participantes do painel, entao `valor / unidades` devolve o
+    /// mesmo numero para qualquer bandeira — 37.410 pares medidos em agosto, zero diferenca. O
+    /// patrocinador viu as duas colunas iguais na tela em 09/09/2026 e aprovou a Opcao B.
+    /// </para>
     /// </summary>
     [Fact]
-    public void Preco_medio_divide_valor_por_unidades_nos_dois_lados()
+    public void Preco_da_rede_e_o_praticado_e_o_do_mercado_e_a_referencia()
     {
-        var item = ComMercado(unidadesRede: 12m, valorRede: 300m,
-                              unidadesConc: 988m, valorConc: 19_760m);
+        var item = ComMercado(unidadesRede: 12m, valorRede: 240m,
+                              unidadesConc: 988m, valorConc: 19_760m,
+                              precoPraticado: 25m);
 
-        item.PrecoMedioRede.Should().Be(25m);
-        item.PrecoMedioConcorrentes.Should().Be(20m);
-        item.RedeMaisCaraQueOMercado.Should().BeTrue("25 e mais que 20");
+        item.PrecoMedioRede.Should().Be(25m, "vem da base de vendas, nao da IQVIA");
+        item.PrecoMedioConcorrentes.Should().Be(20m, "19.760 / 988 = referencia de 20");
+        item.RedeMaisCaraQueOMercado.Should().BeTrue("25 praticado contra 20 de referencia");
     }
 
     /// <summary>
-    /// <b>Unidades zero nao vira preco zero.</b> Zero unidades com valor zero e o caso comum do
-    /// lado da rede: o item existe no bairro, os concorrentes venderam e a rede nao vendeu nada.
-    /// Dividir daria erro; gravar zero afirmaria que a rede vende de graca, e a tela ordenaria
-    /// esse item como o mais barato do mercado.
+    /// <b>A regressao que este teste existe para impedir.</b> Com valor e unidades da IQVIA no
+    /// lado da rede, a versao anterior calculava um preco (240/12 = 20) que era, por
+    /// construcao, identico ao da referencia — e a seta na tela nunca acendia. Agora sem venda
+    /// da rede no mes nao ha preco praticado, e a celula diz isso.
     /// </summary>
     [Fact]
-    public void Sem_unidades_nao_ha_preco_a_calcular()
+    public void Preco_da_rede_nao_sai_mais_do_valor_da_IQVIA()
     {
-        var item = ComMercado(unidadesRede: 0m, valorRede: 0m,
-                              unidadesConc: 988m, valorConc: 19_760m);
+        var item = ComMercado(unidadesRede: 12m, valorRede: 240m,
+                              unidadesConc: 988m, valorConc: 19_760m,
+                              precoPraticado: null);
 
-        item.PrecoMedioRede.Should().BeNull("nao ha preco sem venda que o sustente");
+        item.PrecoMedioRede.Should().BeNull(
+            "a IQVIA tem valor e unidades da bandeira da rede, e isso NAO e preco praticado");
+        item.PrecoMedioRede.Should().NotBe(20m, "20 e a referencia; devolve-la seria a tautologia antiga");
         item.PrecoMedioConcorrentes.Should().Be(20m);
         item.RedeMaisCaraQueOMercado.Should().BeNull("com um lado ausente nao ha comparacao");
+    }
+
+    /// <summary>
+    /// Sem venda da rede no mes comparado nao ha preco praticado. Zero afirmaria que ela vendeu
+    /// de graca, e esta e uma coluna pela qual o comprador ordena.
+    /// </summary>
+    [Fact]
+    public void Sem_venda_da_rede_no_mes_nao_ha_preco_praticado()
+    {
+        var item = ComMercado(unidadesRede: 0m, valorRede: 0m,
+                              unidadesConc: 988m, valorConc: 19_760m,
+                              precoPraticado: null);
+
+        item.PrecoMedioRede.Should().BeNull();
+        item.PrecoMedioRede.Should().NotBe(0m);
+        item.PrecoMedioConcorrentes.Should().Be(20m);
+        item.RedeMaisCaraQueOMercado.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Preco praticado sem referencia tambem nao compara: a rede vendeu, e a IQVIA nao reportou
+    /// o item naquele bairro. Falso ali significaria "esta abaixo da referencia", que e outra
+    /// afirmacao.
+    /// </summary>
+    [Fact]
+    public void Preco_praticado_sem_referencia_nao_compara()
+    {
+        var item = ComMercado(unidadesRede: null, valorRede: null,
+                              unidadesConc: null, valorConc: null,
+                              precoPraticado: 25m);
+
+        item.PrecoMedioRede.Should().Be(25m);
+        item.PrecoMedioConcorrentes.Should().BeNull();
+        item.RedeMaisCaraQueOMercado.Should().BeNull();
     }
 
     [Fact]
@@ -469,7 +514,8 @@ public sealed class ComparacoesApiClientTests
 
     private static SessaoItem ComMercado(
         decimal? unidadesRede, decimal? valorRede,
-        decimal? unidadesConc, decimal? valorConc) => new(
+        decimal? unidadesConc, decimal? valorConc,
+        decimal? precoPraticado = null) => new(
         LojaId: 1, Sku: "SKU-1", NomeProduto: "Produto", Curva: "A",
         CompraSugeridaPbs: 100m, CompraSugeridaMl: null, VendidoNaJanela: 0m,
         SobraPbsUnidades: 0m, SobraMlUnidades: null, SobraPbsValor: null,
@@ -477,7 +523,8 @@ public sealed class ComparacoesApiClientTests
         MercadoUnidadesRede: unidadesRede,
         MercadoUnidadesConcorrentes: unidadesConc,
         MercadoValorRede: valorRede,
-        MercadoValorConcorrentes: valorConc);
+        MercadoValorConcorrentes: valorConc,
+        PrecoVendaPraticado: precoPraticado);
 
     // --- Cobertura e analise rapida -------------------------------------------
 

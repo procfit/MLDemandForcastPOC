@@ -672,36 +672,57 @@ public sealed record SessaoItem(
     decimal? EstoqueNoFimDoPeriodo = null,
     decimal? VendaMediaDiaria = null,
     decimal? MercadoValorRede = null,
-    decimal? MercadoValorConcorrentes = null)
+    decimal? MercadoValorConcorrentes = null,
+    /// <summary>
+    /// Preco que a rede de fato praticou no mes comparado. Ver <see cref="PrecoMedioRede"/>.
+    /// </summary>
+    decimal? PrecoVendaPraticado = null)
 {
     /// <summary>
-    /// Preço médio das bandeiras da rede neste item, no bairro e mês comparados: o valor que a
-    /// IQVIA atribuiu dividido pelas unidades que ela atribuiu.
+    /// Preço que a rede <b>de fato praticou</b> neste item no mês comparado, ponderado pela
+    /// quantidade vendida. Vem da base de vendas dela, não da IQVIA.
     ///
     /// <para>
-    /// <b>É preço-índice, não preço de balcão.</b> A IQVIA normaliza preços entre os
-    /// participantes do painel, então este número não é o que passou no caixa. Ele serve para
-    /// comparar com <see cref="PrecoMedioConcorrentes"/>, que sai do mesmo arquivo e da mesma
-    /// normalização — nunca para comparar com o preço de compra do Stage nem com a base de
-    /// vendas da rede, onde a diferença mediria metodologia e não posicionamento.
+    /// <b>ANTES ISTO SAÍA DA IQVIA, E ERA UM NÚMERO SEM CONTEÚDO.</b> A versão anterior
+    /// dividia o valor que a IQVIA atribuiu à bandeira da rede pelas unidades dela, e afirmava
+    /// no comentário que comparar os dois lados da IQVIA era legítimo. É o contrário: a IQVIA
+    /// normaliza o preço entre os participantes do painel, então os dois lados devolvem
+    /// <b>sempre o mesmo número</b> — 37.410 pares medidos em agosto, zero diferença — e o
+    /// patrocinador viu as duas colunas iguais na tela em 09/09/2026. Comparar referência com
+    /// referência é tautologia.
     /// </para>
     ///
     /// <para>
-    /// Nulo quando <b>não há unidades</b> que sustentem um preço. Esse é o caso comum do lado
-    /// da rede: o bairro vendeu e a rede não vendeu nada. Zero ali afirmaria que a rede vende
-    /// de graça, e a tela ordenaria o item como o mais barato do mercado.
+    /// <b>A ressalva desta versão, que tem de aparecer na tela:</b> a diferença mistura duas
+    /// naturezas de número — preço de balcão contra índice normalizado. Ela informa se a rede
+    /// está acima ou abaixo da referência que o mercado usa; ela <b>não</b> diz se a
+    /// concorrência está mais barata, porque o preço praticado pelo concorrente não existe em
+    /// nenhuma fonte disponível. Foi a Opção B, aprovada pelo patrocinador em 09/09/2026.
+    /// </para>
+    ///
+    /// <para>
+    /// Nulo quando a rede não vendeu o item naquele mês — o caso comum de item com alerta.
+    /// Zero afirmaria que ela vendeu de graça, e a tela ordenaria o item como o mais barato.
     /// </para>
     /// </summary>
-    public decimal? PrecoMedioRede => Media(MercadoValorRede, MercadoUnidadesRede);
+    public decimal? PrecoMedioRede => PrecoVendaPraticado;
 
-    /// <summary>Idem para o agregado de concorrentes, mesma ressalva.</summary>
+    /// <summary>
+    /// Preço de <b>referência</b> do mercado no bairro e mês comparados: o valor da IQVIA
+    /// dividido pelas unidades dela.
+    ///
+    /// <para>
+    /// É índice, e não preço de balcão do concorrente. Serve para dimensionar o item e para ser
+    /// o outro lado da comparação com <see cref="PrecoMedioRede"/>.
+    /// </para>
+    /// </summary>
     public decimal? PrecoMedioConcorrentes =>
         Media(MercadoValorConcorrentes, MercadoUnidadesConcorrentes);
 
     /// <summary>
-    /// Se o preço-índice da rede está <b>acima</b> do dos concorrentes no mesmo recorte. Nulo
-    /// quando falta um dos dois lados — sem os dois não há comparação, e falso significaria
-    /// "está mais barata", que é uma afirmação diferente de "não se sabe".
+    /// Se o preço praticado pela rede está <b>acima</b> da referência do mercado no mesmo
+    /// recorte. Nulo quando falta um dos dois lados — sem os dois não há comparação, e falso
+    /// significaria "está abaixo", que é afirmação diferente de "não se sabe".
     /// </summary>
     public bool? RedeMaisCaraQueOMercado =>
         PrecoMedioRede is { } rede && PrecoMedioConcorrentes is { } conc ? rede > conc : null;
