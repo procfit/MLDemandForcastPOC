@@ -158,8 +158,12 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             "Na quantidade a comprar não há como apontar onde o ML foi pior nesta sugestão.");
         corpo.Should().Contain("não significa que ele empatou nem que acertou");
 
-        corpo.Should().Contain("o ML errou mais que o seu ERP em 1 de 1 item(ns) medidos",
+        // A frase foi reescrita a pedido do patrocinador; o teste segue o texto novo. Com UM
+        // item medido ela precisa dizer "1 item", e nao "1 itens" nem "1 item(ns)".
+        corpo.Should().Contain("ficou mais longe da venda real que o seu ERP em 1 de 1 item",
             "na previsão há o que apontar, e é o que salva o bloco de ficar vazio");
+        corpo.Should().NotContain("item(ns) medidos",
+            "o plural entre parenteses saiu justamente por ser o tipo de texto de que ele reclamou");
     }
 
     /// <summary>

@@ -30,7 +30,7 @@
             else if (Analise.ItensComSobraMlMaior == 0)
             {
                 <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
-                    Nos @Analise.ItensComDecisaoMl.ToString("N0") item(ns) em que os dois métodos foram calculados,
+                    Nos @Analise.ItensComDecisaoMl.ToString("N0") @Itens(Analise.ItensComDecisaoMl) em que os dois métodos foram calculados,
                     o ML não deixou mais unidades encalhadas que a compra do seu ERP em nenhum deles.
                 </RadzenText>
             }
@@ -38,7 +38,7 @@
             {
                 <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
                     Em <strong>@Analise.ItensComSobraMlMaior.ToString("N0") de
-                    @Analise.ItensComDecisaoMl.ToString("N0")</strong> item(ns) comparados, o método de ML teria
+                    @Analise.ItensComDecisaoMl.ToString("N0")</strong> @Itens(Analise.ItensComDecisaoMl) comparados, o método de ML teria
                     deixado <strong>@Analise.SobraExtraMlUnidades.ToString("N0") unidade(s)</strong> a mais
                     encalhadas que a sua compra — @($"R$ {Analise.SobraExtraMlValor.ToString("N2")}") somados só
                     nesses itens. Este número não desconta os itens em que o ML foi melhor, de propósito: ele
@@ -47,7 +47,7 @@
                     {
                         <text>
                             O valor em reais aqui também está incompleto, pelo mesmo motivo da manchete:
-                            @Resultado.ItensSemPrecoCompra.ToString("N0") item(ns) desta sugestão não têm preço de
+                            @Resultado.ItensSemPrecoCompra.ToString("N0") @Itens(Resultado.ItensSemPrecoCompra) desta sugestão não têm preço de
                             compra cadastrado e ficam de fora da conta em dinheiro.
                         </text>
                     }
@@ -104,25 +104,62 @@
             else if (Analise.VitoriasPbs == 0)
             {
                 <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
-                    Na previsão de quanto sairia por dia, o ML não errou mais que o seu ERP em nenhum dos
-                    @Analise.ItensComPrevisaoMl.ToString("N0") item(ns) medidos.
+                    Item por item, o ML <strong>nunca</strong> ficou mais longe da venda real que o
+                    seu ERP: nos @Analise.ItensComPrevisaoMl.ToString("N0")
+                    @Itens(Analise.ItensComPrevisaoMl) que deu para comparar, ele empatou ou
+                    chegou mais perto.
                 </RadzenText>
             }
             else
             {
+                @* REESCRITA A PEDIDO DO PATROCINADOR (07/09/2026), que nao entendeu a versao
+                   anterior. Ela dizia "o ML errou mais que o seu ERP em 971 de 2.301 itens —
+                   mesmo o ML errando menos no conjunto todo. Sao exatamente os itens que um
+                   numero unico esconderia", e tinha tres problemas:
+
+                   1. Afirmava um PARADOXO sem resolve-lo. "Erra mais nestes 971 e erra menos no
+                      total" soa contraditorio para quem le, e a frase nao dizia por que as duas
+                      coisas sao verdade ao mesmo tempo. Agora a aritmetica esta nomeada: nos
+                      OUTROS itens a margem compensa.
+                   2. "Um numero unico esconderia" e vocabulario nosso, nao dele.
+                   3. Nao dizia o que fazer com a informacao. Agora fecha com o uso: conferir se
+                      os itens pesam na operacao dele.
+
+                   Mantido de proposito: o numerador e o denominador visiveis. Foi o que permitiu
+                   a ele conferir a conta, e trocar por um percentual esconderia sobre quantos
+                   itens a comparacao foi apurada. *@
                 <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" Shade="Shade.Lighter" AllowClose="false">
-                    Na previsão de quanto sairia por dia, o ML errou mais que o seu ERP em
-                    <strong>@Analise.VitoriasPbs.ToString("N0") de
-                    @Analise.ItensComPrevisaoMl.ToString("N0")</strong> item(ns) medidos
-                    @if (Analise.Global.MlPerde)
-                    {
-                        <text>— e no conjunto todo ele também erra mais.</text>
-                    }
-                    else
-                    {
-                        <text>— mesmo o ML errando menos no conjunto todo. São exatamente os itens que um número
-                        único esconderia.</text>
-                    }
+                    <RadzenStack Gap="0.5rem">
+                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                            Item por item, o ML ficou mais longe da venda real que o seu ERP em
+                            <strong>@Analise.VitoriasPbs.ToString("N0") de
+                            @Analise.ItensComPrevisaoMl.ToString("N0")</strong>
+                            @Itens(Analise.ItensComPrevisaoMl) que deu para comparar.
+                            @if (Analise.Global.MlPerde)
+                            {
+                                <text>No total, também foi o seu ERP que chegou mais perto.</text>
+                            }
+                            else
+                            {
+                                <text>No total, ainda assim, foi o ML que chegou mais perto.</text>
+                            }
+                        </RadzenText>
+
+                        @if (!Analise.Global.MlPerde)
+                        {
+                            <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                                As duas coisas são verdade ao mesmo tempo: nos outros
+                                @((Analise.ItensComPrevisaoMl - Analise.VitoriasPbs).ToString("N0"))
+                                @Itens(Analise.ItensComPrevisaoMl - Analise.VitoriasPbs) o ML acertou
+                                por uma margem que compensa o que ele perdeu nestes.
+                            </RadzenText>
+                        }
+
+                        <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
+                            A lista abaixo mostra onde ele foi pior, para você julgar se são itens
+                            que pesam na sua operação.
+                        </RadzenText>
+                    </RadzenStack>
                 </RadzenAlert>
 
                 @if (Analise.PioresNaPrevisao is { Count: > 0 } pioresPrev)
@@ -157,6 +194,12 @@
 </RadzenCard>
 
 @code {
+    /// <summary>
+    /// Plural de "item". Existe porque "item(ns)" no meio de uma frase que o patrocinador lê em
+    /// reunião é ruído — e porque com 1 item a frase precisa dizer "1 item", não "1 itens".
+    /// </summary>
+    private static string Itens(int n) => n == 1 ? "item" : "itens";
+
     /// <summary>
     /// Pedido de "ver todos os piores". Nulo em telas que não têm a tabela grande ao lado — o
     /// link só aparece quando há para onde ir.
