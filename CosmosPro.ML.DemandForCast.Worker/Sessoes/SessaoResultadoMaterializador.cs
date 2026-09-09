@@ -80,7 +80,6 @@ internal sealed class SessaoResultadoMaterializador(
             ? await new MercadoSinalLoader(stageConnStr, services, logger).CarregarAsync(
                   sessao.RedeId,
                   diaDaSugestao: DateOnly.FromDateTime(dataHora),
-                  janelaInicio: job.JanelaInicio,
                   itens: [.. populacao.Select(p => (p.Item.LojaId, p.Item.Sku))],
                   ct)
             : new Dictionary<(int LojaId, string Sku), SinalDoItem>();

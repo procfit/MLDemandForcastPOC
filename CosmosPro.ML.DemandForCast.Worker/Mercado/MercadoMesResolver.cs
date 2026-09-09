@@ -40,4 +40,27 @@ internal static class MercadoMesResolver
 
         return escolhido;
     }
+
+    /// <summary>
+    /// O mês comparado cabe inteiro na janela de snapshots de estoque? Só então dá para
+    /// contar dias sem estoque; fora dela a ruptura é <b>não apurada</b>, e não zero.
+    ///
+    /// <para>
+    /// <b>Os dois extremos, e não só o começo.</b> Mês parcialmente coberto subcontaria os
+    /// dias sem estoque -- os dias que faltam contam como se tivessem estoque -- e um item
+    /// com ruptura real sairia classificado como <c>SemCausa</c>, que é a afirmação oposta.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A comparação é com o HISTÓRICO, nunca com o dia da sugestão.</b> O mês comparado é
+    /// sempre estritamente anterior ao mês da sugestão (é a regra de <see cref="Resolver"/>),
+    /// então uma guarda contra o dia da sugestão é verdadeira sempre e zera a regra B3
+    /// inteira. Foi o defeito que fez a tela dizer "estoque não apurado" em 100% das linhas.
+    /// </para>
+    /// </summary>
+    public static bool CabeNoHistorico(DateOnly mes, DateOnly primeiroDia, DateOnly ultimoDia)
+    {
+        var fimDoMes = mes.AddMonths(1).AddDays(-1);
+        return mes >= primeiroDia && fimDoMes <= ultimoDia;
+    }
 }

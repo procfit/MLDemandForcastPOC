@@ -70,14 +70,9 @@ internal sealed class MercadoSinalLoader(
     private const string CnpjAgregado = "00000000000000";
 
     /// <param name="diaDaSugestao">Dia da sugestão do ERP. Define o mês de corte.</param>
-    /// <param name="janelaInicio">
-    /// Primeiro dia do histórico importado. Mês da IQVIA anterior a ele não tem snapshot de
-    /// estoque, e a ruptura sai como <b>não apurada</b> em vez de zero.
-    /// </param>
     public async Task<IReadOnlyDictionary<(int LojaId, string Sku), SinalDoItem>> CarregarAsync(
         int redeId,
         DateOnly diaDaSugestao,
-        DateOnly janelaInicio,
         IReadOnlyCollection<(int LojaId, string Sku)> itens,
         CancellationToken ct)
     {
@@ -187,7 +182,7 @@ internal sealed class MercadoSinalLoader(
             StringComparer.Ordinal);
 
         // --- ruptura no mês comparado (regra B3) ---------------------------------------
-        var rupturas = await RupturaNoMesAsync(conn, redeId, mes, janelaInicio, escopo, ct);
+        var rupturas = await RupturaNoMesAsync(conn, redeId, mes, escopo, ct);
 
         // --- preço praticado pela rede no MESMO mês (Opção B) --------------------------
         // O mesmo mês do preço de referência de propósito: comparar o praticado de um mês com a
@@ -298,20 +293,36 @@ internal sealed class MercadoSinalLoader(
     /// Dias sem estoque por <c>(loja, sku)</c> dentro do mês comparado.
     /// </summary>
     /// <returns>
-    /// <c>null</c> quando o mês comparado é anterior ao histórico importado — não há
-    /// snapshot para contar, e zero afirmaria que havia estoque todos os dias. Dicionário
-    /// sem a chave significa o mesmo para aquele par: <c>NaoApurado</c>, não
-    /// <c>SemCausa</c>.
+    /// <c>null</c> quando o mês comparado não cabe inteiro no histórico de estoque
+    /// importado — não há snapshot para contar, e zero afirmaria que havia estoque todos os
+    /// dias. Dicionário sem a chave significa o mesmo para aquele par: <c>NaoApurado</c>,
+    /// não <c>SemCausa</c>.
     /// </returns>
     private static async Task<Dictionary<(int LojaId, string Sku), int>?> RupturaNoMesAsync(
-        SqlConnection conn, int redeId, DateOnly mes, DateOnly janelaInicio,
-        EscopoDeSkus escopo, CancellationToken ct)
+        SqlConnection conn, int redeId, DateOnly mes, EscopoDeSkus escopo, CancellationToken ct)
     {
+        var fim = mes.AddMonths(1).AddDays(-1);
+
         // O mês inteiro tem de caber no histórico. Mês parcialmente coberto subcontaria os
         // dias sem estoque e transformaria NaoApurado em SemCausa por acidente.
-        if (mes < janelaInicio) return null;
+        //
+        // A COBERTURA É MEDIDA NO PRÓPRIO ESTOQUE, e isso é o conserto de um defeito que
+        // zerava a regra B3 inteira. Antes o método recebia um `janelaInicio` documentado
+        // como "primeiro dia do histórico importado", mas quem chamava passava
+        // `ComparacaoPbs.JanelaInicio` -- que `SessaoJobs.Comparacao` grava como o DIA DA
+        // SUGESTÃO, um significado diferente com o mesmo nome. Como `MercadoMesResolver`
+        // garante que o mês comparado é estritamente anterior ao mês da sugestão, a guarda
+        // `mes < janelaInicio` era verdadeira SEMPRE: a ruptura saía nula para todo item de
+        // toda sessão, e a tela mostrava "estoque não apurado" em 100% das linhas (8.221
+        // itens na execução que o patrocinador reportou). Um dado ausente parecia dado
+        // faltando na extração, e não código.
+        //
+        // Medir aqui também é mais verdadeiro que ler a janela declarada no manifesto: o
+        // manifesto diz o que o extrator PEDIU, e o que decide se dá para contar dia sem
+        // estoque é o que de fato chegou em EstoquesDiarios.
+        if (await CoberturaDeEstoqueAsync(conn, redeId, ct) is not { } cobertura) return null;
+        if (!MercadoMesResolver.CabeNoHistorico(mes, cobertura.Primeiro, cobertura.Ultimo)) return null;
 
-        var fim = mes.AddMonths(1).AddDays(-1);
         var mapa = new Dictionary<(int, string), int>();
 
         await using var cmd = new SqlCommand($"""
@@ -333,6 +344,31 @@ internal sealed class MercadoSinalLoader(
         }
 
         return mapa;
+    }
+
+    /// <summary>
+    /// Primeiro e último dia com snapshot de estoque da rede, ou <c>null</c> quando não há
+    /// nenhum.
+    ///
+    /// <para>
+    /// <b>Sem escopo de SKU de propósito.</b> A pergunta é sobre a janela de datas que o
+    /// import cobriu, não sobre quais itens ele trouxe: restringir aos SKUs da sugestão
+    /// encurtaria a janela pelo item que entrou no cadastro mais tarde, e um mês coberto
+    /// passaria a sair como não apurado por causa de um item.
+    /// </para>
+    /// </summary>
+    private static async Task<(DateOnly Primeiro, DateOnly Ultimo)?> CoberturaDeEstoqueAsync(
+        SqlConnection conn, int redeId, CancellationToken ct)
+    {
+        await using var cmd = new SqlCommand(
+            "SELECT MIN(Data), MAX(Data) FROM dbo.EstoquesDiarios WHERE RedeId = @rede;", conn);
+        cmd.Parameters.AddWithValue("@rede", redeId);
+        cmd.CommandTimeout = 300;
+
+        await using var rd = await cmd.ExecuteReaderAsync(ct);
+        if (!await rd.ReadAsync(ct) || await rd.IsDBNullAsync(0, ct)) return null;
+
+        return (DateOnly.FromDateTime(rd.GetDateTime(0)), DateOnly.FromDateTime(rd.GetDateTime(1)));
     }
 
     /// <summary>

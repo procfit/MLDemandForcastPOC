@@ -76,4 +76,65 @@ public sealed class MercadoMesResolverTests
         MercadoMesResolver.Resolver(desordenado, new DateOnly(2026, 6, 10))
             .Should().Be(Mes(2026, 5));
     }
+
+    // --- o mês cabe no histórico de estoque? (regra B3) -------------------------
+
+    /// <summary>
+    /// <b>A regressão que este teste existe para impedir, e que rodou em produção.</b>
+    ///
+    /// <para>
+    /// O cenário é o da execução que o patrocinador reportou: sugestão de 27/07/2026,
+    /// histórico de estoque de 27/07/2025 a 12/08/2026, mês comparado junho/2026. A guarda
+    /// antiga comparava o mês com o <b>dia da sugestão</b> em vez do começo do histórico --
+    /// dois campos chamados <c>JanelaInicio</c> com significados diferentes --, e como o mês
+    /// comparado é sempre estritamente anterior ao mês da sugestão, ela era verdadeira
+    /// SEMPRE. A ruptura saía nula para todo item de toda sessão, e a tela mostrava "estoque
+    /// não apurado" nas 8.221 linhas.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void O_mes_comparado_cabe_no_historico_mesmo_sendo_anterior_a_sugestao()
+    {
+        var diaDaSugestao = new DateOnly(2026, 7, 27);
+        var primeiro = new DateOnly(2025, 7, 27);
+        var ultimo = new DateOnly(2026, 8, 12);
+
+        var mes = MercadoMesResolver.Resolver([Mes(2025, 6), Mes(2026, 6)], diaDaSugestao);
+
+        mes.Should().Be(Mes(2026, 6));
+        MercadoMesResolver.CabeNoHistorico(mes!.Value, primeiro, ultimo)
+            .Should().BeTrue("junho/2026 está inteiro dentro de 27/07/2025 a 12/08/2026");
+        mes.Value.Should().BeBefore(diaDaSugestao,
+            "e continua anterior à sugestão -- é a regra do resolver, não um impedimento");
+    }
+
+    /// <summary>
+    /// Mês que começa antes do primeiro snapshot não é apurável: os dias que faltam
+    /// contariam como se tivessem estoque, e um item com ruptura real sairia como
+    /// <c>SemCausa</c>.
+    /// </summary>
+    [Fact]
+    public void Mes_que_comeca_antes_do_historico_nao_cabe()
+    {
+        MercadoMesResolver.CabeNoHistorico(
+            Mes(2025, 7), new DateOnly(2025, 7, 27), new DateOnly(2026, 8, 12))
+            .Should().BeFalse("o histórico começa no dia 27, então 01 a 26/07 não têm snapshot");
+    }
+
+    /// <summary>O outro extremo: mês que termina depois do último snapshot também não cabe.</summary>
+    [Fact]
+    public void Mes_que_termina_depois_do_historico_nao_cabe()
+    {
+        MercadoMesResolver.CabeNoHistorico(
+            Mes(2026, 8), new DateOnly(2025, 7, 27), new DateOnly(2026, 8, 12))
+            .Should().BeFalse("o histórico para em 12/08, e 13 a 31/08 ficariam sem snapshot");
+    }
+
+    [Fact]
+    public void Mes_exatamente_nas_bordas_cabe()
+    {
+        MercadoMesResolver.CabeNoHistorico(
+            Mes(2026, 6), new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 30))
+            .Should().BeTrue();
+    }
 }
