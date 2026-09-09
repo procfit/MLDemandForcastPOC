@@ -759,8 +759,13 @@ public sealed record SessaoItem(
     public string? AlertaDeMercadoLegivel => MercadoAlerta switch
     {
         "Ruptura" => "Possível perda por ruptura",
-        "SemCausa" => "Abaixo do bairro, sem causa aparente",
-        "NaoApurado" => "Abaixo do bairro, estoque não apurado",
+
+        // "Abaixo do bairro" SAIU (pedido do patrocinador, 07/09/2026): ele leu a frase como
+        // "participacao de mercado baixa no bairro", que e outra afirmacao — o indice nao e
+        // fatia de mercado, e o tamanho da rede no bairro se cancela na conta. Nomear o corte
+        // diz exatamente o que aconteceu, e amarra o rotulo a regua que o produz.
+        "SemCausa" => "Índice abaixo de 0,50 — sem causa aparente",
+        "NaoApurado" => "Índice abaixo de 0,50 — estoque não apurado",
         _ => null,
     };
 

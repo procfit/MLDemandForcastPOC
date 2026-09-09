@@ -166,8 +166,8 @@
                     @foreach (var codigo in _tabulacao.Codigos)
                     {
                         <RadzenDataGridColumn TItem="AvaliacaoTabulada" Title="@codigo"
-                                              Width="@(codigo.StartsWith('A') ? "170px" : "80px")"
-                                              TextAlign="@(codigo.StartsWith('A') ? TextAlign.Left : TextAlign.Right)"
+                                              Width="@(_tabulacao.EhTexto(codigo) || codigo.StartsWith('A') ? "180px" : "80px")"
+                                              TextAlign="@(_tabulacao.EhTexto(codigo) || codigo.StartsWith('A') ? TextAlign.Left : TextAlign.Right)"
                                               Sortable="false">
                             <HeaderTemplate>
                                 <span>@codigo</span>
@@ -179,7 +179,7 @@
                             <Template Context="l">
                                 @* Célula vazia é ausência de resposta, nunca zero: zero seria uma
                                    posição na escala, e a mais baixa delas. *@
-                                @l.Valor(codigo)
+                                @l.Valor(codigo, _tabulacao.EhTexto(codigo))
                             </Template>
                         </RadzenDataGridColumn>
                     }

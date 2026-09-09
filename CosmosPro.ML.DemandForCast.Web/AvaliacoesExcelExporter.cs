@@ -93,8 +93,10 @@ internal static class AvaliacoesExcelExporter
 
         ws.Cell(l, 1).Value =
             "Nas afirmações da Parte B a célula traz o valor da escala (1 a 5). Nas perguntas de "
-            + "caracterização (Parte A) traz o texto da opção escolhida, porque elas não têm "
-            + "escala — atribuir número a elas produziria média onde não existe média.";
+            + "caracterização (Parte A) traz o TEXTO da opção escolhida — inclusive na A2, cujas "
+            + "faixas de experiência têm ordem mas cuja leitura útil é \"Entre 2 e 5 anos\", e não "
+            + "\"2\". Célula em branco é ausência de resposta, nunca zero: zero seria a posição "
+            + "mais baixa da escala.";
         ws.Cell(l, 1).Style.Font.Italic = true;
 
         ws.Column(1).Width = 30;
@@ -156,7 +158,7 @@ internal static class AvaliacoesExcelExporter
 
             foreach (var codigo in t.Codigos)
             {
-                var valor = l.Valor(codigo);
+                var valor = l.Valor(codigo, t.EhTexto(codigo));
 
                 // Número entra como número para o Excel poder somar; texto entra como texto.
                 // Célula vazia é ausência de resposta, e nunca zero — zero seria uma posição na

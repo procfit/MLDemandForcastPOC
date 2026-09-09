@@ -53,7 +53,7 @@ public class QuestionariosApiClient(HttpClient httpClient, IRedeContext redeCont
         var resp = await httpClient.GetFromJsonAsync<TabulacaoView>(
             $"/api/comparacoes/avaliacoes?redeId={redeId}", cts.Token);
 
-        return resp ?? new TabulacaoView(redeId, [], []);
+        return resp ?? new TabulacaoView(redeId, [], [], []);
     }
 
     /// <summary>Grava o rascunho. Idempotente: manda o estado completo do wizard.</summary>
@@ -149,8 +149,16 @@ public sealed record RespostaView(
 public sealed record TabulacaoView(
     int RedeId,
     IReadOnlyList<string> Codigos,
+    IReadOnlyList<string> CodigosDeTexto,
     IReadOnlyList<AvaliacaoTabulada> Linhas)
 {
+    /// <summary>
+    /// Se a célula deste código traz o texto da opção em vez do número da escala. Vem do
+    /// catálogo, e não de heurística sobre o dado — foi a heurística que exportou "2" onde o
+    /// patrocinador esperava "Entre 2 e 5 anos".
+    /// </summary>
+    public bool EhTexto(string codigo) => CodigosDeTexto.Contains(codigo);
+
     public int ComAvaliacao => Linhas.Count(l => l.AvaliacaoVeredito is not null);
 
     public int ComQuestionario => Linhas.Count(l => l.QuestionarioEnviadoEm is not null);
@@ -181,14 +189,20 @@ public sealed record AvaliacaoTabulada(
     IReadOnlyList<RespostaTabulada> Respostas)
 {
     /// <summary>
-    /// O que exportar na coluna de um código: o <b>número</b> da escala quando a pergunta é
-    /// ordinal e o <b>texto</b> quando é nominal — exatamente o formato pedido. Devolve string
-    /// vazia quando não há resposta, e nunca "0": zero seria uma posição na escala.
+    /// O que vai na célula deste código. Devolve string vazia quando não há resposta, e
+    /// <b>nunca "0"</b>: zero seria uma posição na escala, e a mais baixa dela.
     /// </summary>
-    public string Valor(string codigo)
+    /// <param name="comoTexto">
+    /// Força o texto da opção mesmo havendo número na escala — é o caso do A2, cujas faixas de
+    /// experiência têm ordem real mas cuja leitura útil é "Entre 2 e 5 anos". Quem decide é o
+    /// catálogo, via <see cref="TabulacaoView.EhTexto"/>; deduzir da presença de
+    /// <c>OpcaoValor</c> confunde "a escala é ordenada?" com "o que vai na planilha?".
+    /// </param>
+    public string Valor(string codigo, bool comoTexto = false)
     {
         var r = Respostas.FirstOrDefault(x => x.PerguntaCodigo == codigo);
         if (r is null) return "";
+        if (comoTexto) return r.OpcaoTexto;
         return r.OpcaoValor is { } v ? v.ToString() : r.OpcaoTexto;
     }
 

@@ -8,10 +8,18 @@ namespace CosmosPro.ML.DemandForCast.Web.Tests;
 /// <b>texto</b> da opção.
 ///
 /// <para>
-/// O discriminador é <c>OpcaoValor</c> nulo, que significa "esta pergunta não é ordinal" — e
-/// nunca "grau zero". Exportar 0 numa pergunta nominal produziria média onde não existe média,
-/// e exportar 0 numa ausência de resposta produziria a posição mais baixa da escala onde não
-/// houve resposta nenhuma. As duas confusões são silenciosas: a planilha soma e fecha.
+/// <b>Quem decide o formato é o catálogo</b>, via <c>PerguntaDef.TabularTexto</c>. A regra
+/// anterior deduzia do dado — "tem <c>OpcaoValor</c>? exporta número" — e errou o A2, cujas
+/// faixas de experiência têm ordem real e por isso carregam valor, mas cuja leitura útil é
+/// "Entre 2 e 5 anos". Deduzir confundia duas perguntas diferentes: <i>a escala é ordenada?</i>
+/// e <i>o que vai na planilha?</i>.
+/// </para>
+///
+/// <para>
+/// O que continua valendo: <c>OpcaoValor</c> nulo significa "esta pergunta não é ordinal", e
+/// nunca "grau zero"; e célula vazia é ausência de resposta, nunca 0. Exportar 0 numa nominal
+/// produziria média onde não existe média, e 0 numa ausência viraria "discordo totalmente" de
+/// quem não respondeu. As duas confusões são silenciosas: a planilha soma e fecha.
 /// </para>
 /// </summary>
 public sealed class AvaliacaoTabuladaTests
@@ -83,6 +91,43 @@ public sealed class AvaliacaoTabuladaTests
         linha.Valor("B1").Should().NotBeEmpty();
     }
 
+    /// <summary>
+    /// O A2 tem escala (1 a 4, faixas de experiência ordenadas) e ainda assim a planilha exporta
+    /// o TEXTO — pedido do patrocinador em 07/09/2026, e o caso que derrubou a regra anterior.
+    ///
+    /// <para>
+    /// A regra velha era "tem <c>OpcaoValor</c>? exporta número", e ela confundia duas perguntas
+    /// diferentes: <i>a escala é ordenada?</i> e <i>o que vai na planilha?</i>. Quem decide agora
+    /// é o catálogo (<c>PerguntaDef.TabularTexto</c>), e a ordem continua gravada para quem quiser
+    /// calcular com ela.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Pergunta_marcada_como_texto_exporta_o_rotulo_mesmo_tendo_escala()
+    {
+        var linha = Linha(Ordinal("A2", 2), Ordinal("B1", 4));
+
+        // A resposta TEM valor de escala...
+        linha.Respostas.Single(r => r.PerguntaCodigo == "A2").OpcaoValor.Should().Be(2);
+
+        // ...e ainda assim a celula traz o texto, porque o catalogo pediu.
+        linha.Valor("A2", comoTexto: true).Should().Be("2 – Concordo",
+            "o texto da opcao e o que vai na planilha; aqui o helper de teste rotula assim");
+        linha.Valor("A2").Should().Be("2", "sem a marca, a regra de escala continua valendo");
+        linha.Valor("B1", comoTexto: false).Should().Be("4");
+    }
+
+    [Fact]
+    public void EhTexto_sai_do_catalogo_e_nao_do_formato_do_dado()
+    {
+        var t = new TabulacaoView(1, ["A1", "A2", "B1"], ["A2"], []);
+
+        t.EhTexto("A2").Should().BeTrue();
+        t.EhTexto("B1").Should().BeFalse();
+        t.EhTexto("A1").Should().BeFalse(
+            "A1 nao precisa da marca: ela nao tem escala, entao a regra padrao ja devolve texto");
+    }
+
     [Fact]
     public void Texto_livre_sai_em_coluna_propria_e_e_nulo_quando_nao_existe()
     {
@@ -103,7 +148,7 @@ public sealed class AvaliacaoTabuladaTests
     [Fact]
     public void Versoes_presentes_saem_ordenadas_e_sem_repeticao()
     {
-        var t = new TabulacaoView(1, ["B1"],
+        var t = new TabulacaoView(1, ["B1"], [],
         [
             Linha(Ordinal("B1", 4)) with { VersaoCatalogo = 4 },
             Linha(Ordinal("B1", 5)) with { VersaoCatalogo = 3 },
@@ -133,7 +178,7 @@ public sealed class AvaliacaoTabuladaTests
             Respondente = null,
         };
 
-        var t = new TabulacaoView(1, ["B1"], [vazia]);
+        var t = new TabulacaoView(1, ["B1"], [], [vazia]);
 
         t.Linhas.Should().HaveCount(1);
         t.ComAvaliacao.Should().Be(0);

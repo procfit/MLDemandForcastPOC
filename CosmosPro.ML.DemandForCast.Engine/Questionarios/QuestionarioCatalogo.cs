@@ -11,11 +11,25 @@ namespace CosmosPro.ML.DemandForCast.Engine.Questionarios;
 /// </param>
 public sealed record OpcaoDef(string Codigo, string Texto, int? Valor = null, bool PermiteTextoLivre = false);
 
+/// <param name="TabularTexto">
+/// Na exportação da tabulação, a célula desta pergunta traz o <b>texto</b> da opção, e não o
+/// número da escala.
+///
+/// <para>
+/// <b>Declarado, e não deduzido.</b> A regra anterior era "tem <c>Valor</c>? exporta número",
+/// e ela errou o A2: as faixas de experiência têm ordem real (1 a 4), então carregam
+/// <c>Valor</c>, mas quem tabula quer ler "Entre 2 e 5 anos" e não "2" — pedido do
+/// patrocinador em 07/09/2026. Deduzir do formato dos dados confunde duas perguntas
+/// diferentes: <i>a escala é ordenada?</i> e <i>o que vai na planilha?</i>. A ordem continua
+/// gravada em <c>OpcaoValor</c> para quem quiser calcular com ela.
+/// </para>
+/// </param>
 public sealed record PerguntaDef(
     string Codigo,
     string Texto,
     IReadOnlyList<OpcaoDef> Opcoes,
-    bool Obrigatoria = true)
+    bool Obrigatoria = true,
+    bool TabularTexto = false)
 {
     public OpcaoDef? Opcao(string codigo) =>
         Opcoes.FirstOrDefault(o => o.Codigo == codigo);
@@ -163,7 +177,7 @@ public static class QuestionarioCatalogo
                     new OpcaoDef("DE_2_A_5", "Entre 2 e 5 anos", Valor: 2),
                     new OpcaoDef("DE_6_A_10", "Entre 6 e 10 anos", Valor: 3),
                     new OpcaoDef("MAIS_DE_10", "Mais de 10 anos", Valor: 4),
-                ]),
+                ], TabularTexto: true),
 
                 // Nominal, e não ordinal: "Sim"/"Não" não têm ordem, e dar 1/2 a elas produziria
                 // média de uma pergunta dicotômica.

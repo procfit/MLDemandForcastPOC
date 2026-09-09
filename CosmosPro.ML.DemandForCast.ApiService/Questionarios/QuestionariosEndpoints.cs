@@ -100,7 +100,7 @@ internal static class QuestionariosEndpoints
             })
             .ToListAsync(ct);
 
-        if (sessoes.Count == 0) return Results.Ok(new TabulacaoView(redeId, [], []));
+        if (sessoes.Count == 0) return Results.Ok(new TabulacaoView(redeId, [], [], []));
 
         var ids = sessoes.Select(s => s.Id).ToList();
 
@@ -186,7 +186,15 @@ internal static class QuestionariosEndpoints
             .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return Results.Ok(new TabulacaoView(redeId, [.. doCatalogo, .. extras], linhas));
+        // Quais códigos a planilha exporta como texto. Sai do catálogo, e não de heurística
+        // sobre o dado: ver PerguntaDef.TabularTexto.
+        var comoTexto = QuestionarioCatalogo.Perguntas
+            .Where(p => p.TabularTexto)
+            .Select(p => p.Codigo)
+            .ToList();
+
+        return Results.Ok(new TabulacaoView(
+            redeId, [.. doCatalogo, .. extras], comoTexto, linhas));
     }
 
     private static IResult Catalogo() => Results.Ok(
@@ -548,9 +556,15 @@ internal sealed record RespostaView(
 /// na ordem do catálogo atual e termina nos códigos que só aparecem em respostas de versões
 /// anteriores do instrumento.
 /// </param>
+/// <param name="CodigosDeTexto">
+/// Códigos cuja célula traz o texto da opção em vez do número da escala. Vem do catálogo
+/// (<c>PerguntaDef.TabularTexto</c>) para tela e planilha não divergirem — e para a decisão não
+/// voltar a ser deduzida do formato do dado, que foi o que errou o A2.
+/// </param>
 internal sealed record TabulacaoView(
     int RedeId,
     IReadOnlyList<string> Codigos,
+    IReadOnlyList<string> CodigosDeTexto,
     IReadOnlyList<AvaliacaoTabuladaView> Linhas);
 
 /// <param name="VersaoCatalogo">

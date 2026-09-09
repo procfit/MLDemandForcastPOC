@@ -166,8 +166,12 @@
                         @* Um botao para os dois pedidos: salvar em PDF e um destino dentro do
                            dialogo de impressao. Prometer duas acoes distintas na tela levaria o
                            participante a procurar um gerador de PDF que nao existe. *@
+                        @* ButtonStyle.Light saiu: o patrocinador leu o botao como DESABILITADO
+                           (07/09/2026). Contorno na cor primaria e o mesmo vocabulario dos botoes
+                           de exportacao do resto do sistema — visivel, e ainda subordinado ao
+                           "Ver o resultado", que e preenchido. *@
                         <RadzenButton Text="Imprimir / salvar em PDF" Icon="print"
-                                      ButtonStyle="ButtonStyle.Light" Variant="Variant.Outlined"
+                                      Variant="Variant.Outlined"
                                       data-test="imprimir-respostas" Click="@Imprimir" />
                         <RadzenButton Text="Ver o resultado" Icon="insights" ButtonStyle="ButtonStyle.Secondary"
                                       Click="@Voltar" />
