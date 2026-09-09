@@ -352,7 +352,7 @@ public sealed class QuestionarioIntegrationTests(AppHostFixture fixture)
 
         linha.QuestionarioEnviadoEm.Should().NotBeNull();
         linha.VersaoCatalogo.Should().Be(QuestionarioCatalogo.Versao);
-        linha.Respondente.Should().NotBeNullOrWhiteSpace("o e-mail é o que identifica quem respondeu");
+        linha.Respondente.Should().NotBeNullOrWhiteSpace("o participante viaja como código");
         linha.Respostas.Should().HaveCount(QuestionarioCatalogo.Perguntas.Count);
 
         // As afirmações da Parte B são ordinais: valor preenchido é o que a planilha exporta.
@@ -363,6 +363,71 @@ public sealed class QuestionarioIntegrationTests(AppHostFixture fixture)
         // O enunciado viaja junto porque é a única forma de interpretar resposta de versão
         // anterior: o código B7 já designou três afirmações diferentes.
         linha.Respostas.Should().OnlyContain(r => r.PerguntaTexto.Length > 0);
+    }
+
+    /// <summary>
+    /// O participante sai como <b>código</b>, e a identidade não sai de forma nenhuma.
+    ///
+    /// <para>
+    /// É a solução que o patrocinador propôs para o impasse do consentimento: ele precisa contar
+    /// quantas pessoas responderam e quantas execuções cada uma avaliou, e não pode identificar
+    /// ninguém. O teste afirma as duas metades — que o código aparece, e que <b>nem o e-mail nem
+    /// o Guid do usuário</b> aparecem. A segunda metade é a que importa: devolver o próprio id
+    /// quando falta pseudônimo seria exatamente o identificador que o parágrafo de consentimento
+    /// promete não divulgar.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Tabulacao_identifica_o_participante_por_codigo_e_nao_por_email()
+    {
+        var (rede, sessaoId) = await SessaoAguardandoAsync("q-tab-pseudonimo");
+
+        var envio = await fixture.QuestionariosApi.EnviarAsync(
+            sessaoId, new SalvarQuestionarioBody(1, Respostas()), rede, Usuario,
+            TestContext.Current.CancellationToken);
+        envio.IsSuccessStatusCode.Should().BeTrue();
+
+        var resp = await fixture.QuestionariosApi.TabulacaoAsync(rede, TestContext.Current.CancellationToken);
+        var linha = resp.Content!.Linhas.Should().ContainSingle(l => l.SessaoId == sessaoId).Subject;
+
+        linha.Respondente.Should().MatchRegex(@"^P\d{2,}$", "o formato combinado e P01, P02, ...");
+        linha.Respondente.Should().NotContain("@", "e-mail nao pode sair na tabulacao");
+        linha.Respondente.Should().NotContain(Usuario.ToString(), "nem o Guid do usuario");
+
+        resp.Content.Participantes.Should().BeGreaterThanOrEqualTo(1,
+            "a contagem de pessoas distintas e o outro lado do pedido");
+    }
+
+    /// <summary>
+    /// O código é <b>estável</b> para a mesma pessoa: é o que permite contar quantas execuções
+    /// cada participante avaliou. Um código sorteado por linha daria a contagem de pessoas e
+    /// perderia a de repetições, que é metade do pedido.
+    /// </summary>
+    [Fact]
+    public async Task Mesmo_participante_recebe_o_mesmo_codigo_em_execucoes_diferentes()
+    {
+        var rede = await EnsureRedeAsync("q-tab-estavel");
+        var (_, primeira) = await SessaoAguardandoAsync("q-tab-estavel", rede);
+        var (_, segunda) = await SessaoAguardandoAsync("q-tab-estavel", rede);
+
+        foreach (var id in new[] { primeira, segunda })
+        {
+            var envio = await fixture.QuestionariosApi.EnviarAsync(
+                id, new SalvarQuestionarioBody(1, Respostas()), rede, Usuario,
+                TestContext.Current.CancellationToken);
+            envio.IsSuccessStatusCode.Should().BeTrue();
+        }
+
+        var resp = await fixture.QuestionariosApi.TabulacaoAsync(rede, TestContext.Current.CancellationToken);
+
+        var a = resp.Content!.Linhas.Single(l => l.SessaoId == primeira).Respondente;
+        var b = resp.Content.Linhas.Single(l => l.SessaoId == segunda).Respondente;
+
+        a.Should().NotBeNull();
+        b.Should().Be(a, "e o mesmo usuario nas duas execucoes");
+
+        resp.Content.Participantes.Should().Be(1,
+            "duas execucoes do mesmo participante contam UMA pessoa");
     }
 
     /// <summary>

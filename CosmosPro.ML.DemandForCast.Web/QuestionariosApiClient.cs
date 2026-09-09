@@ -53,7 +53,7 @@ public class QuestionariosApiClient(HttpClient httpClient, IRedeContext redeCont
         var resp = await httpClient.GetFromJsonAsync<TabulacaoView>(
             $"/api/comparacoes/avaliacoes?redeId={redeId}", cts.Token);
 
-        return resp ?? new TabulacaoView(redeId, [], [], []);
+        return resp ?? new TabulacaoView(redeId, [], [], 0, []);
     }
 
     /// <summary>Grava o rascunho. Idempotente: manda o estado completo do wizard.</summary>
@@ -146,10 +146,16 @@ public sealed record RespostaView(
 
 // --- Tabulação das avaliações ---------------------------------------------------------
 
+/// <param name="Participantes">
+/// Pessoas distintas com atividade nesta rede. Vem do servidor, das próprias atribuições de
+/// pseudônimo — a tela não recalcula, senão passariam a existir duas definições de
+/// "participante".
+/// </param>
 public sealed record TabulacaoView(
     int RedeId,
     IReadOnlyList<string> Codigos,
     IReadOnlyList<string> CodigosDeTexto,
+    int Participantes,
     IReadOnlyList<AvaliacaoTabulada> Linhas)
 {
     /// <summary>
@@ -173,6 +179,15 @@ public sealed record TabulacaoView(
         [.. Linhas.Select(l => l.VersaoCatalogo).OfType<int>().Distinct().Order()];
 }
 
+/// <param name="Avaliador">
+/// <b>Pseudônimo</b> de quem registrou a avaliação — P01, P02, P03… —, nunca nome nem e-mail. A
+/// identidade não sai do banco: o servidor não consulta a tabela de usuários. Ver a nota em
+/// <c>QuestionariosEndpoints.TabulacaoAsync</c>.
+/// </param>
+/// <param name="Respondente">
+/// <b>Pseudônimo</b> de quem respondeu o questionário. Normalmente o mesmo código do
+/// <paramref name="Avaliador"/>, e não é obrigatório que seja.
+/// </param>
 public sealed record AvaliacaoTabulada(
     Guid SessaoId,
     DateTimeOffset CriadoEm,

@@ -62,6 +62,8 @@ public sealed record RespostaItemResposta(
 public sealed record TabulacaoResposta(
     int RedeId,
     List<string> Codigos,
+    List<string> CodigosDeTexto,
+    int Participantes,
     List<AvaliacaoTabuladaResposta> Linhas);
 
 public sealed record AvaliacaoTabuladaResposta(

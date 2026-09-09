@@ -100,7 +100,7 @@ internal static class QuestionariosEndpoints
             })
             .ToListAsync(ct);
 
-        if (sessoes.Count == 0) return Results.Ok(new TabulacaoView(redeId, [], [], []));
+        if (sessoes.Count == 0) return Results.Ok(new TabulacaoView(redeId, [], [], 0, []));
 
         var ids = sessoes.Select(s => s.Id).ToList();
 
@@ -132,21 +132,52 @@ internal static class QuestionariosEndpoints
             .GroupBy(r => r.QuestionarioId)
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        // Identidade resolvida em bloco. O e-mail é o que identifica a pessoa para quem tabula;
-        // o Guid sozinho não serve a ninguém numa planilha.
-        var usuarioIds = questionarios.Select(q => q.UsuarioId.ToString())
-            .Concat(sessoes.Select(s => s.AvaliacaoUsuarioId).Where(x => x is not null)!)
-            .Distinct()
-            .ToList();
+        // PSEUDÔNIMO, e a identidade NUNCA SAI DO BANCO. Antes esta consulta lia
+        // AspNetUsers e devolvia o e-mail; agora não há consulta a usuário nenhuma, e o que
+        // viaja é P01, P02, P03… Isso é mais forte que anonimizar depois: o dado identificável
+        // não passa pela API, pela tela, pela planilha nem por este processo.
+        //
+        // Foi a solução do patrocinador para o impasse do consentimento (07/09/2026): ele
+        // precisa contar quantas pessoas responderam e quantas execuções cada uma avaliou, e
+        // não pode identificar ninguém. Um código estável por participante entrega as duas
+        // coisas — a contagem sai de valores distintos, e a repetição sai de agrupar o código.
+        //
+        // A ORDEM É A DA PRIMEIRA APARIÇÃO, com o id como desempate para ser determinística.
+        // Consequência que vale saber: o código é estável porque as execuções são criadas
+        // sempre "agora", então participante novo recebe o número seguinte e os existentes não
+        // se mexem. Um dado retroativo — execução gravada com data anterior à de alguém que já
+        // tem número — deslocaria a numeração dali para frente.
+        //
+        // A numeração é POR REDE, porque este endpoint é escopado por inquilino e não pode
+        // enxergar outro. Duas redes têm cada uma o seu P01: o que identifica o participante na
+        // análise é o par (Rede, código), e a coluna Rede vai na planilha justamente por isso.
+        var primeiraAparicao = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
 
-        var porUsuario = (await db.Users
-                .AsNoTracking()
-                .Where(u => usuarioIds.Contains(u.Id.ToString()))
-                .Select(u => new { Id = u.Id.ToString(), u.Email, u.NomeCompleto })
-                .ToListAsync(ct))
-            .ToDictionary(u => u.Id, u => u.Email ?? u.NomeCompleto ?? u.Id);
+        foreach (var s in sessoes)
+        {
+            void Marcar(string? id)
+            {
+                if (id is null) return;
+                if (!primeiraAparicao.TryGetValue(id, out var atual) || s.CriadoEm < atual)
+                {
+                    primeiraAparicao[id] = s.CriadoEm;
+                }
+            }
 
-        string? Quem(string? id) => id is null ? null : porUsuario.GetValueOrDefault(id, id);
+            Marcar(s.AvaliacaoUsuarioId);
+            if (porSessao.TryGetValue(s.Id, out var qq)) Marcar(qq.UsuarioId.ToString());
+        }
+
+        var pseudonimos = primeiraAparicao
+            .OrderBy(x => x.Value)
+            .ThenBy(x => x.Key, StringComparer.Ordinal)
+            .Select((x, i) => (x.Key, Codigo: $"P{i + 1:D2}"))
+            .ToDictionary(x => x.Key, x => x.Codigo, StringComparer.Ordinal);
+
+        // Id sem pseudônimo devolve nulo, e nunca o próprio id: um Guid na célula seria
+        // exatamente o identificador que este bloco existe para não deixar sair.
+        string? Quem(string? id) =>
+            id is not null && pseudonimos.TryGetValue(id, out var c) ? c : null;
 
         var linhas = sessoes.Select(s =>
         {
@@ -194,7 +225,7 @@ internal static class QuestionariosEndpoints
             .ToList();
 
         return Results.Ok(new TabulacaoView(
-            redeId, [.. doCatalogo, .. extras], comoTexto, linhas));
+            redeId, [.. doCatalogo, .. extras], comoTexto, pseudonimos.Count, linhas));
     }
 
     private static IResult Catalogo() => Results.Ok(
@@ -561,16 +592,30 @@ internal sealed record RespostaView(
 /// (<c>PerguntaDef.TabularTexto</c>) para tela e planilha não divergirem — e para a decisão não
 /// voltar a ser deduzida do formato do dado, que foi o que errou o A2.
 /// </param>
+/// <param name="Participantes">
+/// Pessoas distintas com alguma atividade nesta rede. Contagem que o patrocinador pediu junto
+/// dos pseudônimos: quantas responderam, ao lado de quantas execuções elas avaliaram. Sai dos
+/// códigos atribuídos, então não há uma segunda definição de "participante" em lugar nenhum.
+/// </param>
 internal sealed record TabulacaoView(
     int RedeId,
     IReadOnlyList<string> Codigos,
     IReadOnlyList<string> CodigosDeTexto,
+    int Participantes,
     IReadOnlyList<AvaliacaoTabuladaView> Linhas);
 
 /// <param name="VersaoCatalogo">
 /// Versão do instrumento sob a qual esta linha foi respondida. <b>Sem ela a planilha soma
 /// perguntas diferentes na mesma coluna</b>: o código B7 já designou três afirmações distintas
 /// (V2, V5, V6). Nulo quando não há questionário.
+/// </param>
+/// <param name="Avaliador">
+/// <b>Pseudônimo</b> de quem registrou a avaliação — P01, P02, P03… —, nunca o nome nem o
+/// e-mail. Ver a nota em <c>TabulacaoAsync</c>: a identidade não sai do banco.
+/// </param>
+/// <param name="Respondente">
+/// <b>Pseudônimo</b> de quem respondeu o questionário. Costuma ser o mesmo código do
+/// <paramref name="Avaliador"/>, e não é obrigatório que seja.
 /// </param>
 internal sealed record AvaliacaoTabuladaView(
     Guid SessaoId,

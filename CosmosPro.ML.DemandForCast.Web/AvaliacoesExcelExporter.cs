@@ -13,6 +13,13 @@ namespace CosmosPro.ML.DemandForCast.Web;
 /// </para>
 ///
 /// <para>
+/// <b>O participante aparece por código, nunca por nome.</b> P01, P02, P03… O servidor não
+/// consulta a tabela de usuários para montar esta planilha, então o dado identificável não passa
+/// por aqui — é a solução que o patrocinador propôs para poder contar pessoas e repetições sem
+/// identificar ninguém.
+/// </para>
+///
+/// <para>
 /// <b>A chave é a execução, nunca o comprador.</b> O mesmo comprador avalia várias execuções, e
 /// consolidar por ele apagaria a variação que a pesquisa mede. Cada linha traz o
 /// <c>ID da execução</c>, que é o campo pelo qual as duas abas se relacionam com qualquer outro
@@ -65,9 +72,19 @@ internal static class AvaliacoesExcelExporter
         Par("Gerado em", geradoEm.ToLocalTime().ToString("dd/MM/yyyy HH:mm"));
         Par("Rede", redeNome ?? $"rede {t.RedeId}");
         Par("Execuções nesta planilha", $"{t.Linhas.Count:N0}");
+        Par("Participantes distintos", $"{t.Participantes:N0}");
         Par("Com avaliação (seção G)", $"{t.ComAvaliacao:N0}");
         Par("Com questionário enviado", $"{t.ComQuestionario:N0}");
         l++;
+
+        ws.Cell(l, 1).Value =
+            "As colunas Avaliador e Respondente trazem um CÓDIGO do participante (P01, P02, …), "
+            + "nunca o nome ou o e-mail. O mesmo código é sempre a mesma pessoa dentro desta "
+            + "rede, então agrupar por ele diz quantas execuções cada participante avaliou. A "
+            + "numeração é por rede: em análise que junte duas redes, o que identifica o "
+            + "participante é o par (Rede, código).";
+        ws.Cell(l, 1).Style.Font.Italic = true;
+        l += 2;
 
         // O denominador declarado. "12 avaliações" nao diz nada sem as execucoes de onde saíram,
         // e a planilha traz as duas coisas justamente para a conta poder ser feita.

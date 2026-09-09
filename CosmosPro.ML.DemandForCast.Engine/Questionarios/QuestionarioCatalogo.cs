@@ -105,7 +105,9 @@ public static class QuestionarioCatalogo
     /// <para>
     /// <b>Isto é o que o participante consente</b>, e tem de continuar batendo com o que
     /// <c>Questionario</c> de fato grava. Já não bateu: o texto prometia anonimato e a tabela
-    /// guarda <c>UsuarioId</c>. Ao mexer em qualquer um dos dois, confira o outro.
+    /// guarda <c>UsuarioId</c>. Ao mexer em qualquer um dos dois, confira o outro — e confira
+    /// também a tabulação, que é onde o dado sai do sistema: hoje ela exporta o participante
+    /// por código, e é isso que o parágrafo do consentimento afirma.
     /// </para>
     /// </summary>
     public static IReadOnlyList<string> Apresentacao { get; } =
@@ -121,16 +123,26 @@ public static class QuestionarioCatalogo
         "atualmente utilizado pela organização (ERP), solicita-se a sua colaboração no " +
         "preenchimento deste questionário, respondendo de acordo com a sua perceção profissional.",
 
-        // A frase que prometia anonimato saiu em 05/09/2026, por decisão de quem conduz a
-        // pesquisa. Ela dizia "não será recolhida qualquer informação que permita identificar
-        // os participantes" enquanto `Questionarios.UsuarioId` grava exatamente quem respondeu:
-        // o participante consentia com uma coisa e o sistema fazia outra. A alternativa seria
-        // remover a coluna; manteve-se a coluna e corrigiu-se o texto, então o que se promete
-        // agora é confidencialidade e uso restrito — não anonimato.
+        // ESTE PARÁGRAFO ACOMPANHA O QUE O SISTEMA FAZ, e já não acompanhou duas vezes.
+        //
+        // Em 05/09/2026 saiu a frase "não será recolhida qualquer informação que permita
+        // identificar os participantes": ela prometia anonimato enquanto `Questionarios.UsuarioId`
+        // gravava exatamente quem respondeu. Ficou só confidencialidade.
+        //
+        // Em 09/09/2026 o texto voltou a mudar, e para melhor: a tabulação passou a exibir e
+        // exportar o participante por CÓDIGO (P01, P02, …) e o servidor deixou de consultar a
+        // tabela de usuários para montá-la. Então o que se promete agora é o que de fato
+        // acontece — a resposta fica ligada à conta para a investigação poder distinguir e
+        // contar participantes, e nos dados analisados a pessoa é um código.
+        //
+        // O vínculo com a conta CONTINUA no banco, e o texto diz isso. Não prometa anonimato
+        // completo: seria a mesma divergência de antes, escrita ao contrário.
         "A participação é voluntária e confidencial. A sua resposta fica associada ao utilizador " +
         "com que acedeu à aplicação, para que a investigação possa distinguir participantes " +
-        "distintos; os dados são utilizados exclusivamente para fins académicos e não são " +
-        "divulgados de forma individualizada.",
+        "distintos e contar quantas simulações cada um avaliou. Nos dados analisados e em " +
+        "qualquer divulgação, é identificado apenas por um código (P01, P02, …) — nunca pelo " +
+        "nome nem pelo endereço de correio eletrónico. Os dados são utilizados exclusivamente " +
+        "para fins académicos.",
 
         "Tempo estimado de resposta: aproximadamente 3 minutos.",
     ];

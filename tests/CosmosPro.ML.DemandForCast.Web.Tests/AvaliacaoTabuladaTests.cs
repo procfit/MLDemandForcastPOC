@@ -120,7 +120,7 @@ public sealed class AvaliacaoTabuladaTests
     [Fact]
     public void EhTexto_sai_do_catalogo_e_nao_do_formato_do_dado()
     {
-        var t = new TabulacaoView(1, ["A1", "A2", "B1"], ["A2"], []);
+        var t = new TabulacaoView(1, ["A1", "A2", "B1"], ["A2"], Participantes: 0, []);
 
         t.EhTexto("A2").Should().BeTrue();
         t.EhTexto("B1").Should().BeFalse();
@@ -148,7 +148,7 @@ public sealed class AvaliacaoTabuladaTests
     [Fact]
     public void Versoes_presentes_saem_ordenadas_e_sem_repeticao()
     {
-        var t = new TabulacaoView(1, ["B1"], [],
+        var t = new TabulacaoView(1, ["B1"], [], Participantes: 1,
         [
             Linha(Ordinal("B1", 4)) with { VersaoCatalogo = 4 },
             Linha(Ordinal("B1", 5)) with { VersaoCatalogo = 3 },
@@ -178,7 +178,7 @@ public sealed class AvaliacaoTabuladaTests
             Respondente = null,
         };
 
-        var t = new TabulacaoView(1, ["B1"], [], [vazia]);
+        var t = new TabulacaoView(1, ["B1"], [], Participantes: 1, [vazia]);
 
         t.Linhas.Should().HaveCount(1);
         t.ComAvaliacao.Should().Be(0);

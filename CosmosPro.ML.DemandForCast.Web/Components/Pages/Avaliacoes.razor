@@ -53,6 +53,7 @@
                 <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center"
                              Gap="1.5rem" Wrap="FlexWrap.Wrap">
                     <Totalizador Rotulo="Execuções" Valor="@($"{_tabulacao.Linhas.Count:N0}")" />
+                    <Totalizador Rotulo="Participantes" Valor="@($"{_tabulacao.Participantes:N0}")" />
                     <Totalizador Rotulo="Com avaliação" Valor="@($"{_tabulacao.ComAvaliacao:N0}")" />
                     <Totalizador Rotulo="Com questionário" Valor="@($"{_tabulacao.ComQuestionario:N0}")" />
                     <div style="flex: 1"></div>
@@ -66,7 +67,9 @@
                 <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
                     A lista traz TODAS as execuções da rede, inclusive as que ninguém avaliou.
                     Linha em branco nas colunas de avaliação significa que ela não foi avaliada —
-                    não que a avaliação foi vazia.
+                    não que a avaliação foi vazia. Os participantes aparecem por
+                    <strong>código</strong> (P01, P02, …), e não por nome: dá para contar pessoas e
+                    repetições sem identificar ninguém.
                 </RadzenText>
 
                 @if (_tabulacao.VersoesPresentes.Count > 1)
@@ -130,7 +133,12 @@
                     </RadzenDataGridColumn>
 
                     <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="Avaliador"
-                                          Title="Avaliador" Width="200px">
+                                          Title="Avaliador" Width="130px">
+                        <HeaderTemplate>
+                            <span>Avaliador</span>
+                            <HelpTip Size="0.85rem"
+                                     Text="Código do participante, não o nome. O mesmo código é sempre a mesma pessoa dentro desta rede, então dá para contar quantas pessoas participaram e quantas execuções cada uma avaliou — sem identificar ninguém. A numeração é por rede: o que identifica o participante na análise é o par (rede, código)." />
+                        </HeaderTemplate>
                         <Template Context="l">@(l.Avaliador ?? "")</Template>
                     </RadzenDataGridColumn>
 
@@ -159,7 +167,7 @@
                     </RadzenDataGridColumn>
 
                     <RadzenDataGridColumn TItem="AvaliacaoTabulada" Property="Respondente"
-                                          Title="Respondente" Width="200px">
+                                          Title="Respondente" Width="130px">
                         <Template Context="l">@(l.Respondente ?? "")</Template>
                     </RadzenDataGridColumn>
 
