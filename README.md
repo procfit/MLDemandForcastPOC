@@ -463,13 +463,18 @@ onde começar.
 
 ### Pipeline de CI e imagens de container
 
+> **O passo a passo operacional** — do commit ao comprador, com o que é automático, o que
+> exige decisão sua e onde olhar quando falha — está em
+> [Docs/fluxo-de-entrega.md](Docs/fluxo-de-entrega.md). As seções abaixo cobrem o **porquê**
+> de cada peça.
+
 [`.github/workflows/ci-imagens.yml`](.github/workflows/ci-imagens.yml) roda a **push na
 `main`** e sob demanda (`workflow_dispatch`). São quatro jobs, nessa dependência:
 
 | Job | Runner | O que faz |
 |---|---|---|
 | `windows-tests` | `windows-latest` | Testes do extrator **e** o binário dele: publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json` e sobe o par como artefato `extrator`. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele, e é por isso que a suíte é dividida por sistema operacional, não por capricho de paralelismo. O `.exe` não entra em imagem nenhuma; quem o leva ao destino é o job `publicar-extrator`. |
-| `linux-tests` | `ubuntu-latest` | Compila em **Debug** (mesma configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
+| `linux-tests` | `ubuntu-latest` | Compila em **Debug** (mesma configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`), roda os dez projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
 | `images` | `ubuntu-latest` | Só se os dois anteriores passarem: constrói e empurra a **imagem base do worker** (abaixo), `aspire do push` (constrói e empurra as quatro imagens, na tag imutável), um **smoke** que abre a imagem do worker e confere as dependências nativas do LightGBM, um passo de `docker tag`/`docker push` que acrescenta a tag móvel, e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
 | `publicar-extrator` | `ubuntu-latest` | Só em `main`, e só se os dois jobs de teste passarem: manda o par exe+manifesto para `POST /extrator/publicacao` no destino, **quando a versão difere da que está no ar** (ver "Publicar o extrator no MinIO"). Não depende de `images` nem faz deploy. |
 
