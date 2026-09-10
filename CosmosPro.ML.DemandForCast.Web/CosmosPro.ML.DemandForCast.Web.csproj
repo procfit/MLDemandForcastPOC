@@ -28,7 +28,15 @@
 
          O glob não casa nada no F5 e no `dotnet build` comum — a pasta só existe no CI —, e
          isso é o esperado: sem o arquivo, a tela diz que não há extrator disponível. Os
-         binários estão no .gitignore; 118 MB por versão no git é inviável. -->
+         binários estão no .gitignore; 118 MB por versão no git é inviável.
+
+         O `Remove` antes do `Include` não é redundante: o SDK já globa `**/*.json` como
+         `Content` por default (`EnableDefaultContentItems`), então o `manifesto.json`
+         entraria DUAS vezes e o build morre com NETSDK1022, "Duplicate 'Content' items were
+         included". E isso não aparece em build local nenhum — sem a pasta o glob não casa
+         nada, então a falha só existe onde o arquivo existe, que é o CI montando a imagem.
+         Foi assim que quebrou na primeira execução. -->
+    <Content Remove="Assets\extrator\**" />
     <Content Include="Assets\extrator\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
