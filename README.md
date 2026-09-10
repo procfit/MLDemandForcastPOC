@@ -471,8 +471,8 @@ compose não é publicado.
 
 | Forma | Exemplo | Para quê |
 |---|---|---|
-| `sha-<7 primeiros do commit>` | `ghcr.io/procfit/mldemandforcastpoc/worker:sha-5b36f24` | **Imutável.** É a que vai para o `.env` do destino. Aponta para o commit exato em um passo, sem cruzar com o histórico do CI — durante um incidente a pergunta é sempre "qual commit está rodando?", e no destino (compose, Dokploy, `docker ps`) a tag é o único lugar onde ela aparece. |
-| nome da branch, saneado | `ghcr.io/procfit/mldemandforcastpoc/worker:main` | **Móvel.** Segue a última execução verde daquela branch, para quem quer "o último de `main`" sem descobrir o sha. Vem do ref da execução, não de um `main` cravado, então um `workflow_dispatch` numa branch de feature publica `feat-extrator-cli` e **não** mexe na tag que a produção segue. Nome de branch aceita `/` e tag de imagem não, daí o saneamento (`feat/extrator-cli` → `feat-extrator-cli`). |
+| `sha-<7 primeiros do commit>` | `ghcr.io/procfit/mldemandforcastpoc/worker:sha-5b36f24` | **Imutável.** Aponta para o commit exato em um passo, sem cruzar com o histórico do CI. **Não é a que a produção segue** (ver abaixo), e o uso dela é o **rollback** e o pin: para voltar a um commit conhecido, troque `*_IMAGE` para o `sha-` dele e deploye. |
+| nome da branch, saneado | `ghcr.io/procfit/mldemandforcastpoc/worker:main` | **Móvel, e é esta que a produção usa.** Segue a última execução verde daquela branch, então o Environment do Dokploy não muda de deploy para deploy — quem faz o serviço trocar de binário é o `pull_policy: always`. Vem do ref da execução, não de um `main` cravado, então um `workflow_dispatch` numa branch de feature publica `feat-extrator-cli` e **não** mexe na tag que a produção segue. Nome de branch aceita `/` e tag de imagem não, daí o saneamento (`feat/extrator-cli` → `feat-extrator-cli`). |
 
 Não há mais tag do tipo `aspire-deploy-<timestamp>` (o default do `aspire do push`, substituído
 pela variável `IMAGE_TAG` que o AppHost lê no callback `WithImagePushOptions`): ela dizia
@@ -495,10 +495,13 @@ sem a tag móvel até alguém notar no destino.
 jeito que o `aspire publish` gera — nenhuma credencial trafega pelo pipeline:
 
 - `APISERVICE_IMAGE`, `WEBFRONTEND_IMAGE`, `WORKER_IMAGE`, `DB_MIGRATOR_IMAGE` — as
-  referências completas, com a **tag imutável** (`…/worker:sha-5b36f24`). Saem **vazias**:
-  configurar o registry no AppHost afeta o `aspire do push`, não o `aspire publish`. Use a
-  imutável, não a móvel: com o nome da branch o compose puxaria silenciosamente outra coisa
-  no próximo `docker compose pull`, e o que roda no destino deixaria de ser identificável.
+  referências completas. Saem **vazias**: configurar o registry no AppHost afeta o
+  `aspire do push`, não o `aspire publish`. **A produção usa a tag móvel** (`…/worker:main`),
+  então essas quatro entradas são preenchidas uma vez e não mudam a cada deploy — quem troca
+  o binário é o `pull_policy: always`. O preço é que a tag deixa de responder "qual commit
+  está rodando?": essa resposta passa a estar na descrição do deployment no Dokploy e no
+  histórico do CI. Para **pinar ou voltar** a um commit conhecido, troque a entrada para o
+  `sha-<7>` dele — é para isso que a tag imutável existe.
 - `APISERVICE_PORT`, `WEBFRONTEND_PORT` — as portas publicadas no host.
 - `SQL_PASSWORD`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` — as
   credenciais da infraestrutura no destino. Não são as do ambiente local: `minioadmin`

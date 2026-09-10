@@ -240,7 +240,6 @@ sequenceDiagram
     Você->>GH: baixar artefato aspire-compose
     Note over Você,GH: só se a topologia do AppHost mudou
     Você->>DK: recolar o docker-compose.yaml (raw)
-    Você->>DK: preencher o Environment (*_IMAGE na tag sha)
     Você->>DK: clicar Deploy
     DK->>MIG: sobe primeiro
     MIG->>MIG: DACPAC no Stage
@@ -284,14 +283,19 @@ compose, e as duas pontas são necessárias: só o valor no Environment sem a li
 o processo sem receber nada, e a falha aparece como "não configurado" em vez de erro. É a
 armadilha que o passo do §4 passou a acusar antes de o deploy acontecer.
 
-### Use a tag imutável
+### As tags: a produção segue a móvel
 
-`*_IMAGE` recebe `…/worker:sha-5b36f24` — os 7 primeiros do commit, sem precisar caçar no log
-do CI. A tag móvel (`:main`) serve para "o último verde daquela branch"; num `.env` de produção
-ela faria o próximo `docker compose pull` puxar outra coisa em silêncio, e "qual commit está
-rodando?" deixaria de ter resposta. Os quatro serviços têm `pull_policy: always` justamente
-porque o Compose aceita "já existe local" — sem isso, deploy depois de CI verde subiria o
-binário antigo **e reportaria sucesso**.
+`*_IMAGE` recebe `…/worker:main`, e por isso o Environment do Dokploy **não muda de deploy
+para deploy** — quem troca o binário é o `pull_policy: always`. Os quatro serviços o têm
+justamente porque o Compose aceita "já existe local": sem isso, deploy depois de CI verde
+subiria o binário antigo **e reportaria sucesso**. Já aconteceu.
+
+O preço é que a tag deixa de responder "qual commit está rodando?" — essa resposta passa a
+estar na descrição do deployment no Dokploy e no histórico do CI, e é por isso que aquela
+descrição escrita à mão vale o trabalho.
+
+A tag imutável (`sha-<7>`) existe para **pinar e voltar**: para rodar um commit conhecido,
+troque a entrada para o `sha-` dele e deploye.
 
 **A imagem da Web ficou ~118 MB maior**, e isso é pago **uma vez por versão do extrator**, não
 por deploy: o executável é byte a byte idêntico enquanto o fonte e a versão não mudam (§6),
@@ -403,7 +407,6 @@ lados trocam juntos.
 [ ] Push em main; CI verde nos três jobs
 [ ] Se o CI reclamou do compose: recolar o YAML no Dokploy
 [ ] Se a mensagem apontou variável nova: preencher o valor no Environment
-[ ] Environment do Dokploy com as *_IMAGE na tag sha-xxxxxxx
 [ ] Deploy clicado, com descrição dizendo quais migrations entram
 [ ] db-migrator saiu com exit 0 (senão nenhum serviço subiu)
 [ ] Login na Web funciona
@@ -421,7 +424,7 @@ lados trocam juntos.
 | Smoke da Web acusa extrator ausente na imagem | o `Content` do csproj da Web deixou de levar o asset para o publish | `CosmosPro.ML.DemandForCast.Web.csproj`, item `Assets\extrator\**` |
 | Serviço no ar com variável vazia | o YAML colado no Dokploy é anterior ao parâmetro | o compose colado, não só o Environment |
 | Nenhum serviço sobe depois do deploy | `db-migrator` saiu != 0 | log do `db-migrator` no Dokploy |
-| Deploy verde mas comportamento antigo | `*_IMAGE` apontando para a tag anterior | Environment do Dokploy |
+| Deploy verde mas comportamento antigo | a tag móvel `:main` não avançou (o `images` falhou depois do push) ou o `pull_policy` saiu do YAML colado | passo "Adicionar a tag móvel" no CI; `pull_policy: always` no compose do Dokploy |
 | "Esta instalação não traz o extrator" | imagem construída sem o asset, ou manifesto ilegível | log de startup da Web (`ExtratorEmbutido` avisa) e o passo do §4 |
 | Versão do extrator diferente da esperada | a imagem no ar é de outro commit | tag em `WEBFRONTEND_IMAGE` |
 | Treino morre com `lib_lightgbm` | imagem do worker sem `libgomp1` | smoke do CI; `worker-base.Dockerfile` |
