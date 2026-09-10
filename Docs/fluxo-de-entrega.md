@@ -57,15 +57,17 @@ flowchart TB
         A1["Rodar a suíte inteira"]
         A2["Construir e empurrar as imagens"]
         A3["Gerar o compose e o .env"]
-        A4["Publicar o extrator, se a versão mudou"]
-        A5["Aplicar DACPAC e EF migrations<br/>no start do db-migrator"]
+        A4["Derivar a versão do extrator"]
+        A5["Publicar o extrator, se a versão mudou"]
+        A6["Acusar compose desatualizado<br/>e variável nova"]
+        A7["Aplicar DACPAC e EF migrations<br/>no start do db-migrator"]
     end
 
     subgraph MANUAL["Manual — decisão sua"]
         M1["Clicar Deploy no Dokploy"]
-        M2["Recolar o YAML, se a topologia mudou"]
-        M3["Preencher o .env / Environment"]
-        M4["Subir o Version do extrator"]
+        M2["Regenerar e commitar o compose,<br/>quando a topologia mudar"]
+        M3["Recolar o YAML no Dokploy,<br/>quando o CI acusar"]
+        M4["Preencher no Environment<br/>o valor de variável nova"]
     end
 
     style AUTO fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
@@ -228,13 +230,10 @@ sequenceDiagram
 
 ### Quando é preciso recolar o YAML
 
-**Recolar** quando o AppHost mudou de topologia — recurso novo, parâmetro novo, env var nova,
-`depends_on` diferente. **Não recolar** quando só o código mudou: aí basta apontar as
-`*_IMAGE` para as tags novas e deployar.
-
-**Você não precisa mais decidir isso** — o CI decide (§4). Se `deploy/docker-compose.yaml`
-divergiu do que o AppHost gera, o build fica vermelho com o diff; se não divergiu, o YAML do
-Dokploy continua válido e basta trocar as `*_IMAGE`.
+**Você não decide isso — o CI decide** (§4). O critério continua sendo o de sempre (topologia
+mudou: recurso novo, parâmetro novo, env var nova, `depends_on` diferente), mas quem o avalia é
+a comparação com `deploy/docker-compose.yaml`: divergiu, o build fica vermelho com o diff; não
+divergiu, o YAML do Dokploy continua válido e basta apontar as `*_IMAGE` para as tags novas.
 
 ```mermaid
 flowchart TB
