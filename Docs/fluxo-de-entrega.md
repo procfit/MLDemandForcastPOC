@@ -30,10 +30,10 @@ flowchart LR
     PUB --> MINIO["bucket MinIO extrator"]
     MINIO --> COMP["comprador baixa<br/>pela pagina da sessao"]
 
-    style DEP fill:#fea
-    style PUB fill:#dfd
-    style VPS fill:#eef
-    style COMP fill:#eef
+    style DEP fill:#fea,stroke:#4a4a4a,color:#1a1a1a
+    style PUB fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+    style VPS fill:#eef,stroke:#4a4a4a,color:#1a1a1a
+    style COMP fill:#eef,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 **O executável não viaja em imagem nenhuma.** Ele é WinForms, roda na máquina que enxerga o
@@ -68,8 +68,8 @@ flowchart TB
         M4["Subir o Version do extrator"]
     end
 
-    style AUTO fill:#dfd
-    style MANUAL fill:#fea
+    style AUTO fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+    style MANUAL fill:#fea,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 **Por que o deploy do backend continua manual.** O `db-migrator` aplica DACPAC no `Stage`
@@ -95,7 +95,7 @@ flowchart LR
     V -->|sim| B["subir Version<br/>no csproj"]
     V -->|não| M["merge em main"]
     B --> M
-    style B fill:#fea
+    style B fill:#fea,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 Dois pontos que não são cerimônia:
@@ -129,8 +129,8 @@ flowchart TB
     W -.->|"artefato extrator"| P
     I -.->|"artefato aspire-compose"| OP(["você, na etapa 2"])
 
-    style I fill:#eef
-    style P fill:#dfd
+    style I fill:#eef,stroke:#4a4a4a,color:#1a1a1a
+    style P fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 | Job | O que faz | Por que existe assim |
@@ -150,7 +150,7 @@ flowchart LR
     OK1 -.->|"não cobre"| GAP["a imagem publicada"]
     S --> GAP
 
-    style GAP fill:#fdd
+    style GAP fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 Os testes passam porque o runner do GitHub tem `libgomp1`; a **imagem** não tinha, e o treino
@@ -206,7 +206,7 @@ flowchart TB
     Q2 -->|não| SO
     Q2 -->|sim| RE["aspire publish<br/>+ recolar o YAML<br/>+ preencher a variável nova"]
 
-    style RE fill:#fea
+    style RE fill:#fea,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 **A armadilha silenciosa:** parâmetro novo no AppHost é **linha nova no compose**. Preencher a
@@ -254,13 +254,13 @@ flowchart TB
     GRD -->|"não"| NOP["aviso: já está no ar,<br/>nada publicado"]
     GRD -->|"sim"| EBMP["VERMELHO: suba o Version"]
 
-    style DONE fill:#dfd
-    style SKIP fill:#eef
-    style NOP fill:#eef
-    style EBMP fill:#fdd
-    style E404 fill:#fdd
-    style E401 fill:#fdd
-    style E503 fill:#fdd
+    style DONE fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+    style SKIP fill:#eef,stroke:#4a4a4a,color:#1a1a1a
+    style NOP fill:#eef,stroke:#4a4a4a,color:#1a1a1a
+    style EBMP fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
+    style E404 fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
+    style E401 fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
+    style E503 fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 **O portão é a versão, não o commit.** O binário muda em **todo** build mesmo sem mudança no
@@ -299,8 +299,8 @@ flowchart TB
     Q_EXT -->|sim| A_EXT["subir Version no csproj.<br/>O CI publica no próximo push"]
     Q_COD -->|sim| A_COD["trocar as *_IMAGE<br/>para a tag sha nova<br/>e clicar Deploy"]
 
-    style A_APP fill:#fea
-    style A_EXT fill:#fea
+    style A_APP fill:#fea,stroke:#4a4a4a,color:#1a1a1a
+    style A_EXT fill:#fea,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 **Mudança no contrato CSV toca os dois lados de uma vez** — `Database`, `Worker`, `ApiService`
