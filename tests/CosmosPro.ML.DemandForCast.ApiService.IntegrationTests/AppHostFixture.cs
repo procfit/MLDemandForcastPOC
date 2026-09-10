@@ -61,6 +61,11 @@ public sealed class AppHostFixture : IAsyncLifetime
         // no modelo porque tem de existir no compose publicado.
         builder.Configuration["Parameters:dbgate-password"] = "TesteDbGate!2026";
 
+        // Mesmo caso: `extrator-publish-token` é secreto e sem valor no AppHost. Esta suíte
+        // fala só com a apiservice, e a rota que consome o token é da Web — mas parâmetro
+        // sem valor derruba o AppHost inteiro, não só o recurso que o usa.
+        builder.Configuration["Parameters:extrator-publish-token"] = "TesteExtratorPublish!2026";
+
         // Aqui existia um remendo (`OverrideSqlProjectWithBuiltDacpac`): o
         // `AddSqlProject` do CommunityToolkit descobria o caminho do .dacpac avaliando o
         // .sqlproj via Microsoft.Build em runtime, e sob `dotnet test` isso falhava com

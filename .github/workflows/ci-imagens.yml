@@ -456,3 +456,208 @@ jobs:
           path: ./aspire-output/
           retention-days: 30
           include-hidden-files: true
+
+  # Publica o extrator no destino sem passar pela UI: era o único artefato do pipeline que
+  # exigia trabalho manual a cada release — baixar o `.zip` da página do Actions, logar na
+  # Web como PowerUser e subi-lo em /admin/extrator.
+  #
+  # NÃO depende de `images` nem faz deploy: o `.exe` não viaja em imagem nenhuma, e o deploy
+  # do backend continua sendo um clique no Dokploy (`autoDeploy: false`, com descrição
+  # escrita à mão a cada release — é portão humano sobre um deploy que aplica DACPAC e EF
+  # migrations em banco com dado real, e não é para automatizar daqui).
+  #
+  # Publicar antes de o backend novo subir é seguro por desenho do contrato de import:
+  # entrada desconhecida no ZIP nunca é validada nem carregada, arquivo novo entra como
+  # `OptionalFiles` e coluna é conferida por nome. Foi assim que o `catalogo_eans.csv` da
+  # 0.18.0 conviveu com o backend anterior. Só uma mudança **destrutiva** de contrato
+  # (renomear ou remover coluna obrigatória) exigiria ordenar as duas coisas — e essa não
+  # sai sem alguém decidir.
+  #
+  # `needs: linux-tests` não é por artefato, é por mérito: um extrator não vai para a mão do
+  # comprador a partir de um commit cuja suíte do backend está vermelha.
+  publicar-extrator:
+    name: Publicar o extrator no destino
+    runs-on: ubuntu-latest
+    needs: [windows-tests, linux-tests]
+    timeout-minutes: 20
+    # Só de `main`: um `workflow_dispatch` numa branch de feature não publica executável para
+    # cliente, pelo mesmo motivo que a tag móvel das imagens sai de `GITHUB_REF_NAME`.
+    if: github.ref == 'refs/heads/main'
+
+    env:
+      # A URL fica em `vars`, não em `secrets`, de propósito: o GitHub mascara valor de
+      # secret no log, e uma URL mascarada torna o log inútil justamente quando ele é
+      # necessário — "não consegui falar com ***" não diz com quem o job tentou falar. Ela
+      # não é segredo (é o domínio público da Web); o token é.
+      EXTRATOR_PUBLISH_URL: ${{ vars.EXTRATOR_PUBLISH_URL }}
+      EXTRATOR_PUBLISH_TOKEN: ${{ secrets.EXTRATOR_PUBLISH_TOKEN }}
+
+    steps:
+      # `fetch-depth: 0` porque a guarda de bump precisa do histórico para comparar o que o
+      # push mudou; com o default (profundidade 1) não há commit anterior no clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Baixar o par exe+manifesto
+        uses: actions/download-artifact@v4
+        with:
+          name: extrator
+          path: artefatos/extrator
+
+      # Sai antes de qualquer chamada de rede quando o destino não está configurado: um
+      # ambiente (ou um fork) sem as duas entradas não tem por que ficar vermelho por causa
+      # de uma automação que não pediu. A publicação pela UI continua existindo.
+      - name: Conferir configuração do destino
+        id: destino
+        run: |
+          set -euo pipefail
+          if [ -z "${EXTRATOR_PUBLISH_URL:-}" ] || [ -z "${EXTRATOR_PUBLISH_TOKEN:-}" ]; then
+            echo "::notice::Publicação automática do extrator não configurada (falta a variável EXTRATOR_PUBLISH_URL ou o secret EXTRATOR_PUBLISH_TOKEN). O artefato 'extrator' continua nesta execução para publicação manual em /admin/extrator."
+            echo "configurado=nao" >> "$GITHUB_OUTPUT"
+          else
+            echo "configurado=sim" >> "$GITHUB_OUTPUT"
+          fi
+
+      # O portão que faz a diferença entre "publicar quando há release" e "publicar a cada
+      # push": o binário muda em TODO build mesmo sem mudança no extrator (o SDK anexa o
+      # commit ao InformationalVersion, então o SHA-256 muda), enquanto `<Version>` fica
+      # parado. Publicar por push encheria a tela do comprador de "versão 0.18.1" com
+      # checksum diferente a cada vez — e o checksum é a promessa que ele confere com
+      # Get-FileHash na máquina dele.
+      #
+      # A consulta usa os STATUS para distinguir situações que um 404 juntaria numa só, e é
+      # por isso que a rota responde 200 com campos nulos quando nada foi publicado (ver
+      # ExtratorEndpoints.VersaoPublicadaAsync):
+      #   200 -> a Web no ar tem a rota e respondeu;
+      #   404 -> a Web no ar é anterior ao commit que criou a rota;
+      #   401 -> o token do destino não é o deste secret;
+      #   503 -> o destino não tem token configurado (env var vazia no .env).
+      - name: Comparar a versão deste build com a que está no ar
+        if: steps.destino.outputs.configurado == 'sim'
+        id: versoes
+        run: |
+          set -euo pipefail
+
+          versao=$(jq -r '.versao // empty' artefatos/extrator/manifesto.json)
+          sha=$(jq -r '.sha256 // empty' artefatos/extrator/manifesto.json)
+          if [ -z "$versao" ] || [ -z "$sha" ]; then
+            echo "::error::O manifesto.json do artefato não declara versao/sha256."
+            exit 1
+          fi
+          echo "versao=$versao" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+          # `) || codigo="000"` em vez de `|| echo "000"` dentro da substituicao: um curl
+          # que falha no meio (timeout, conexao cortada) ainda imprime o %{http_code}
+          # parcial, e o echo concatenaria os dois -- "200000" nao casa com nenhum ramo do
+          # `case` e o job culparia um codigo que o servidor nunca devolveu.
+          codigo=$(curl -sS --max-time 60 -o no-ar.json -w '%{http_code}' \
+                     -H "Authorization: Bearer $EXTRATOR_PUBLISH_TOKEN" \
+                     "$EXTRATOR_PUBLISH_URL/extrator/publicacao") || codigo="000"
+
+          case "$codigo" in
+            200) ;;
+            401) echo "::error::O destino recusou o token (401). O secret EXTRATOR_PUBLISH_TOKEN e a env var EXTRATOR_PUBLISH_TOKEN do destino não são o mesmo valor."; exit 1 ;;
+            404) echo "::error::A rota /extrator/publicacao não existe em $EXTRATOR_PUBLISH_URL (404). A Web no ar é anterior ao commit que a criou — publique este backend antes."; exit 1 ;;
+            503) echo "::error::O destino está sem token de publicação (503). Preencha EXTRATOR_PUBLISH_TOKEN no Environment do Dokploy e redeploye."; exit 1 ;;
+            000) echo "::error::Não foi possível falar com $EXTRATOR_PUBLISH_URL."; exit 1 ;;
+            *)   echo "::error::Resposta inesperada ($codigo) de $EXTRATOR_PUBLISH_URL/extrator/publicacao:"; cat no-ar.json; exit 1 ;;
+          esac
+
+          no_ar=$(jq -r '.versao // empty' no-ar.json)
+          echo "no_ar=$no_ar" >> "$GITHUB_OUTPUT"
+          echo "Versão no ar: ${no_ar:-<nenhuma>} | versão deste build: $versao"
+
+          if [ "$no_ar" = "$versao" ]; then
+            echo "publicar=nao" >> "$GITHUB_OUTPUT"
+          else
+            echo "publicar=sim" >> "$GITHUB_OUTPUT"
+          fi
+
+      # O buraco que esta guarda fecha já custou caro: dois commits de correção do extrator
+      # (2d03534, cc31b0e) atravessaram sete deploys sem chegar ao comprador, porque o
+      # `<Version>` não subiu junto e nada no pipeline reclamava. Automatizar a publicação
+      # sem esta guarda reproduziria o mesmo silêncio, agora com cara de automação — o job
+      # diria "nada novo" com a correção parada no repositório.
+      #
+      # Mudança no extrator sem bump é ERRO, não aviso: quem lê um aviso em run verde é quem
+      # já sabia. Escapes, quando o bump é de fato indevido: publicar pela UI em
+      # /admin/extrator, ou reexecutar depois de subir a versão.
+      # A base da comparação é o **commit que introduziu a versão atual**, não o push
+      # anterior, e a diferença importa: com o push anterior como base, ignorar um build
+      # vermelho e empurrar qualquer outra coisa devolveria o verde com a mudança do
+      # extrator ainda parada. Aqui a guarda não esquece — ela fica vermelha em todo push
+      # até o `<Version>` subir.
+      #
+      # `git log -S` acha o commit em que a string `<Version>X</Version>` entrou no csproj.
+      # Se não achar (histórico reescrito, formato mudado), a guarda não é avaliada: sem
+      # base não há o que afirmar, e chutar uma base faria acusar o repositório inteiro.
+      - name: Exigir bump de versão quando o extrator mudou
+        if: steps.destino.outputs.configurado == 'sim' && steps.versoes.outputs.publicar == 'nao'
+        run: |
+          set -euo pipefail
+          csproj=CosmosPro.ML.DemandForCast.Extractor/CosmosPro.ML.DemandForCast.Extractor.csproj
+          versao="${{ steps.versoes.outputs.versao }}"
+
+          bump=$(git log -1 --format=%H -S "<Version>$versao</Version>" -- "$csproj" || true)
+          if [ -z "$bump" ]; then
+            echo "::notice::Não achei o commit que introduziu <Version>$versao</Version>; guarda de bump não avaliada."
+            exit 0
+          fi
+          echo "Versão $versao introduzida em $(git log -1 --format='%h %s' "$bump")"
+
+          mudou=$(git diff --name-only "$bump" "${{ github.sha }}" -- CosmosPro.ML.DemandForCast.Extractor)
+          if [ -n "$mudou" ]; then
+            echo "::error::O extrator mudou depois de <Version>$versao</Version> ter sido definida, e $versao é a versão que já está no ar — a publicação seria pulada e a mudança não chegaria ao comprador. Suba <Version> no csproj do extrator. Arquivos alterados desde o bump:"
+            echo "$mudou"
+            exit 1
+          fi
+          echo "Extrator inalterado desde o bump; nada a publicar."
+
+      - name: Extrator já publicado nesta versão
+        if: steps.destino.outputs.configurado == 'sim' && steps.versoes.outputs.publicar == 'nao'
+        run: echo "::notice::Extrator ${{ steps.versoes.outputs.versao }} já está no ar; nada publicado."
+
+      # `--data-binary` e não `-F`: a rota recebe o ZIP no corpo cru (ver
+      # ExtratorEndpoints.PublicarAsync). Quem valida o pacote, exige os dois arquivos e
+      # RECALCULA o SHA-256 é a apiservice — este passo não repete nada disso, só confere no
+      # fim se o que ficou no ar é o que ele mandou.
+      #
+      # O ZIP é montado aqui, com os dois arquivos na raiz, porque o artefato chega
+      # descompactado do `download-artifact` (quem empacota é a UI do Actions).
+      - name: Publicar
+        if: steps.destino.outputs.configurado == 'sim' && steps.versoes.outputs.publicar == 'sim'
+        run: |
+          set -euo pipefail
+          cd artefatos/extrator
+          zip -q -j ../../extrator.zip extrator.exe manifesto.json
+          cd ../..
+          ls -lh extrator.zip
+
+          codigo=$(curl -sS --max-time 900 -X POST -o publicado.json -w '%{http_code}' \
+                     -H "Authorization: Bearer $EXTRATOR_PUBLISH_TOKEN" \
+                     -H "Content-Type: application/zip" \
+                     --data-binary @extrator.zip \
+                     "$EXTRATOR_PUBLISH_URL/extrator/publicacao") || codigo="000"
+
+          if [ "$codigo" != "200" ]; then
+            echo "::error::A publicação falhou ($codigo):"
+            cat publicado.json || true
+            exit 1
+          fi
+
+          # Confere as duas pontas, e não só o 200: o SHA que volta é o que o servidor
+          # RECALCULOU do executável que gravou no bucket. Se ele bate com o do manifesto
+          # deste run, o binário desta execução é o que o comprador vai baixar — nem outro
+          # arquivo, nem um corpo truncado no caminho.
+          versao_no_ar=$(jq -r '.versao // empty' publicado.json)
+          sha_no_ar=$(jq -r '.sha256 // empty' publicado.json)
+
+          if [ "$versao_no_ar" != "${{ steps.versoes.outputs.versao }}" ] \
+             || [ "$sha_no_ar" != "${{ steps.versoes.outputs.sha }}" ]; then
+            echo "::error::O destino confirmou versao=$versao_no_ar sha=$sha_no_ar, diferente do enviado (versao=${{ steps.versoes.outputs.versao }} sha=${{ steps.versoes.outputs.sha }})."
+            exit 1
+          fi
+
+          echo "::notice::Extrator $versao_no_ar publicado em $EXTRATOR_PUBLISH_URL (sha256=$sha_no_ar)."

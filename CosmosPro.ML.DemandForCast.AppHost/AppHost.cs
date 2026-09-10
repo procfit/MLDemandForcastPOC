@@ -337,6 +337,18 @@ var apiService = builder.AddProject<Projects.CosmosPro_ML_DemandForCast_ApiServi
 var powerUserEmail = builder.AddParameter("poweruser-email", secret: false);
 var powerUserPassword = builder.AddParameter("poweruser-password", secret: true);
 
+// Token que o CI usa para publicar o extrator em `POST /extrator/publicacao` — o caminho
+// automático que substitui baixar o artefato do Actions e subi-lo à mão em /admin/extrator.
+// Vai na Web, e não na apiservice, porque a Web é o único processo que o Actions alcança.
+//
+// Sem `value:` pelo mesmo mecanismo do PowerUser e do DbGate acima: default de F5 em
+// appsettings.Development.json, nada fora de Development. A diferença é o que acontece
+// quando falta no destino — aqui **não** é falha de startup. `aspire publish` escreve
+// EXTRATOR_PUBLISH_TOKEN= vazio no .env, e o endpoint responde 503 desligado, sem nunca
+// aceitar um pedido sem token (ver ExtratorEndpoints.ConferirTokenAsync). Ambiente que não
+// configurou continua publicando pela UI; o que se perde é só a automação.
+var extratorPublishToken = builder.AddParameter("extrator-publish-token", secret: true);
+
 builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Web>("webfrontend")
     .WithExternalHttpEndpoints()
     .WithHttpHealthCheck("/health")
@@ -344,6 +356,7 @@ builder.AddProject<Projects.CosmosPro_ML_DemandForCast_Web>("webfrontend")
     .WithReference(apiService)
     .WithEnvironment("PowerUser__Email", powerUserEmail)
     .WithEnvironment("PowerUser__Password", powerUserPassword)
+    .WithEnvironment("Extrator__PublishToken", extratorPublishToken)
     .WaitFor(engineDb)
     .WaitFor(apiService)
     // A Web semeia o PowerUser no `engine` no primeiro start, então precisa das

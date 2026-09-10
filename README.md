@@ -285,8 +285,77 @@ embutido no repositório nem no build da Web (self-contained dá ~118 MB, e isso
 cada versão é inviável). Isso significa que, **num ambiente novo, nada é baixável até
 alguém publicar** — passo obrigatório a cada release do extrator, não só na primeira vez.
 
-**O caminho normal são dois passos.** O CI produz o par pronto e o operador o publica pela
-UI:
+**O caminho normal é o CI**, no job `publicar-extrator`: ele empacota o artefato do run e o
+manda para `POST /extrator/publicacao` no destino. Não há passo manual, e não há deploy
+envolvido — o `.exe` não viaja em imagem nenhuma.
+
+**O portão é a versão, não o commit.** O job só publica quando o `<Version>` do csproj do
+extrator difere da versão que está no ar (lida por `GET /extrator/publicacao`). Isso não é
+economia de tráfego: o binário muda em **todo** build mesmo sem mudança no extrator — o SDK
+anexa o commit ao `InformationalVersion`, então o SHA-256 sai diferente —, e publicar por
+push encheria a tela do comprador de "versão 0.18.1" com checksum novo a cada vez. O
+checksum é justamente o que ele confere com `Get-FileHash`.
+
+**E o portão tem uma guarda, porque senão ele viraria o próprio problema.** Quando a versão
+do build é igual à que está no ar, o job não se contenta em pular: ele confere se o extrator
+mudou **depois do commit que definiu essa versão** e, se mudou, falha pedindo o bump. A base
+da comparação é aquele commit, e não o push anterior, de propósito — com o push anterior como
+base, ignorar um build vermelho e empurrar qualquer outra coisa devolveria o verde com a
+mudança ainda parada. Assim a guarda não esquece: fica vermelha em todo push até a versão
+subir.
+
+A guarda existe porque o silêncio já aconteceu, e é o mesmo caso: `0.18.1` foi definida em
+`2d03534` e `cc31b0e` mexeu no extrator depois, sem bump; as duas correções atravessaram
+sete deploys sem chegar ao comprador. Automatizar a publicação sem essa conferência
+repetiria a falha com cara de sucesso — o job diria "nada novo" com a correção parada no
+repositório. Se o bump for de fato indevido, publique pela UI.
+
+**Publicar antes de o backend novo subir é seguro, e por desenho.** O contrato de import é
+tolerante nas duas direções: entrada desconhecida no ZIP nunca é validada nem carregada,
+arquivo novo entra como `OptionalFiles` e coluna é conferida por nome. Foi assim que o
+`catalogo_eans.csv` da 0.18.0 conviveu com o backend anterior. Só uma mudança **destrutiva**
+de contrato (renomear ou remover coluna obrigatória) pediria ordenar deploy e publicação — e
+essa não sai sem alguém decidir.
+
+**A rota é autenticada por token, não por cookie.** `/admin/extrator` está atrás de sessão
+de `PowerUser`, e CI não loga numa tela Blazor; criar um usuário de serviço no Identity daria
+a um segredo de CI o mesmo alcance de um `PowerUser`, que enxerga o dado comercial de todas
+as redes. Então o grupo `/extrator/publicacao` vive na Web (o único processo que o Actions
+alcança) e confere um `Authorization: Bearer` em tempo fixo. Duas entradas no GitHub:
+
+| Entrada | Onde | Valor |
+|---|---|---|
+| `EXTRATOR_PUBLISH_URL` | **Variables** do repositório | a URL pública da Web, ex. `https://mldemandforecast-….sslip.io` |
+| `EXTRATOR_PUBLISH_TOKEN` | **Secrets** do repositório | o mesmo valor de `EXTRATOR_PUBLISH_TOKEN` no Environment do Dokploy |
+
+A URL fica em *Variables* e não em *Secrets* de propósito: o GitHub mascara valor de secret
+no log, e "não consegui falar com `***`" não diz com quem o job tentou falar — exatamente na
+hora em que o log é necessário. Ela não é segredo; o token é.
+
+**Sem as duas entradas o job não falha, ele se explica e sai.** Ambiente que não configurou
+continua publicando pela UI, e o endpoint responde **503** (desligado) em vez de aceitar um
+pedido sem token — comparar um token vazio com outro vazio daria "igual", e a rota que troca
+o executável baixado pelos clientes ficaria aberta a quem achasse a URL.
+
+Os status do `GET` são o que o job usa para saber onde está, e é por isso que ele responde
+**200 com campos nulos** quando nada foi publicado, em vez do 404 da rota interna:
+
+| Status | Significa |
+|---|---|
+| 200 | a Web no ar tem a rota e respondeu (`versao` nula = nada publicado ainda) |
+| 401 | o secret do GitHub e a env var do destino não são o mesmo valor |
+| 404 | a Web no ar é **anterior** ao commit que criou a rota — publique este backend antes |
+| 503 | o destino está sem `EXTRATOR_PUBLISH_TOKEN` preenchido |
+
+No fim, o job confere as **duas** pontas: o SHA-256 que a resposta devolve é o que o servidor
+recalculou do executável que gravou no bucket, e ele tem de bater com o do manifesto do run.
+Batendo, o binário daquela execução é o que o comprador vai baixar — nem outro arquivo, nem
+um corpo truncado no caminho.
+
+#### Publicar pela UI (fallback)
+
+Continua valendo, e é o caminho quando o token não está configurado, quando é preciso
+republicar a mesma versão, ou quando o destino não é o de produção:
 
 1. **Baixar o artefato `extrator`** da execução do Actions (job "Testes do extrator
    (Windows)" — é o único runner Windows do pipeline, e o extrator é WinForms). A UI do
@@ -395,13 +464,14 @@ onde começar.
 ### Pipeline de CI e imagens de container
 
 [`.github/workflows/ci-imagens.yml`](.github/workflows/ci-imagens.yml) roda a **push na
-`main`** e sob demanda (`workflow_dispatch`). São três jobs, nessa dependência:
+`main`** e sob demanda (`workflow_dispatch`). São quatro jobs, nessa dependência:
 
 | Job | Runner | O que faz |
 |---|---|---|
-| `windows-tests` | `windows-latest` | Testes do extrator **e** o binário dele: publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json` e sobe o par como artefato `extrator`. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele, e é por isso que a suíte é dividida por sistema operacional, não por capricho de paralelismo. O `.exe` não entra em imagem nenhuma: quem o publica é o operador, em `/admin/extrator` (ver "Publicar o extrator no MinIO"). |
+| `windows-tests` | `windows-latest` | Testes do extrator **e** o binário dele: publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json` e sobe o par como artefato `extrator`. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele, e é por isso que a suíte é dividida por sistema operacional, não por capricho de paralelismo. O `.exe` não entra em imagem nenhuma; quem o leva ao destino é o job `publicar-extrator`. |
 | `linux-tests` | `ubuntu-latest` | Compila em **Debug** (mesma configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`), roda os nove projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
 | `images` | `ubuntu-latest` | Só se os dois anteriores passarem: constrói e empurra a **imagem base do worker** (abaixo), `aspire do push` (constrói e empurra as quatro imagens, na tag imutável), um **smoke** que abre a imagem do worker e confere as dependências nativas do LightGBM, um passo de `docker tag`/`docker push` que acrescenta a tag móvel, e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
+| `publicar-extrator` | `ubuntu-latest` | Só em `main`, e só se os dois jobs de teste passarem: manda o par exe+manifesto para `POST /extrator/publicacao` no destino, **quando a versão difere da que está no ar** (ver "Publicar o extrator no MinIO"). Não depende de `images` nem faz deploy. |
 
 Os testes de integração e E2E ficam em **passos separados e sequenciais** do mesmo job de
 propósito: eles se excluem mutuamente por um lock de arquivo entre processos
@@ -500,6 +570,18 @@ jeito que o `aspire publish` gera — nenhuma credencial trafega pelo pipeline:
   storage.
 - `POWERUSER_EMAIL`, `POWERUSER_PASSWORD` — o administrador global semeado no primeiro
   start da Web. Sem eles a Web **falha no startup de propósito**.
+- `EXTRATOR_PUBLISH_TOKEN` — o token que o CI usa para publicar o extrator (ver "Publicar o
+  extrator no MinIO"). Tem de ser o mesmo valor do secret `EXTRATOR_PUBLISH_TOKEN` no
+  GitHub. Ao contrário dos dois acima, deixar em branco **não** derruba a Web: a rota de
+  publicação responde 503 desligada e a UI em `/admin/extrator` continua funcionando — o que
+  se perde é só a automação.
+
+**Parâmetro novo no AppHost significa linha nova no compose, e o compose da produção é `raw`
+colado à mão.** Preencher a variável no Environment do Dokploy **não basta**: se o YAML lá
+não tiver o `Extrator__PublishToken: "${EXTRATOR_PUBLISH_TOKEN}"` no serviço, o processo não
+recebe nada e a falha é silenciosa (a rota responde 503 como se ninguém tivesse configurado).
+Todo deploy que acrescenta parâmetro é um deploy de **regenerar e recolar** o compose, não de
+"topologia inalterada".
 
 #### O schema dos dois bancos, no compose (buraco fechado)
 
