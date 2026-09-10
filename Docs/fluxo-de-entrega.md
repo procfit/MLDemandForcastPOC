@@ -262,12 +262,13 @@ segundo artefato para conferir depois.
 **Você não decide isso — o CI decide** (§4). O critério continua sendo o de sempre (topologia
 mudou: recurso novo, parâmetro novo, env var nova, `depends_on` diferente), mas quem o avalia é
 a comparação com `deploy/docker-compose.yaml`: divergiu, o build fica vermelho com o diff; não
-divergiu, o YAML do Dokploy continua válido e basta apontar as `*_IMAGE` para as tags novas.
+divergiu, o YAML do Dokploy continua válido e basta clicar Deploy — a tag `:main` já aponta
+para as imagens novas.
 
 ```mermaid
 flowchart TB
     Q1{"o CI reclamou de<br/>divergência no compose?"}
-    Q1 -->|não| SO["só trocar as *_IMAGE<br/>e clicar Deploy"]
+    Q1 -->|não| SO["nada a recolar:<br/>clicar Deploy"]
     Q1 -->|sim| RE["pegar o YAML do artefato,<br/>recolar no Dokploy"]
     RE --> Q2{"a mensagem apontou<br/>variável nova?"}
     Q2 -->|não| DEP["clicar Deploy"]
@@ -383,7 +384,7 @@ flowchart TB
     Q_APP -->|sim| A_APP["aspire publish e commitar<br/>deploy/docker-compose.yaml;<br/>recolar no Dokploy e preencher<br/>a variável nova"]
     Q_MIG -->|sim| A_MIG["nada a mais: o db-migrator aplica<br/>no deploy. Descreva a migration<br/>na descrição do deployment"]
     Q_EXT -->|sim| A_EXT["nada: versão derivada, exe<br/>embutido, entrega no mesmo deploy"]
-    Q_COD -->|sim| A_COD["trocar as *_IMAGE<br/>para a tag sha nova<br/>e clicar Deploy"]
+    Q_COD -->|sim| A_COD["nada a mais: a tag :main<br/>ja aponta para as imagens novas.<br/>Clicar Deploy"]
 
     style A_APP fill:#fea,stroke:#4a4a4a,color:#1a1a1a
     style A_EXT fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
