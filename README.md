@@ -277,193 +277,121 @@ segurança e preço de compra por loja — e o `manifesto.json` declara quais lo
 quantas a sugestão tinha, para o resultado da comparação não ser confundido com um da rede
 inteira. No modo linha de comando é `--stores 12,45,78`; ausente, exporta todas.
 
-### Publicar o extrator no MinIO
+### O extrator, embutido na imagem
 
 O comprador baixa o extrator pela página da sessão (`/comparacoes/{id}`, estado
-"Aguardando dados"), que faz stream do bucket MinIO `extrator` — o `.exe` **não** é
-embutido no repositório nem no build da Web (self-contained dá ~118 MB, e isso no git a
-cada versão é inviável). Isso significa que, **num ambiente novo, nada é baixável até
-alguém publicar** — passo obrigatório a cada release do extrator, não só na primeira vez.
+"Aguardando dados"), e o executável **vem dentro da imagem da Web**: o CI baixa o par
+`extrator.exe` + `manifesto.json` do job que os constrói no Windows e os deixa em
+`CosmosPro.ML.DemandForCast.Web/Assets/extrator/` antes de a imagem ser montada.
 
-**O caminho normal é o CI**, no job `publicar-extrator`: ele empacota o artefato do run e o
-manda para `POST /extrator/publicacao` no destino. Não há passo manual, e não há deploy
-envolvido — o `.exe` não viaja em imagem nenhuma.
+**Não há publicação. O deploy do backend é a publicação.** Extrator e backend são o mesmo
+artefato — mesmo commit, mesma imagem, mesmo clique — e é isso que a decisão compra.
 
-**O portão é a versão, não o commit.** O job só publica quando a versão do build difere da
-que está no ar (lida por `GET /extrator/publicacao`). Isso não é economia de tráfego: o
-binário muda em **todo** build mesmo sem mudança no extrator — o SDK anexa o commit ao
-`InformationalVersion`, então o SHA-256 sai diferente —, e publicar por push encheria a tela
-do comprador de "versão 0.18.2" com checksum novo a cada vez. O checksum é justamente o que
-ele confere com `Get-FileHash`.
+Antes havia um bucket `extrator` no MinIO alimentado por `POST /extrator/publicacao`,
+autenticado por token, com portão de versão, guarda de bump, parâmetro Aspire, variável e
+secret no GitHub e o valor espelhado no Environment do Dokploy. Tudo aquilo existia para
+administrar **uma** possibilidade: o extrator estar à frente ou atrás do backend que o
+atende. A defasagem era inofensiva para mudança **aditiva** de contrato (entrada
+desconhecida no ZIP nunca é validada nem carregada, arquivo novo entra como `OptionalFiles`,
+coluna é conferida por nome) e perigosa para mudança **destrutiva** — renomear ou remover
+coluna obrigatória faz o backend antigo recusar o ZIP do extrator novo. Sendo o mesmo
+artefato, a defasagem não existe e nada precisa administrá-la.
 
-**E a versão não é lida do csproj: o patch é derivado do histórico.** O csproj declara a
-**base** (`major.minor.patch`) e o `windows-tests` soma quantos commits tocaram o projeto do
-extrator desde o commit que introduziu aquela base, passando o resultado em `-p:Version=` —
-que alinha o assembly com o manifesto, dois números que antes divergiam em formato. Mexeu no
-extrator, o número anda e publica; não mexeu, fica e pula.
+**O arquivo mora fora de `wwwroot`, e isso não é arbitrário.** O `MapStaticAssets` serviria
+os ~118 MB **sem autenticação** a quem descobrisse a URL; o download é de comprador logado,
+por `GET /extrator/download` (`RequireAuthorization`). Os binários estão no `.gitignore` —
+118 MB por versão no git é inviável, e é justamente por isso que o arquivo entra no build em
+vez de no repositório.
 
-O porquê é um caso real: `0.18.1` foi definida em `2d03534` e `cc31b0e` mexeu no extrator
-depois, sem bump — as duas correções atravessaram **sete deploys** sem chegar ao comprador, e
-nada no pipeline reclamava. Houve uma versão intermediária deste desenho em que o job
-detectava esse estado e falhava pedindo o bump; ela saiu junto com a causa, porque um estado
-impossível é melhor que um estado detectável. **Você não bumpa nada** — minor e major
-continuam seus, e bumpar a base para `0.19.0` zera a contagem a partir dali. Mexa no
-**minor**, nunca no patch: `0.18.2` com 3 commits em cima já é `0.18.5`, então cravar
-`0.18.5` na base faria duas árvores diferentes carregarem o mesmo número.
+**O download passou a aceitar requisição parcial.** `Results.File` com caminho físico deixa
+o Kestrel responder com `sendfile`, honrar `Range` e emitir `ETag`/`Last-Modified`. Não é
+detalhe: são ~118 MB indo para um servidor de farmácia, e no desenho anterior um download
+interrompido recomeçava do zero, porque a origem era um stream do MinIO repassado por dois
+saltos.
 
-O valor do csproj continua valendo no build local (F5, publicação à mão): sem histórico para
-contar, é ele que `ZipManifest.VersaoAtual()` lê.
+#### O custo: 118 MB, uma vez por versão do extrator
 
-**Publicar antes de o backend novo subir é seguro, e por desenho.** O contrato de import é
-tolerante nas duas direções: entrada desconhecida no ZIP nunca é validada nem carregada,
-arquivo novo entra como `OptionalFiles` e coluna é conferida por nome. Foi assim que o
-`catalogo_eans.csv` da 0.18.0 conviveu com o backend anterior. Só uma mudança **destrutiva**
-de contrato (renomear ou remover coluna obrigatória) pediria ordenar deploy e publicação — e
-essa não sai sem alguém decidir.
+O executável self-contained dá ~118 MB e entra na imagem da Web. Isso seria uma layer nova
+para baixar em **todo** deploy se o binário mudasse a cada commit — e mudava, por duas vias
+independentes que o [`.csproj` do extrator](CosmosPro.ML.DemandForCast.Extractor/CosmosPro.ML.DemandForCast.Extractor.csproj)
+agora fecha:
 
-**A rota é autenticada por token, não por cookie.** `/admin/extrator` está atrás de sessão
-de `PowerUser`, e CI não loga numa tela Blazor; criar um usuário de serviço no Identity daria
-a um segredo de CI o mesmo alcance de um `PowerUser`, que enxerga o dado comercial de todas
-as redes. Então o grupo `/extrator/publicacao` vive na Web (o único processo que o Actions
-alcança) e confere um `Authorization: Bearer` em tempo fixo. Duas entradas no GitHub:
-
-| Entrada | Onde | Valor |
-|---|---|---|
-| `EXTRATOR_PUBLISH_URL` | **Variables** do repositório | a URL pública da Web, ex. `https://mldemandforecast-….sslip.io` |
-| `EXTRATOR_PUBLISH_TOKEN` | **Secrets** do repositório | o mesmo valor de `EXTRATOR_PUBLISH_TOKEN` no Environment do Dokploy |
-
-A URL fica em *Variables* e não em *Secrets* de propósito: o GitHub mascara valor de secret
-no log, e "não consegui falar com `***`" não diz com quem o job tentou falar — exatamente na
-hora em que o log é necessário. Ela não é segredo; o token é.
-
-**Sem as duas entradas o job não falha, ele se explica e sai.** Ambiente que não configurou
-continua publicando pela UI, e o endpoint responde **503** (desligado) em vez de aceitar um
-pedido sem token — comparar um token vazio com outro vazio daria "igual", e a rota que troca
-o executável baixado pelos clientes ficaria aberta a quem achasse a URL.
-
-Os status do `GET` são o que o job usa para saber onde está, e é por isso que ele responde
-**200 com campos nulos** quando nada foi publicado, em vez do 404 da rota interna:
-
-| Status | Significa |
+| Via | Propriedade |
 |---|---|
-| 200 | a Web no ar tem a rota e respondeu (`versao` nula = nada publicado ainda) |
-| 401 | o secret do GitHub e a env var do destino não são o mesmo valor |
-| 404 | a Web no ar é **anterior** ao commit que criou a rota — publique este backend antes |
-| 503 | o destino está sem `EXTRATOR_PUBLISH_TOKEN` preenchido |
+| O SDK anexava o commit ao `InformationalVersion` (`0.18.2+a42ed66…`) | `IncludeSourceRevisionInInformationalVersion=false` |
+| O SourceLink grava o commit no PDB, e o PE do executável carrega o **checksum do PDB** | `EnableSourceLink=false` |
 
-No fim, o job confere as **duas** pontas: o SHA-256 que a resposta devolve é o que o servidor
-recalculou do executável que gravou no bucket, e ele tem de bater com o do manifesto do run.
-Batendo, o binário daquela execução é o que o comprador vai baixar — nem outro arquivo, nem
-um corpo truncado no caminho.
+A segunda é a que não se adivinha: mesmo com a versão limpa, o exe continuava mudando a cada
+commit. E o SourceLink lê o **HEAD do git direto**, não a propriedade `SourceRevisionId` —
+sobrescrever aquela propriedade não muda nada. Medido em commits diferentes com build limpo:
+o mesmo `7f3fcf19…` nas duas pontas.
 
-#### Publicar pela UI (fallback)
+Com os dois desligados o executável é byte a byte idêntico enquanto o fonte e a versão não
+mudam. Duas consequências: o **checksum passa a ser identidade de conteúdo** (mesma versão ⇒
+mesmo arquivo, e não mais "mesma versão, hash diferente a cada deploy", que faria o comprador
+duvidar do que baixou), e a layer fica **cacheada** — deploy que não toca o extrator não
+re-baixa nada.
 
-Continua valendo, e é o caminho quando o token não está configurado, quando é preciso
-republicar a mesma versão, ou quando o destino não é o de produção:
+O que se perde: o PDB deixa de apontar para o fonte no GitHub. Custa nada aqui, porque o PDB
+**não é distribuído** — o CI copia só o `.exe` —, então nunca houve mapeamento de fonte em
+diagnóstico de campo; e localmente o desenvolvedor tem o fonte na mão.
 
-1. **Baixar o artefato `extrator`** da execução do Actions (job "Testes do extrator
-   (Windows)" — é o único runner Windows do pipeline, e o extrator é WinForms). A UI do
-   Actions entrega um `.zip` com `extrator.exe` e `manifesto.json`, este já com a versão do
-   `<Version>` do csproj e o SHA-256 calculado.
-2. **Publicar em `/admin/extrator`** (só `PowerUser`), enviando **o `.zip` como veio** — sem
-   descompactar. A tela mostra a versão vigente antes e depois.
+Se um dia os 118 MB na imagem incomodarem, a saída é a que o `worker` já usa para o
+`libgomp1`: uma base própria carregando o executável, que vira layer de base cacheada. É mais
+uma peça móvel, e não vale antecipar.
 
-**Um pacote, não dois campos de arquivo, e isso é deliberado.** O erro que importa nesta
-operação é misturar execuções: mandar o `.exe` de uma com o `manifesto.json` de outra
-publicaria um checksum que o download não cumpre, e quem conferisse concluiria "executável
-adulterado" quando o fato foi um arquivo errado arrastado na pressa. Um ZIP lacrado, vindo
-de um download só, torna essa combinação impossível na origem.
+#### A versão: derivada do histórico, não escrita à mão
 
-O servidor ainda assim **recalcula** o SHA-256 do executável que vem dentro do pacote e o
-confere contra o declarado — agora como rede contra ZIP corrompido ou montado à mão. Pacote
-incoerente é recusado sem escrever nada, e a versão que já estava no ar continua intacta.
-O `publicadoEm` gravado é o instante da publicação, não a hora do build que veio no
-manifesto: um artefato de semanas atrás publicado hoje está disponível desde hoje.
+O `<Version>` do csproj é a **base**; o job `windows-tests` soma quantos commits tocaram o
+projeto do extrator desde o commit que introduziu aquela base e passa o resultado em
+`-p:Version=`, que alinha o assembly com o manifesto. Mexeu no extrator, o número anda; não
+mexeu, fica.
 
-O ZIP entra como um arquivo só, mas o bucket continua guardando **dois objetos**. É o
-`/versao` que decide isso: ele lê um manifesto de ~200 bytes a cada render da página da
-sessão, e não teria por que abrir um ZIP de ~118 MB para isso.
+Ela deixou de ser portão de coisa alguma — não há mais publicação para pular — e continua
+existindo porque é o que o comprador lê na tela e cita ao suporte. **Você não bumpa nada**;
+minor e major continuam seus, e bumpar a base para `0.19.0` reancora a contagem. Mexa no
+**minor**, nunca no patch: `0.18.2` com 3 commits em cima já é `0.18.5`.
 
-O checksum existe para o comprador conferir o arquivo que baixou, e é calculado **uma vez**
-na publicação, não a cada download: rehashear ~118 MB por request sob várias sessões
-simultâneas seria custo de CPU pago por quem baixa, para um arquivo que não muda entre
-releases.
+O porquê da derivação é um caso real: `0.18.1` foi definida em `2d03534` e `cc31b0e` mexeu no
+extrator depois, sem bump — as duas correções atravessaram **sete deploys** sem chegar ao
+comprador, e nada no pipeline reclamava.
 
-#### Publicar à mão (sem CI, ou em ambiente local)
+#### Conferir o que está no ar
 
-**1. Gerar o `.exe`** (o porquê de cada flag em
-[Docs/extracao-pbs-stage.md § Como publicar o extrator](Docs/extracao-pbs-stage.md#como-publicar-o-extrator)):
+`/admin/extrator` (só `PowerUser`) mostra versão, checksum e data de geração do executável
+desta instalação. É tela informativa, sem operação: responde "qual versão o comprador vai
+baixar?" sem abrir o Dokploy, e serve para conferir o hash que a página da sessão mostra a
+ele. O mesmo par aparece no log de startup da Web.
+
+#### No F5 e no build local, não há extrator — e isso é o esperado
+
+Quem preenche `Assets/extrator/` é o CI. Localmente a pasta não existe, `ExtratorEmbutido`
+trata como ausência, o botão de download fica desabilitado e as duas telas explicam. Um
+manifesto ilegível ou incompleto cai no mesmo caminho, de propósito: tira o download do ar,
+mas **não** derruba a aplicação — o resto dela não depende do extrator.
+
+Para exercitar o caminho localmente, gere o par e reinicie a Web (o manifesto é lido uma vez
+no startup):
 
 ```powershell
 dotnet publish CosmosPro.ML.DemandForCast.Extractor -c Release -r win-x64 `
   --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+
+$destino = "CosmosPro.ML.DemandForCast.Web\Assets\extrator"
+New-Item -ItemType Directory -Force $destino | Out-Null
+$exe = "CosmosPro.ML.DemandForCast.Extractor\bin\Release\net10.0-windows\win-x64\publish\CosmosPro.ML.DemandForCast.Extractor.exe"
+Copy-Item $exe "$destino\extrator.exe"
+
+$versao = (dotnet msbuild CosmosPro.ML.DemandForCast.Extractor\CosmosPro.ML.DemandForCast.Extractor.csproj -getProperty:Version).Trim()
+$sha = (Get-FileHash "$destino\extrator.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+[ordered]@{ versao = $versao; sha256 = $sha; geradoEm = (Get-Date).ToUniversalTime().ToString("o") } |
+  ConvertTo-Json | Set-Content "$destino\manifesto.json" -Encoding utf8
 ```
 
-Saída em `CosmosPro.ML.DemandForCast.Extractor\bin\Release\net10.0-windows\win-x64\publish\CosmosPro.ML.DemandForCast.Extractor.exe`.
-
-**2. Calcular o checksum SHA-256** do `.exe` gerado:
-
-```powershell
-Get-FileHash .\CosmosPro.ML.DemandForCast.Extractor.exe -Algorithm SHA256
-```
-
-(equivalente em Linux/macOS: `sha256sum` ou `shasum -a 256`).
-
-**3. Escrever o `manifesto.json`** com a versão (mesma do `<Version>` no
-`CosmosPro.ML.DemandForCast.Extractor.csproj`) e o hash do passo anterior:
-
-```json
-{
-  "versao": "0.14.0",
-  "sha256": "<hash em minúsculas do passo 2>",
-  "publicadoEm": "2026-07-30T12:00:00Z"
-}
-```
-
-A leitura é case-insensitive nas chaves (`versao`/`Versao` tanto faz) — de propósito,
-para um manifesto escrito à mão às pressas não falhar silenciosamente por causa de
-maiúscula/minúscula.
-
-**4. Zipar os dois** — `extrator.exe` e `manifesto.json`, com esses nomes — e publicar em
-`/admin/extrator`. A tela aceita subpasta dentro do ZIP (um pacote feito da pasta de
-publicação serve), mas **não** aceita dois `.exe` no mesmo pacote: qual dos dois toda a
-base vai rodar não é escolha para um desempate silencioso.
-
-Os passos abaixo são a alternativa que fala direto com o MinIO — útil em desenvolvimento,
-onde o console está a um clique no Aspire Dashboard. **No deploy ela não existe:** o MinIO
-não tem endpoint publicado (só a Web atravessa o Traefik), então lá é a UI ou um shell na
-VPS.
-
-**Subir os dois arquivos para o bucket `extrator`**, como `extrator.exe` e
-`manifesto.json` (nomes fixos — a apiservice só procura por esses dois). O jeito mais
-simples é pelo **MinIO Console**: no Aspire Dashboard, abra o recurso `minio`, o endpoint
-do console (login `minioadmin`/`minioadmin` em ambiente local — outras credenciais vêm
-dos parâmetros `minio-access-key`/`minio-secret-key` do AppHost), crie o bucket
-`extrator` se ainda não existir, e arraste os dois arquivos para dentro dele — **sempre
-os dois juntos**: publicar só o `.exe` deixa `/api/extrator/versao` respondendo 404
-("não publicado") mesmo com o download já funcionando, e publicar só o manifesto deixa a
-versão/checksum aparecerem na tela para um download que ainda falha.
-
-Alternativa via [`mc`](https://min.io/docs/minio/linux/reference/minio-mc.html) (útil para
-automatizar em pipeline de release):
-
-```sh
-mc alias set cosmospro-local http://localhost:<porta-do-endpoint-minio> minioadmin minioadmin
-mc mb --ignore-existing cosmospro-local/extrator
-mc cp CosmosPro.ML.DemandForCast.Extractor.exe cosmospro-local/extrator/extrator.exe
-mc cp manifesto.json cosmospro-local/extrator/manifesto.json
-```
-
-A porta do endpoint MinIO muda a cada `F5` (Aspire aloca portas dinamicamente em dev) —
-confirme no Aspire Dashboard antes de rodar o `mc alias set`.
-
-**Sem versão publicada é o estado normal de um ambiente recém-criado, não um bug:** a
-página da sessão mostra "o extrator ainda não foi publicado" no lugar do botão desabilitado,
-e `GET /api/extrator/versao`/`GET /api/extrator/download` respondem 404 com uma mensagem
-igualmente clara — nunca um 404 cru ou um stack trace. Se em vez de 404 a resposta for 500,
-o problema é outro: MinIO fora do ar ou inacessível, não falta de publicação — as duas
-situações têm respostas diferentes de propósito, para quem estiver de plantão saber por
-onde começar.
+O `manifesto.json` é lido com chaves **case-insensitive** e tolera BOM — `File.ReadAllText`
+o descarta, e a sobrecarga de `JsonSerializer.Deserialize` sobre **bytes** não o pularia,
+estourando com "input does not begin with a valid JSON token" e fazendo o extrator
+desaparecer da tela em silêncio.
 
 ### Pipeline de CI e imagens de container
 
@@ -473,14 +401,13 @@ onde começar.
 > de cada peça.
 
 [`.github/workflows/ci-imagens.yml`](.github/workflows/ci-imagens.yml) roda a **push na
-`main`** e sob demanda (`workflow_dispatch`). São quatro jobs, nessa dependência:
+`main`** e sob demanda (`workflow_dispatch`). São três jobs, nessa dependência:
 
 | Job | Runner | O que faz |
 |---|---|---|
-| `windows-tests` | `windows-latest` | Testes do extrator **e** o binário dele: **deriva a versão** do histórico (ver "Publicar o extrator no MinIO"), publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json` e sobe o par como artefato `extrator`. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele, e é por isso que a suíte é dividida por sistema operacional, não por capricho de paralelismo. Este é o único job com `fetch-depth: 0`, e é a derivação da versão que exige. O `.exe` não entra em imagem nenhuma; quem o leva ao destino é o job `publicar-extrator`. |
+| `windows-tests` | `windows-latest` | Testes do extrator **e** o binário dele: **deriva a versão** do histórico (ver "O extrator, embutido na imagem"), publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json` e sobe o par como artefato `extrator`. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele, e é por isso que a suíte é dividida por sistema operacional, não por capricho de paralelismo. Este é o único job com `fetch-depth: 0`, e é a derivação da versão que exige. Quem consome o artefato é o job `images`, que o embute na imagem da Web. |
 | `linux-tests` | `ubuntu-latest` | Compila em **Debug** (mesma configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`), roda os dez projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
 | `images` | `ubuntu-latest` | Só se os dois anteriores passarem: constrói e empurra a **imagem base do worker** (abaixo), `aspire do push` (constrói e empurra as quatro imagens, na tag imutável), um **smoke** que abre a imagem do worker e confere as dependências nativas do LightGBM, um passo de `docker tag`/`docker push` que acrescenta a tag móvel, `aspire publish` (gera `docker-compose.yaml` + `.env`, publicados como artefato `aspire-compose`) e a **conferência do compose**: o gerado é comparado com `deploy/docker-compose.yaml` e a divergência é build vermelho (ver "O que o operador precisa preencher no `.env`"). |
-| `publicar-extrator` | `ubuntu-latest` | Só em `main`, e só se os dois jobs de teste passarem: manda o par exe+manifesto para `POST /extrator/publicacao` no destino, **quando a versão difere da que está no ar** (ver "Publicar o extrator no MinIO"). Não depende de `images` nem faz deploy. |
 
 Os testes de integração e E2E ficam em **passos separados e sequenciais** do mesmo job de
 propósito: eles se excluem mutuamente por um lock de arquivo entre processos
@@ -579,16 +506,12 @@ jeito que o `aspire publish` gera — nenhuma credencial trafega pelo pipeline:
   storage.
 - `POWERUSER_EMAIL`, `POWERUSER_PASSWORD` — o administrador global semeado no primeiro
   start da Web. Sem eles a Web **falha no startup de propósito**.
-- `EXTRATOR_PUBLISH_TOKEN` — o token que o CI usa para publicar o extrator (ver "Publicar o
-  extrator no MinIO"). Tem de ser o mesmo valor do secret `EXTRATOR_PUBLISH_TOKEN` no
-  GitHub. Ao contrário dos dois acima, deixar em branco **não** derruba a Web: a rota de
-  publicação responde 503 desligada e a UI em `/admin/extrator` continua funcionando — o que
-  se perde é só a automação.
 
 **Parâmetro novo no AppHost significa linha nova no compose, e o compose da produção é `raw`
 colado à mão.** Preencher a variável no Environment do Dokploy **não basta**: se o YAML lá
-não tiver o `Extrator__PublishToken: "${EXTRATOR_PUBLISH_TOKEN}"` no serviço, o processo não
-recebe nada e a falha é silenciosa (a rota responde 503 como se ninguém tivesse configurado).
+não tiver a linha `Alguma__Chave: "${ALGUMA_CHAVE}"` no serviço, o processo não recebe nada
+— e a falha costuma aparecer como "não configurado", que é o sintoma de quem esqueceu o
+valor, não de quem esqueceu de recolar o YAML.
 Todo deploy que acrescenta parâmetro é um deploy de **regenerar e recolar** o compose, não de
 "topologia inalterada".
 
@@ -734,7 +657,7 @@ O POC deixa de ser banco de provas single-user e passa a ser instrumento de cole
   - **Resultado materializado, nunca recalculado.** `SessaoResultadoMaterializador` grava, na última volta em que a sessão ainda está em `Comparando`, uma linha por item em `ComparacaoSessaoItens` (`SqlBulkCopy`) e os agregados da manchete em `ComparacaoSessao.ResultadoJson` — **`DELETE` + bulk + `UPDATE Status='Concluida'` na mesma transação**, com o `WHERE Status = <fase reclamada>` que impede materialização em dobro. O montador (`SessaoResultadoMontador`) é puro. Ver a regra e o motivo em CLAUDE.md §4.
   - **Tela do comprador** (`Sessao.razor`, polling de 3s que para em estado terminal): `ManchetesComparacao` com duas colunas — "Pelo PBS" (o que de fato foi comprado, sobre a população inteira) e "Como teria sido pelo ML" (só sobre os itens em que **os dois** braços existem, com a frase "compare com X, não com o número da coluna ao lado"). `OndeOMlFoiPior` fica **fora das abas**, acima delas: a notícia ruim não pode depender de um clique. Abas "Itens comparados" (`TabelaItensComparacao`, paginada e ordenada no servidor por whitelist — `OrdemItensSessao`) e "Área técnica" (`AreaTecnicaComparacao`, `GET /api/comparacoes/{id}/analise`: previsão × previsão por curva e por loja, com numerador e denominador visíveis em vez de um WAPE que parece falar da população inteira).
   - **Uma sessão em voo por rede**, bloqueada no envio de dados e não na criação (`ComparacoesEndpoints.SessaoConcorrenteAsync`) — ver CLAUDE.md §4. Endpoints: `POST /api/comparacoes`, `GET /api/comparacoes`, `GET /api/comparacoes/{id}`, `POST /api/comparacoes/{id}/dados`, `GET /api/comparacoes/{id}/itens`, `GET /api/comparacoes/{id}/analise`.
-  - **Download do extrator via MinIO**: `GET /api/extrator/download` (stream do bucket `extrator`, nunca materializa o `.exe` inteiro em memória) e `GET /api/extrator/versao` (versão + checksum SHA-256, lidos do `manifesto.json` publicado ao lado do executável — calculado uma vez na publicação, não a cada download). 404 claro e distinto de falha de infraestrutura quando nada foi publicado ainda. Botão "Baixar extrator" na página da sessão, só em `AguardandoDados`. Sem `redeId` em nenhum dos dois — o executável não é dado de inquilino. Passo a passo de publicação em [§ Publicar o extrator no MinIO](#publicar-o-extrator-no-minio) acima.
+  - **Download do extrator**: `GET /extrator/download` na Web, servindo o executável que vem **embutido na imagem** (`Assets/extrator/`, fora de `wwwroot`, atrás de `RequireAuthorization`), com requisição parcial habilitada. Botão "Baixar extrator" na página da sessão, só em `AguardandoDados`, com versão e checksum ao lado. Sem `redeId` — o executável não é dado de inquilino. O desenho anterior (bucket `extrator` no MinIO, `GET /api/extrator/*` na apiservice e publicação por endpoint autenticado por token) foi removido: ver [§ O extrator, embutido na imagem](#o-extrator-embutido-na-imagem).
   - **Limitações declaradas, na tela e aqui** (todas encontradas durante a implementação, nenhuma resolvida):
     - **A compra do braço de ML não é calculável hoje.** O pipeline prevê 7 dias (`DecisionOptions.HorizonteMaximoMl`) e a cobertura do PBS é de 15 a 30, então a camada B cai em `ForaDoHorizonteMl` e a tela mostra a coluna do ERP com uma explicação em português de por que a coluna de ML não existe (`SessaoResultado.MotivoMlIndisponivel`). As colunas do braço de ML são **anuláveis de propósito**: nulo é "não foi possível calcular", nunca "o ML disse zero". Estender exige previsão multi-horizonte — o mesmo bloqueio da F9.
     - **As figuras em R$ excluem itens sem `PrecoCompra`**, que entram nos agregados com unidades e zero em reais. `SessaoResultado.ItensSemPrecoCompra` viaja ao lado do número e a manchete o exibe ("este valor em reais está incompleto"), para o total não ser lido como completo.

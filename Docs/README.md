@@ -3,8 +3,8 @@
 > **Para quem é isto:** material acadêmico/didático que explica o **funcionamento conceitual** do POC do ponto de vista de Machine Learning e previsão de demanda. **Não cobre arquitetura de software** — para isso veja o [README do projeto](../README.md) e o [CLAUDE.md](../CLAUDE.md).
 >
 > Esta pasta também guarda docs **não didáticas**, fora do índice abaixo — entre elas
-> [fluxo-de-entrega.md](fluxo-de-entrega.md) (do commit ao comprador: CI, deploy e publicação
-> do extrator), [extracao-pbs-stage.md](extracao-pbs-stage.md) e [schema.md](schema.md).
+> [fluxo-de-entrega.md](fluxo-de-entrega.md) (do commit ao comprador: CI, deploy e o extrator
+> embutido na imagem), [extracao-pbs-stage.md](extracao-pbs-stage.md) e [schema.md](schema.md).
 >
 > **Premissa:** o leitor sabe varejo farma (eMax, eSeg, sugestão de compra) mas não necessariamente ML. Toda a explicação ancora no domínio quando possível.
 

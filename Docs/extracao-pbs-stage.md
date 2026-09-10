@@ -38,7 +38,7 @@ a cada tabela/campo resolvido.
 | Estoque | grade diária com **carry-forward** |
 | Volume estimado | ~12M linhas de estoque (~50 MB zipado) |
 
-### Como publicar o extrator
+### Como o extrator chega ao comprador
 
 ```
 dotnet publish CosmosPro.ML.DemandForCast.Extractor -c Release -r win-x64 ^
@@ -51,10 +51,12 @@ O comando acima é para gerar o `.exe` à mão. No caminho normal quem o gera é
 Windows publica, calcula o checksum e sobe o par `extrator.exe` + `manifesto.json` como
 artefato `extrator` da execução — que a UI do Actions entrega como um `.zip`.
 
-De um jeito ou de outro, o `.exe` só chega ao comprador depois de publicado no bucket MinIO
-`extrator` — pela tela `/admin/extrator` (`PowerUser`), que recebe **um ZIP** com os dois
-arquivos. Passo a passo em
-[README.md § Publicar o extrator no MinIO](../README.md#publicar-o-extrator-no-minio).
+**Não há publicação separada.** O job `images` baixa aquele artefato e embute o par na imagem
+da Web (`Assets/extrator/`, fora de `wwwroot`), então o `.exe` chega ao comprador junto com o
+próximo deploy do backend — mesmo commit, mesma imagem, mesmo clique. O download é
+`GET /extrator/download`, atrás de login. Antes disso ele era publicado à parte num bucket
+MinIO por uma tela de upload; o porquê da troca está em
+[README.md § O extrator, embutido na imagem](../README.md#o-extrator-embutido-na-imagem).
 
 > **Guardrail:** este documento não contém credenciais, hosts nem dados reais — só
 > estrutura, mapeamento e contagens agregadas.

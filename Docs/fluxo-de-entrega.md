@@ -11,52 +11,39 @@
 
 ## 1. Visão de 30 segundos
 
-Um commit em `main` produz **três** artefatos, que seguem para **dois** destinos por
-caminhos diferentes. Nem tudo é automático, e isso é deliberado.
+Um commit em `main` produz artefatos que seguem por **um** caminho até a produção. O
+extrator não é exceção: ele vai **dentro** da imagem da Web.
 
 ```mermaid
 flowchart LR
     C["commit em main"] --> CI["GitHub Actions<br/>ci-imagens.yml"]
 
-    CI --> IMG["4 imagens no GHCR<br/>apiservice, webfrontend,<br/>worker, db-migrator"]
+    CI --> EXE["extrator.exe<br/>construido no runner Windows"]
+    EXE --> IMG["4 imagens no GHCR<br/>o exe vai DENTRO da webfrontend"]
     CI --> CMP["artefato aspire-compose<br/>docker-compose.yaml + .env"]
-    CI --> EXE["artefato extrator<br/>extrator.exe + manifesto.json"]
 
     IMG --> DEP["Deploy no Dokploy<br/>MANUAL, um clique"]
     CMP --> DEP
-    DEP --> VPS["Backend no ar<br/>na VPS"]
-
-    EXE --> PUB["job publicar-extrator<br/>AUTOMATICO, com portao"]
-    PUB --> MINIO["bucket MinIO extrator"]
-    MINIO --> COMP["comprador baixa<br/>pela pagina da sessao"]
-
-    IND{{"NAO SE ESPERAM: a publicacao do extrator<br/>nao aguarda o deploy do backend — §6"}}
-    DEP -.- IND
-    PUB -.- IND
+    DEP --> VPS["Backend e extrator no ar<br/>na VPS"]
+    VPS --> COMP["comprador baixa o extrator<br/>pela pagina da sessao"]
 
     style DEP fill:#fea,stroke:#4a4a4a,color:#1a1a1a
-    style PUB fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+    style IMG fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
     style VPS fill:#eef,stroke:#4a4a4a,color:#1a1a1a
     style COMP fill:#eef,stroke:#4a4a4a,color:#1a1a1a
-    style IND fill:#eef,stroke:#4a4a4a,color:#1a1a1a
 ```
-
-**O executável não viaja em imagem nenhuma.** Ele é WinForms, roda na máquina que enxerga o
-PBS, e chega ao comprador por download da página da sessão — servido do MinIO. Por isso são
-dois caminhos de entrega, e não um.
-
-**E os dois não se esperam.** `publicar-extrator` depende dos dois jobs de teste, e de mais
-nada — nem de `images`, nem do seu clique no Dokploy. Então o extrator é publicado contra o
-backend que **já está no ar**, tipicamente antes de você deployar o novo. Isso é seguro por
-desenho do contrato de import, e §6 tem o porquê e o único caso em que a ordem passaria a
-importar.
 
 | Artefato | Vai para | Quem leva | Quando |
 |---|---|---|---|
-| 4 imagens de container | GHCR, duas tags cada | CI (`images`) | todo push verde em `main` |
+| 4 imagens de container, com o extrator embutido na Web | GHCR, duas tags cada | CI (`images`) | todo push verde em `main` |
 | `docker-compose.yaml` + `.env` | artefato do run | CI (`images`) | idem |
-| `extrator.exe` + `manifesto.json` | bucket MinIO `extrator` | CI (`publicar-extrator`) | **só quando a versão muda** |
 | — | containers rodando na VPS | **você**, no Dokploy | quando você decidir |
+
+**Aqui existia um segundo caminho de entrega.** O extrator era publicado à parte, num bucket
+do MinIO, por um endpoint autenticado por token — e por isso podia estar à frente ou atrás
+do backend que o atende. Ele saiu: o executável passou a ser um asset da imagem, e a
+pergunta "está à frente ou atrás?" deixou de existir junto com a máquina que a administrava
+(§6).
 
 ---
 
@@ -66,10 +53,10 @@ importar.
 flowchart TB
     subgraph AUTO["Automático — não pede permissão"]
         A1["Rodar a suíte inteira"]
-        A2["Construir e empurrar as imagens"]
-        A3["Gerar o compose e o .env"]
+        A2["Construir o extrator e embuti-lo<br/>na imagem da Web"]
+        A3["Construir e empurrar as imagens"]
         A4["Derivar a versão do extrator"]
-        A5["Publicar o extrator, se a versão mudou"]
+        A5["Gerar o compose e o .env"]
         A6["Acusar compose desatualizado<br/>e variável nova"]
         A7["Aplicar DACPAC e EF migrations<br/>no start do db-migrator"]
     end
@@ -91,10 +78,9 @@ rede. Cada deployment do Dokploy carrega uma descrição escrita à mão dizendo
 entram e o que muda na leitura dos dados existentes — é o único ponto do fluxo em que alguém
 lê a mudança antes de ela alcançar o banco. `autoDeploy` está em `false` de propósito.
 
-**Por que a publicação do extrator é automática.** Não toca banco, não derruba serviço, e o
-contrato de import é tolerante nas duas direções (§5). O que ela substituiu era pior: baixar
-o `.zip` do Actions, logar como `PowerUser` e subir à mão — passo que ficou esquecido por sete
-deploys seguidos.
+**E é por isso que o extrator entrar na imagem resolveu, em vez de mais automação.** Um
+segundo canal de entrega precisava de token, portão de versão e guarda de bump só para não
+se desencontrar do primeiro. Um canal só não precisa de nada disso.
 
 ---
 
@@ -117,42 +103,59 @@ Dois pontos que não são cerimônia:
   executa SQL — as queries são recurso embarcado e os testes são unitários. Foi assim que uma
   coluna inexistente passou por 288 testes verdes e morreu na mão do comprador. Use o acesso
   de leitura à instância da Natusfarma.
-- **Não há bump de versão do extrator para fazer.** O patch é derivado do histórico (§6). E se
-  você esquecer de regenerar o compose, o CI fica vermelho dizendo isso (§4) — nenhum dos dois
-  depende de você lembrar.
+- **Não há bump de versão do extrator para fazer.** O patch é derivado do histórico (§6). E
+  se você esquecer de regenerar o compose, o CI fica vermelho dizendo isso (§4) — nenhum dos
+  dois depende de você lembrar.
+
+No F5 **não há extrator**: quem preenche `Assets/extrator/` é o CI, então o botão de download
+fica desabilitado e as telas explicam. Se precisar exercitar esse caminho localmente, o
+README tem o passo a passo de gerar o par à mão.
 
 ---
 
 ## 4. Etapa 1 — push em `main` dispara o CI
 
-`.github/workflows/ci-imagens.yml`, em push na `main` ou por `workflow_dispatch`. Quatro
-jobs, com essa dependência:
+`.github/workflows/ci-imagens.yml`, em push na `main` ou por `workflow_dispatch`. Três jobs:
 
 ```mermaid
 flowchart TB
     W["windows-tests<br/>Windows"]
     L["linux-tests<br/>Linux"]
     I["images"]
-    P["publicar-extrator"]
 
     W --> I
     L --> I
-    W --> P
-    L --> P
-
-    W -.->|"artefato extrator"| P
+    W -.->|"artefato extrator<br/>(vai para dentro da imagem)"| I
     I -.->|"artefato aspire-compose"| OP(["você, na etapa 2"])
 
-    style I fill:#eef,stroke:#4a4a4a,color:#1a1a1a
-    style P fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+    style I fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 | Job | O que faz | Por que existe assim |
 |---|---|---|
-| `windows-tests` | Testes do extrator, **deriva a versão** do histórico (§6) e publica o binário: `win-x64` self-contained, SHA-256, `manifesto.json`, tudo no artefato `extrator`. | O extrator é WinForms (`net10.0-windows`) e **não compila em Linux** — nem ele nem o teste dele. A suíte é dividida por sistema operacional por necessidade, não por paralelismo. |
+| `windows-tests` | Testes do extrator, **deriva a versão** do histórico (§6) e publica o binário: `win-x64` self-contained, SHA-256, `manifesto.json`, tudo no artefato `extrator`. | O extrator é WinForms (`net10.0-windows`) e **não compila em Linux** — nem ele nem o teste dele. A suíte é dividida por sistema operacional por necessidade, não por paralelismo. É o único job com `fetch-depth: 0`, e é a derivação da versão que exige. |
 | `linux-tests` | Compila em **Debug**, roda os dez projetos de teste puros e depois os dois que sobem o AppHost real com SQL Server e MinIO em container. | Debug porque é a configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`. Integração e E2E ficam em passos **sequenciais**: eles se excluem por um lock de arquivo, e em paralelo o segundo esperaria o tempo do lock. |
-| `images` | Imagem base do worker, `aspire do push` (as quatro imagens, tag imutável), **smoke** da imagem do worker, tag móvel, `aspire publish` e a **conferência do compose** (abaixo). | Só roda se os dois jobs de teste passarem. |
-| `publicar-extrator` | Compara versões e publica o extrator no destino. Só em `main`. | Não depende de `images` — o `.exe` não entra em imagem. Depende de `linux-tests` **por mérito**: extrator não vai para a mão do comprador a partir de commit com o backend vermelho. |
+| `images` | Baixa o artefato `extrator` para `Assets/extrator/`, confere o par, imagem base do worker, `aspire do push`, **smoke** da imagem do worker, tag móvel, `aspire publish` e a **conferência do compose**. | Só roda se os dois jobs de teste passarem. A dependência do `windows-tests` deixou de ser só ordem: o `.exe` daquele job entra **dentro** da imagem que este monta. |
+
+### O extrator entrando na imagem
+
+```mermaid
+flowchart LR
+    WT["windows-tests<br/>publica o exe"] -->|"artefato"| DL["images:<br/>download-artifact"]
+    DL --> AS["Web/Assets/extrator/"]
+    AS --> CK{"os dois arquivos,<br/>SHA-256 confere?"}
+    CK -->|"não"| ERR["VERMELHO"]
+    CK -->|"sim"| BLD["aspire do push<br/>monta a webfrontend"]
+
+    style ERR fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
+    style BLD fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+```
+
+O passo **recalcula** o SHA-256 e confere contra o declarado no manifesto. Os dois arquivos
+saem do mesmo passo no Windows, então divergir aqui significa artefato corrompido no
+transporte — e esse hash é a promessa que a tela mostra ao comprador para ele conferir com
+`Get-FileHash`. Publicar um valor que o download não cumpre faria quem conferisse concluir
+"executável adulterado".
 
 ### O smoke do worker, e por que ele não é redundante
 
@@ -186,7 +189,7 @@ flowchart TB
     G["aspire publish"] --> D{"o gerado == deploy/docker-compose.yaml?"}
     D -->|"sim"| OK["verde"]
     D -->|"não"| E["VERMELHO com o diff no log<br/>e o arquivo no artefato"]
-    E --> V{"apareceu ${VAR} nova?"}
+    E --> V{"apareceu variavel nova?"}
     V -->|"sim"| VN["mensagem extra:<br/>preencha no Environment<br/>ANTES de deployar"]
     V -->|"não"| TO["só topologia:<br/>recole o YAML"]
 
@@ -211,7 +214,7 @@ Não é intermitência, é notícia.
 
 ---
 
-## 5. Etapa 2 — deploy do backend (manual)
+## 5. Etapa 2 — deploy (manual)
 
 ```mermaid
 sequenceDiagram
@@ -224,7 +227,7 @@ sequenceDiagram
     Você->>GH: baixar artefato aspire-compose
     Note over Você,GH: só se a topologia do AppHost mudou
     Você->>DK: recolar o docker-compose.yaml (raw)
-    Você->>DK: preencher o Environment<br/>(*_IMAGE com a tag sha-xxxxxxx)
+    Você->>DK: preencher o Environment (*_IMAGE na tag sha)
     Você->>DK: clicar Deploy
     DK->>MIG: sobe primeiro
     MIG->>MIG: DACPAC no Stage
@@ -235,9 +238,12 @@ sequenceDiagram
     else tudo aplicado
         MIG-->>DK: exit 0
         DK->>SVC: service_completed_successfully libera
-        SVC-->>Você: no ar
+        SVC-->>Você: backend E extrator no ar
     end
 ```
+
+**Este clique entrega o extrator também.** É a mudança de desenho: não há segundo passo, nem
+segundo artefato para conferir depois.
 
 ### Quando é preciso recolar o YAML
 
@@ -274,6 +280,10 @@ rodando?" deixaria de ter resposta. Os quatro serviços têm `pull_policy: alway
 porque o Compose aceita "já existe local" — sem isso, deploy depois de CI verde subiria o
 binário antigo **e reportaria sucesso**.
 
+**A imagem da Web ficou ~118 MB maior**, e isso é pago **uma vez por versão do extrator**, não
+por deploy: o executável é byte a byte idêntico enquanto o fonte e a versão não mudam (§6),
+então a layer fica cacheada.
+
 ### O que sobe sozinho depois
 
 - **`restart: unless-stopped`** em todos os serviços menos o `db-migrator` (one-shot; com
@@ -284,69 +294,61 @@ binário antigo **e reportaria sucesso**.
 
 ---
 
-## 6. Etapa 3 — publicação do extrator (automática)
+## 6. O extrator: um asset, não uma publicação
 
-```mermaid
-flowchart TB
-    ST["job publicar-extrator"] --> CFG{"EXTRATOR_PUBLISH_URL<br/>e TOKEN configurados?"}
-    CFG -->|não| SKIP["aviso e sai VERDE<br/>publicação pela UI segue valendo"]
-    CFG -->|sim| GET["GET /extrator/publicacao"]
+O executável vem **dentro** da imagem da Web, em `Assets/extrator/`, **fora de `wwwroot`** — o
+`MapStaticAssets` serviria os ~118 MB sem autenticação a quem descobrisse a URL, e o download é
+de comprador logado.
 
-    GET --> ST404{"status"}
-    ST404 -->|"404"| E404["VERMELHO: a Web no ar é<br/>anterior a esta rota.<br/>Deploye o backend primeiro"]
-    ST404 -->|"401"| E401["VERMELHO: secret != env var<br/>do destino"]
-    ST404 -->|"503"| E503["VERMELHO: destino sem<br/>token preenchido"]
-    ST404 -->|"200"| CMP{"versão no ar<br/>== versão do build?"}
+**O que isso substituiu, e por que.** Havia um bucket `extrator` no MinIO alimentado por um
+endpoint autenticado por token, com portão de versão, guarda de bump, parâmetro Aspire,
+variável e secret no GitHub e o valor espelhado no Dokploy. Tudo aquilo administrava **uma**
+possibilidade: o extrator estar à frente ou atrás do backend. Sendo o mesmo artefato, ela não
+existe.
 
-    CMP -->|"não"| POST["POST do ZIP<br/>e confere versão + SHA<br/>que o servidor recalculou"]
-    POST --> DONE["PUBLICADO"]
-
-    CMP -->|"sim"| NOP["aviso: já está no ar,<br/>nada publicado"]
-
-    style DONE fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
-    style SKIP fill:#eef,stroke:#4a4a4a,color:#1a1a1a
-    style NOP fill:#eef,stroke:#4a4a4a,color:#1a1a1a
-    style E404 fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
-    style E401 fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
-    style E503 fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
-```
-
-**O portão é a versão, não o commit.** O binário muda em **todo** build mesmo sem mudança no
-extrator — o SDK anexa o commit ao `InformationalVersion`, então o SHA-256 sai diferente — com
-o `<Version>` parado. Publicar por push encheria a tela do comprador de "0.18.2" com checksum
-novo a cada vez, e o checksum é justamente o que ele confere com `Get-FileHash`.
-
-**E o número anda sozinho, porque o patch é derivado do histórico.** O csproj declara a base
-(`0.18.2`) e o `windows-tests` soma quantos commits tocaram o projeto do extrator desde o commit
-que introduziu essa base:
+### A versão anda sozinha, mas os bytes não
 
 ```mermaid
 flowchart LR
     B["base no csproj<br/>0.18.2"] --> C["commit que a introduziu<br/>git log -S"]
     C --> N["quantos commits tocaram<br/>o projeto desde então"]
-    N --> V["-p:Version=0.18.&lt;2+N&gt;"]
+    N --> V["-p:Version=0.18.(2+N)"]
     V --> M["manifesto e assembly<br/>com o MESMO número"]
 
     style V fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
     style M fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
 ```
 
-Mexeu no extrator, o número anda e publica. Não mexeu, fica e pula. **Você não bumpa nada** —
-minor e major continuam seus, e bumpar a base para `0.19.0` zera a contagem a partir dali (mexa
-no minor, nunca no patch: `0.18.2` com 3 commits em cima já é `0.18.5`, e cravar `0.18.5` na
-base faria duas árvores diferentes carregarem o mesmo número).
+Mexeu no extrator, o número anda. Não mexeu, fica. **Você não bumpa nada** — minor e major
+continuam seus, e bumpar a base para `0.19.0` reancora a contagem (mexa no minor, nunca no
+patch: `0.18.2` com 3 commits em cima já é `0.18.5`).
 
-Antes disso existia uma guarda que ficava vermelha quando o `<Version>` estava parado com código
-novo. Ela saiu junto com a causa: o estado que ela detectava passou a ser **impossível** em vez
-de detectável. Ela tinha nascido de um caso real — `0.18.1` definida em `2d03534`, `cc31b0e`
-mexendo no extrator depois sem bump, e as duas correções atravessando sete deploys sem chegar ao
-comprador.
+O porquê é um caso real: `0.18.1` foi definida em `2d03534` e `cc31b0e` mexeu no extrator
+depois, sem bump — as duas correções atravessaram **sete deploys** sem chegar ao comprador.
 
-**Publicar antes de o backend novo subir é seguro, e por desenho.** O contrato de import é
-tolerante nas duas direções: entrada desconhecida no ZIP nunca é validada nem carregada,
-arquivo novo entra como `OptionalFiles` e coluna é conferida por nome. Foi assim que o
-`catalogo_eans.csv` da 0.18.0 conviveu com o backend anterior. Só uma mudança **destrutiva** de
-contrato — renomear ou remover coluna obrigatória — pediria ordenar deploy e publicação.
+**E o binário só muda quando o extrator muda**, o que não era verdade de graça: o commit
+entrava nos bytes por duas vias independentes.
+
+| Via | Como fecha |
+|---|---|
+| O SDK anexava o commit ao `InformationalVersion` (`0.18.2+a42ed66…`) | `IncludeSourceRevisionInInformationalVersion=false` |
+| O SourceLink grava o commit no PDB, e o PE carrega o **checksum do PDB** | `EnableSourceLink=false` |
+
+A segunda não se adivinha, e desligar só a primeira não resolve. O SourceLink lê o **HEAD do
+git direto**, não a propriedade `SourceRevisionId` — sobrescrever aquela propriedade não muda
+nada. Sem as duas, o comprador veria a mesma versão com um SHA-256 diferente a cada deploy, e a
+imagem ganharia uma layer nova de 118 MB em **todo** deploy.
+
+Com as duas, o checksum é identidade de conteúdo: mesma versão ⇒ mesmo arquivo.
+
+### Sem extrator é estado normal, não defeito
+
+No F5 e em qualquer build local a pasta não existe — quem a preenche é o CI. `ExtratorEmbutido`
+trata como ausência: botão desabilitado, telas explicando. Manifesto ilegível ou incompleto cai
+no mesmo caminho de propósito — tira o download do ar, mas **não** derruba a aplicação.
+
+`/admin/extrator` (só `PowerUser`) mostra versão, checksum e data desta instalação. É tela
+informativa; o formulário de upload que existia ali saiu junto com a publicação.
 
 ---
 
@@ -363,7 +365,7 @@ flowchart TB
 
     Q_APP -->|sim| A_APP["aspire publish e commitar<br/>deploy/docker-compose.yaml;<br/>recolar no Dokploy e preencher<br/>a variável nova"]
     Q_MIG -->|sim| A_MIG["nada a mais: o db-migrator aplica<br/>no deploy. Descreva a migration<br/>na descrição do deployment"]
-    Q_EXT -->|sim| A_EXT["nada: a versão é derivada<br/>e o CI publica sozinho"]
+    Q_EXT -->|sim| A_EXT["nada: versão derivada, exe<br/>embutido, entrega no mesmo deploy"]
     Q_COD -->|sim| A_COD["trocar as *_IMAGE<br/>para a tag sha nova<br/>e clicar Deploy"]
 
     style A_APP fill:#fea,stroke:#4a4a4a,color:#1a1a1a
@@ -373,7 +375,9 @@ flowchart TB
 **Mudança no contrato CSV toca os dois lados de uma vez** — `Database`, `Worker`, `ApiService`
 e `Extractor/StageContract`. É por isso que os testes do extrator referenciam `Worker` e
 `ApiService`: `StageContractTests` e `ImportCompatibilityTests` são o único guarda contra as
-duas definições divergirem em silêncio. Nesse caso valem as quatro linhas acima ao mesmo tempo.
+duas definições divergirem em silêncio. E como agora produtor e consumidor do CSV viajam na
+mesma imagem, nem uma mudança **destrutiva** de contrato pede coordenação de ordem: os dois
+lados trocam juntos.
 
 ---
 
@@ -383,14 +387,14 @@ duas definições divergirem em silêncio. Nesse caso valem as quatro linhas aci
 [ ] Testes verdes localmente nos projetos afetados
 [ ] Consulta nova do extrator rodada contra o PBS real
 [ ] Se a topologia do AppHost mudou: aspire publish e commitar deploy/docker-compose.yaml
-[ ] Push em main; CI verde nos quatro jobs
+[ ] Push em main; CI verde nos três jobs
 [ ] Se o CI reclamou do compose: recolar o YAML no Dokploy
 [ ] Se a mensagem apontou variável nova: preencher o valor no Environment
 [ ] Environment do Dokploy com as *_IMAGE na tag sha-xxxxxxx
 [ ] Deploy clicado, com descrição dizendo quais migrations entram
 [ ] db-migrator saiu com exit 0 (senão nenhum serviço subiu)
 [ ] Login na Web funciona
-[ ] Versão do extrator no ar confere em /admin/extrator
+[ ] /admin/extrator mostra a versão que você esperava
 ```
 
 ---
@@ -399,45 +403,25 @@ duas definições divergirem em silêncio. Nesse caso valem as quatro linhas aci
 
 | Sintoma | Causa provável | Onde |
 |---|---|---|
-| Job `publicar-extrator` em 404 | a Web no ar é anterior à rota `/extrator/publicacao` | deploye o backend primeiro |
-| Job `publicar-extrator` em 503 | `EXTRATOR_PUBLISH_TOKEN` vazio no destino, **ou** o YAML colado sem a linha da env var | Environment do Dokploy **e** o compose colado |
-| Job `publicar-extrator` em 401 | secret do GitHub != env var do destino | os dois valores |
 | Job `images` acusa divergência do compose | a topologia do AppHost mudou e `deploy/docker-compose.yaml` não foi regenerado | commite o arquivo do artefato `aspire-compose` e recole no Dokploy |
+| Job `images` acusa SHA-256 divergente do extrator | artefato corrompido no transporte entre os jobs | reexecute o run |
 | Serviço no ar com variável vazia | o YAML colado no Dokploy é anterior ao parâmetro | o compose colado, não só o Environment |
 | Nenhum serviço sobe depois do deploy | `db-migrator` saiu != 0 | log do `db-migrator` no Dokploy |
 | Deploy verde mas comportamento antigo | `*_IMAGE` apontando para a tag anterior | Environment do Dokploy |
+| "Esta instalação não traz o extrator" | imagem construída sem o asset, ou manifesto ilegível | log de startup da Web (`ExtratorEmbutido` avisa) e o passo do §4 |
+| Versão do extrator diferente da esperada | a imagem no ar é de outro commit | tag em `WEBFRONTEND_IMAGE` |
 | Treino morre com `lib_lightgbm` | imagem do worker sem `libgomp1` | smoke do CI; `worker-base.Dockerfile` |
 | Fila parada e tela dizendo "importando" | worker morto sem reinício | `restart:` no compose; `docker ps` |
-| Tela de mercado toda com travessão | ZIP de extrator anterior à versão que traz `Cnpj`/`catalogo_eans.csv` | versão publicada em `/admin/extrator` |
+| Tela de mercado toda com travessão | ZIP de extrator anterior à versão que traz `Cnpj`/`catalogo_eans.csv` | versão em `/admin/extrator` |
 
-**Extrator publicado é global, não por rede.** O `.exe` é o mesmo para todo inquilino, então
-publicar troca a versão de todos ao mesmo tempo — e um `manifesto.json` incoerente é recusado
-sem escrever nada, deixando a versão anterior intacta.
-
----
-
-## 10. Configuração de uma vez só
-
-Precisa existir antes de o fluxo automático funcionar. Depois disso, nada aqui se repete.
-
-| Onde | Entrada | Valor |
-|---|---|---|
-| GitHub → Settings → **Variables** | `EXTRATOR_PUBLISH_URL` | URL pública da Web |
-| GitHub → Settings → **Secrets** | `EXTRATOR_PUBLISH_TOKEN` | um segredo longo |
-| Dokploy → Environment | `EXTRATOR_PUBLISH_TOKEN` | **o mesmo valor** |
-
-A URL fica em *Variables* e não em *Secrets* de propósito: o GitHub mascara valor de secret no
-log, e "não consegui falar com `***`" não diz com quem o job tentou falar — justamente na hora
-em que o log é necessário. Ela não é segredo; o token é.
-
-Sem essas entradas o fluxo **não falha**: o job avisa e sai verde, e a publicação pela UI em
-`/admin/extrator` continua sendo o caminho.
+**O extrator é global, não por rede.** O executável é o mesmo para todo inquilino, então o
+deploy troca a versão de todos ao mesmo tempo.
 
 ---
 
 ## Leituras relacionadas
 
-- [README §5 — Como rodar, publicar o extrator, CI e deploy](../README.md) — a justificativa
+- [README §5 — Como rodar, o extrator embutido, CI e deploy](../README.md) — a justificativa
   de cada peça, e os buracos que cada uma fechou.
 - [CLAUDE.md §5 — Operações de risco](../CLAUDE.md) — o que exige confirmação.
 - [extracao-pbs-stage.md](extracao-pbs-stage.md) — o que o extrator lê do PBS.
