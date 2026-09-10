@@ -30,15 +30,26 @@ flowchart LR
     PUB --> MINIO["bucket MinIO extrator"]
     MINIO --> COMP["comprador baixa<br/>pela pagina da sessao"]
 
+    IND{{"NAO SE ESPERAM: a publicacao do extrator<br/>nao aguarda o deploy do backend — §6"}}
+    DEP -.- IND
+    PUB -.- IND
+
     style DEP fill:#fea,stroke:#4a4a4a,color:#1a1a1a
     style PUB fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
     style VPS fill:#eef,stroke:#4a4a4a,color:#1a1a1a
     style COMP fill:#eef,stroke:#4a4a4a,color:#1a1a1a
+    style IND fill:#eef,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 **O executável não viaja em imagem nenhuma.** Ele é WinForms, roda na máquina que enxerga o
 PBS, e chega ao comprador por download da página da sessão — servido do MinIO. Por isso são
 dois caminhos de entrega, e não um.
+
+**E os dois não se esperam.** `publicar-extrator` depende dos dois jobs de teste, e de mais
+nada — nem de `images`, nem do seu clique no Dokploy. Então o extrator é publicado contra o
+backend que **já está no ar**, tipicamente antes de você deployar o novo. Isso é seguro por
+desenho do contrato de import, e §6 tem o porquê e o único caso em que a ordem passaria a
+importar.
 
 | Artefato | Vai para | Quem leva | Quando |
 |---|---|---|---|
