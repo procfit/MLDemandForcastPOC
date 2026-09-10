@@ -24,7 +24,12 @@ jobs:
     timeout-minutes: 25
 
     steps:
+      # `fetch-depth: 0` porque a versão publicada do extrator é **derivada** do histórico
+      # (ver o passo de publicação abaixo); com o default, profundidade 1, não há histórico
+      # para contar.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Instalar .NET
         uses: actions/setup-dotnet@v4
@@ -34,25 +39,78 @@ jobs:
       - name: Testes do extrator
         run: dotnet test tests/CosmosPro.ML.DemandForCast.Extractor.Tests/CosmosPro.ML.DemandForCast.Extractor.Tests.csproj --configuration Debug
 
+      # O PATCH DA VERSÃO É DERIVADO DO HISTÓRICO, não lido do csproj.
+      #
+      # O csproj declara a **base** (`major.minor.patch`), e este passo soma quantos commits
+      # tocaram o projeto do extrator desde o commit que introduziu aquela base. Mexeu no
+      # extrator, o número anda e a publicação acontece; não mexeu, o número fica e a
+      # publicação é pulada. Você continua mandando no minor e no major — bumpar a base para
+      # `0.19.0` zera a contagem a partir dali.
+      #
+      # Isto substituiu uma guarda que reclamava de `<Version>` parado com código novo, e a
+      # substituição é o ponto: o estado que ela detectava passou a ser **impossível** em vez
+      # de detectável. O caso real foi `0.18.1` definida em 2d03534 com cc31b0e mexendo no
+      # extrator depois, sem bump — as duas correções atravessaram sete deploys sem chegar ao
+      # comprador, e nada no pipeline reclamava.
+      #
+      # A base do csproj continua valendo no build local (F5, publicação à mão): quem não
+      # passa por aqui não tem histórico para contar, e um número parado no inner loop não
+      # engana ninguém.
+      #
+      # Bumpe a base pelo MINOR, nunca pelo patch: `0.18.2` com 3 commits em cima já é
+      # `0.18.5`, então cravar `0.18.5` na base faria duas árvores diferentes carregarem o
+      # mesmo número.
+      - name: Calcular a versão do extrator
+        id: versao-extrator
+        shell: pwsh
+        run: |
+          $csproj = "CosmosPro.ML.DemandForCast.Extractor/CosmosPro.ML.DemandForCast.Extractor.csproj"
+          $base = (dotnet msbuild $csproj -getProperty:Version).Trim()
+          if (-not $base) { throw "Nao foi possivel ler <Version> do csproj do extrator." }
+          if ($base -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+            throw "<Version> do extrator e '$base'; esperado major.minor.patch (ex.: 0.18.2)."
+          }
+          $maj, $min, $pat = [int]$Matches[1], [int]$Matches[2], [int]$Matches[3]
+
+          # `git log -S` acha commits em que a CONTAGEM da string mudou -- o que inclui a
+          # remocao dela, nao so a insercao. Aqui isso e inofensivo, e por uma invariante que
+          # vale a pena registrar: `$base` foi lido do csproj em HEAD, entao a string esta
+          # presente agora, e o commit mais recente que mexeu na contagem dela so pode ser um
+          # que a INTRODUZIU (se fosse uma remocao, ela estaria ausente). Consultar uma versao
+          # ANTIGA devolveria o commit que a apagou -- nao faca isso.
+          #
+          # Falhar aqui e deliberado: sem essa base nao ha como garantir que a versao
+          # acompanha o codigo, e um fallback silencioso para a base reintroduziria exatamente
+          # a falha que este passo existe para tornar impossivel.
+          $bump = (git log -1 --format=%H -S "<Version>$base</Version>" -- $csproj | Out-String).Trim()
+          if (-not $bump) {
+            throw "Nao achei o commit que introduziu <Version>$base</Version> em $csproj. " +
+                  "Se o historico foi reescrito, bumpe o minor da base para reancorar a contagem."
+          }
+
+          $extras = [int](git rev-list --count "$bump..HEAD" -- CosmosPro.ML.DemandForCast.Extractor | Out-String).Trim()
+          $versao = "$maj.$min.$($pat + $extras)"
+
+          Write-Host "base $base (commit $($bump.Substring(0,7))) + $extras commit(s) no extrator = $versao"
+          "versao=$versao" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       # O binário sai daqui porque é o único runner Windows do pipeline — e ele não vai
       # para o GHCR nem para dentro de nenhuma imagem: o comprador baixa o .exe pela
       # página da sessão, que faz stream do MinIO (ver README.md, "Publicar o extrator").
-      # Este passo produz o par exe+manifesto pronto para publicação; quem publica é o
-      # operador, em /admin/extrator — que recebe o .zip deste artefato como veio da UI do
-      # Actions, sem descompactar (um pacote lacrado não permite misturar execuções).
       # Self-contained porque a máquina que enxerga o PBS é servidor de farmácia, onde não
       # se instala runtime .NET para rodar um utilitário.
       - name: Publicar o extrator (win-x64, self-contained)
         shell: pwsh
         run: |
-          # A versão vem do <Version> do csproj, não do FileVersion do binário: o SDK
-          # anexa o commit ao InformationalVersion, e o manifesto mostra este campo ao
-          # comprador na tela — "0.14.0" comunica, "0.14.0+147ac87c" não.
-          $versao = (dotnet msbuild CosmosPro.ML.DemandForCast.Extractor/CosmosPro.ML.DemandForCast.Extractor.csproj -getProperty:Version).Trim()
-          if (-not $versao) { throw "Nao foi possivel ler <Version> do csproj do extrator." }
+          # `-p:Version=` para o assembly e o manifesto contarem a MESMA versao: sem isto o
+          # binario carregaria a base do csproj e o manifesto a derivada, e a tela mostraria
+          # um numero diferente do que `ZipManifest.VersaoAtual()` le de dentro do .exe.
+          $versao = "${{ steps.versao-extrator.outputs.versao }}"
+          if (-not $versao) { throw "O passo anterior nao produziu a versao." }
 
           dotnet publish CosmosPro.ML.DemandForCast.Extractor -c Release -r win-x64 `
-            --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+            --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:Version=$versao
           if ($LASTEXITCODE -ne 0) { throw "dotnet publish do extrator falhou." }
 
           $publish = "CosmosPro.ML.DemandForCast.Extractor/bin/Release/net10.0-windows/win-x64/publish"
@@ -457,6 +515,66 @@ jobs:
           retention-days: 30
           include-hidden-files: true
 
+      # O compose do destino é `raw` colado à mão no Dokploy, e essa cópia manual já custou
+      # duas vezes: uma correção de `pull_policy` viveu como edição no YAML de lá até a
+      # regeneração seguinte a apagar em silêncio, e um parâmetro novo do AppHost virou linha
+      # nova no compose que ninguém colou — a variável ficava preenchida no Environment e o
+      # processo não recebia nada, com a falha aparecendo como "não configurado" em vez de
+      # erro.
+      #
+      # Este passo transforma as duas em build vermelho. `deploy/docker-compose.yaml` é o
+      # registro do que o AppHost gera; se o gerado agora diverge dele, alguma coisa mudou na
+      # topologia e o YAML do Dokploy está velho.
+      #
+      # Comparação byte a byte, e não semântica, de propósito: se um bump do Aspire mudar o
+      # formato do YAML, o vermelho é exatamente o sinal que se quer — a ferramenta mudou o
+      # que roda em produção, e alguém precisa olhar. Não é intermitência; é notícia.
+      #
+      # Não é preciso rodar nada localmente para consertar: o passo imprime o diff e o
+      # arquivo regenerado sai no artefato `aspire-compose` desta execução, pronto para
+      # commitar e para colar no Dokploy.
+      - name: Conferir se o compose do repositório está atual
+        shell: bash
+        run: |
+          set -uo pipefail
+          registrado=deploy/docker-compose.yaml
+          gerado=./aspire-output/docker-compose.yaml
+
+          if [ ! -f "$registrado" ]; then
+            echo "::error::$registrado não existe. Commite o compose gerado por 'aspire publish'."
+            exit 1
+          fi
+
+          # O diff vai para variavel, e nao para arquivo no workspace: um `compose.diff`
+          # solto na raiz reaparece como arquivo nao rastreado para quem rodar este trecho
+          # na mao, e ja foi commitado por acidente uma vez.
+          if saida=$(diff -u "$registrado" "$gerado"); then
+            echo "Compose do repositório está atual."
+            exit 0
+          fi
+
+          # As variáveis vêm do próprio compose (`${VAR}`), e não do `.env`: todo parâmetro do
+          # AppHost aparece nas duas pontas, e ler do compose dispensa um segundo arquivo
+          # commitado só para isso.
+          vars_antes=$(grep -o '\${[A-Z_][A-Z_0-9]*}' "$registrado" | tr -d '${}' | sort -u)
+          vars_agora=$(grep -o '\${[A-Z_][A-Z_0-9]*}' "$gerado"     | tr -d '${}' | sort -u)
+          novas=$(comm -13 <(echo "$vars_antes") <(echo "$vars_agora"))
+          sumidas=$(comm -23 <(echo "$vars_antes") <(echo "$vars_agora"))
+
+          echo "::error::O compose gerado pelo AppHost diverge de $registrado — o YAML colado no Dokploy está velho. Commite o arquivo regenerado (está no artefato 'aspire-compose' desta execução) e recole no Dokploy no próximo deploy."
+
+          if [ -n "$novas" ]; then
+            echo "::error::VARIÁVEL NOVA no compose: $(echo $novas). Preencha o valor no Environment do Dokploy ANTES de deployar — sem isso o serviço sobe com a variável vazia, e a falha não aparece como erro."
+          fi
+          if [ -n "$sumidas" ]; then
+            echo "::warning::Variável que saiu do compose: $(echo $sumidas). Pode sair do Environment do Dokploy."
+          fi
+
+          echo "::group::diff (registrado -> gerado)"
+          echo "$saida"
+          echo "::endgroup::"
+          exit 1
+
   # Publica o extrator no destino sem passar pela UI: era o único artefato do pipeline que
   # exigia trabalho manual a cada release — baixar o `.zip` da página do Actions, logar na
   # Web como PowerUser e subi-lo em /admin/extrator.
@@ -493,12 +611,9 @@ jobs:
       EXTRATOR_PUBLISH_TOKEN: ${{ secrets.EXTRATOR_PUBLISH_TOKEN }}
 
     steps:
-      # `fetch-depth: 0` porque a guarda de bump precisa do histórico para comparar o que o
-      # push mudou; com o default (profundidade 1) não há commit anterior no clone.
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      # Sem `actions/checkout`: este job não lê o repositório. O que ele publica vem do
+      # artefato, e a versão vem do manifesto que o `windows-tests` escreveu — ela é derivada
+      # do histórico lá, onde o histórico existe.
       - name: Baixar o par exe+manifesto
         uses: actions/download-artifact@v4
         with:
@@ -575,46 +690,10 @@ jobs:
             echo "publicar=sim" >> "$GITHUB_OUTPUT"
           fi
 
-      # O buraco que esta guarda fecha já custou caro: dois commits de correção do extrator
-      # (2d03534, cc31b0e) atravessaram sete deploys sem chegar ao comprador, porque o
-      # `<Version>` não subiu junto e nada no pipeline reclamava. Automatizar a publicação
-      # sem esta guarda reproduziria o mesmo silêncio, agora com cara de automação — o job
-      # diria "nada novo" com a correção parada no repositório.
-      #
-      # Mudança no extrator sem bump é ERRO, não aviso: quem lê um aviso em run verde é quem
-      # já sabia. Escapes, quando o bump é de fato indevido: publicar pela UI em
-      # /admin/extrator, ou reexecutar depois de subir a versão.
-      # A base da comparação é o **commit que introduziu a versão atual**, não o push
-      # anterior, e a diferença importa: com o push anterior como base, ignorar um build
-      # vermelho e empurrar qualquer outra coisa devolveria o verde com a mudança do
-      # extrator ainda parada. Aqui a guarda não esquece — ela fica vermelha em todo push
-      # até o `<Version>` subir.
-      #
-      # `git log -S` acha o commit em que a string `<Version>X</Version>` entrou no csproj.
-      # Se não achar (histórico reescrito, formato mudado), a guarda não é avaliada: sem
-      # base não há o que afirmar, e chutar uma base faria acusar o repositório inteiro.
-      - name: Exigir bump de versão quando o extrator mudou
-        if: steps.destino.outputs.configurado == 'sim' && steps.versoes.outputs.publicar == 'nao'
-        run: |
-          set -euo pipefail
-          csproj=CosmosPro.ML.DemandForCast.Extractor/CosmosPro.ML.DemandForCast.Extractor.csproj
-          versao="${{ steps.versoes.outputs.versao }}"
-
-          bump=$(git log -1 --format=%H -S "<Version>$versao</Version>" -- "$csproj" || true)
-          if [ -z "$bump" ]; then
-            echo "::notice::Não achei o commit que introduziu <Version>$versao</Version>; guarda de bump não avaliada."
-            exit 0
-          fi
-          echo "Versão $versao introduzida em $(git log -1 --format='%h %s' "$bump")"
-
-          mudou=$(git diff --name-only "$bump" "${{ github.sha }}" -- CosmosPro.ML.DemandForCast.Extractor)
-          if [ -n "$mudou" ]; then
-            echo "::error::O extrator mudou depois de <Version>$versao</Version> ter sido definida, e $versao é a versão que já está no ar — a publicação seria pulada e a mudança não chegaria ao comprador. Suba <Version> no csproj do extrator. Arquivos alterados desde o bump:"
-            echo "$mudou"
-            exit 1
-          fi
-          echo "Extrator inalterado desde o bump; nada a publicar."
-
+      # Não há guarda de bump aqui, e a ausência é o ponto: a versão do artefato é
+      # DERIVADA do histórico no `windows-tests`, então "código novo com versão parada"
+      # deixou de ser um estado possível. Antes existia um passo que o detectava e ficava
+      # vermelho; ele saiu junto com a causa.
       - name: Extrator já publicado nesta versão
         if: steps.destino.outputs.configurado == 'sim' && steps.versoes.outputs.publicar == 'nao'
         run: echo "::notice::Extrator ${{ steps.versoes.outputs.versao }} já está no ar; nada publicado."

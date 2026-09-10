@@ -1,0 +1,217 @@
+services:
+  sql:
+    image: "mcr.microsoft.com/mssql/server:2022-latest"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${SQL_PASSWORD}"
+    expose:
+      - "1433"
+    volumes:
+      - type: "volume"
+        target: "/var/opt/mssql"
+        source: "cosmospro.ml.demandforcast.apphost-3528fa87a7-sql-data"
+        read_only: false
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1'"
+      interval: "10s"
+      timeout: "5s"
+      retries: 10
+      start_period: "90s"
+  minio:
+    image: "docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+    command:
+      - "server"
+      - "/data"
+      - "--console-address"
+      - ":9001"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ACCESS_KEY}"
+      MINIO_ROOT_PASSWORD: "${MINIO_SECRET_KEY}"
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - type: "volume"
+        target: "/data"
+        source: "cosmospro.ml.demandforcast.apphost-3528fa87a7-minio-data"
+        read_only: false
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+  dbgate:
+    image: "dbgate/dbgate:6.1.4"
+    environment:
+      LOGIN: "${DBGATE_LOGIN}"
+      PASSWORD: "${DBGATE_PASSWORD}"
+      CONNECTIONS: "sql"
+      LABEL_sql: "SQL Server"
+      SERVER_sql: "sql"
+      PORT_sql: "1433"
+      USER_sql: "sa"
+      PASSWORD_sql: "${SQL_PASSWORD}"
+      ENGINE_sql: "mssql@dbgate-plugin-mssql"
+    ports:
+      - "3000"
+    volumes:
+      - type: "volume"
+        target: "/root/.dbgate"
+        source: "dbgate-data"
+        read_only: false
+    depends_on:
+      sql:
+        condition: "service_started"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+  db-migrator:
+    image: "${DB_MIGRATOR_IMAGE}"
+    pull_policy: "always"
+    environment:
+      OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+      ConnectionStrings__Stage: "Server=sql,1433;User ID=sa;Password=${SQL_PASSWORD};TrustServerCertificate=true;Initial Catalog=Stage"
+      STAGE_HOST: "sql"
+      STAGE_PORT: "1433"
+      STAGE_USERNAME: "sa"
+      STAGE_PASSWORD: "${SQL_PASSWORD}"
+      STAGE_URI: "mssql://sa:${SQL_PASSWORD}@sql:1433/Stage"
+      STAGE_JDBCCONNECTIONSTRING: "jdbc:sqlserver://sql:1433;databaseName=Stage;trustServerCertificate=true"
+      STAGE_DATABASENAME: "Stage"
+      ConnectionStrings__engine: "Server=sql,1433;User ID=sa;Password=${SQL_PASSWORD};TrustServerCertificate=true;Initial Catalog=engine"
+      ENGINE_HOST: "sql"
+      ENGINE_PORT: "1433"
+      ENGINE_USERNAME: "sa"
+      ENGINE_PASSWORD: "${SQL_PASSWORD}"
+      ENGINE_URI: "mssql://sa:${SQL_PASSWORD}@sql:1433/engine"
+      ENGINE_JDBCCONNECTIONSTRING: "jdbc:sqlserver://sql:1433;databaseName=engine;trustServerCertificate=true"
+      ENGINE_DATABASENAME: "engine"
+    depends_on:
+      sql:
+        condition: "service_healthy"
+    networks:
+      - "aspire"
+  apiservice:
+    image: "${APISERVICE_IMAGE}"
+    pull_policy: "always"
+    environment:
+      OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      HTTP_PORTS: "${APISERVICE_PORT}"
+      ConnectionStrings__Stage: "Server=sql,1433;User ID=sa;Password=${SQL_PASSWORD};TrustServerCertificate=true;Initial Catalog=Stage"
+      STAGE_HOST: "sql"
+      STAGE_PORT: "1433"
+      STAGE_USERNAME: "sa"
+      STAGE_PASSWORD: "${SQL_PASSWORD}"
+      STAGE_URI: "mssql://sa:${SQL_PASSWORD}@sql:1433/Stage"
+      STAGE_JDBCCONNECTIONSTRING: "jdbc:sqlserver://sql:1433;databaseName=Stage;trustServerCertificate=true"
+      STAGE_DATABASENAME: "Stage"
+      ConnectionStrings__engine: "Server=sql,1433;User ID=sa;Password=${SQL_PASSWORD};TrustServerCertificate=true;Initial Catalog=engine"
+      ENGINE_HOST: "sql"
+      ENGINE_PORT: "1433"
+      ENGINE_USERNAME: "sa"
+      ENGINE_PASSWORD: "${SQL_PASSWORD}"
+      ENGINE_URI: "mssql://sa:${SQL_PASSWORD}@sql:1433/engine"
+      ENGINE_JDBCCONNECTIONSTRING: "jdbc:sqlserver://sql:1433;databaseName=engine;trustServerCertificate=true"
+      ENGINE_DATABASENAME: "engine"
+      ConnectionStrings__minio: "Endpoint=http://minio:9000;AccessKey=${MINIO_ACCESS_KEY};SecretKey=${MINIO_SECRET_KEY}"
+      MINIO_HOST: "minio"
+      MINIO_PORT: "9000"
+      MINIO_ACCESSKEY: "${MINIO_ACCESS_KEY}"
+      MINIO_SECRETKEY: "${MINIO_SECRET_KEY}"
+      MINIO_URI: "http://minio:9000"
+    expose:
+      - "${APISERVICE_PORT}"
+    depends_on:
+      sql:
+        condition: "service_started"
+      minio:
+        condition: "service_started"
+      db-migrator:
+        condition: "service_completed_successfully"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+  webfrontend:
+    image: "${WEBFRONTEND_IMAGE}"
+    pull_policy: "always"
+    environment:
+      OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      HTTP_PORTS: "${WEBFRONTEND_PORT}"
+      ConnectionStrings__engine: "Server=sql,1433;User ID=sa;Password=${SQL_PASSWORD};TrustServerCertificate=true;Initial Catalog=engine"
+      ENGINE_HOST: "sql"
+      ENGINE_PORT: "1433"
+      ENGINE_USERNAME: "sa"
+      ENGINE_PASSWORD: "${SQL_PASSWORD}"
+      ENGINE_URI: "mssql://sa:${SQL_PASSWORD}@sql:1433/engine"
+      ENGINE_JDBCCONNECTIONSTRING: "jdbc:sqlserver://sql:1433;databaseName=engine;trustServerCertificate=true"
+      ENGINE_DATABASENAME: "engine"
+      APISERVICE_HTTP: "http://apiservice:${APISERVICE_PORT}"
+      services__apiservice__http__0: "http://apiservice:${APISERVICE_PORT}"
+      APISERVICE_HTTPS: "https://apiservice:${APISERVICE_PORT}"
+      PowerUser__Email: "${POWERUSER_EMAIL}"
+      PowerUser__Password: "${POWERUSER_PASSWORD}"
+      Extrator__PublishToken: "${EXTRATOR_PUBLISH_TOKEN}"
+    ports:
+      - "${WEBFRONTEND_PORT}"
+    depends_on:
+      sql:
+        condition: "service_started"
+      apiservice:
+        condition: "service_started"
+      db-migrator:
+        condition: "service_completed_successfully"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+  worker:
+    image: "${WORKER_IMAGE}"
+    pull_policy: "always"
+    environment:
+      OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+      ConnectionStrings__Stage: "Server=sql,1433;User ID=sa;Password=${SQL_PASSWORD};TrustServerCertificate=true;Initial Catalog=Stage"
+      STAGE_HOST: "sql"
+      STAGE_PORT: "1433"
+      STAGE_USERNAME: "sa"
+      STAGE_PASSWORD: "${SQL_PASSWORD}"
+      STAGE_URI: "mssql://sa:${SQL_PASSWORD}@sql:1433/Stage"
+      STAGE_JDBCCONNECTIONSTRING: "jdbc:sqlserver://sql:1433;databaseName=Stage;trustServerCertificate=true"
+      STAGE_DATABASENAME: "Stage"
+      ConnectionStrings__engine: "Server=sql,1433;User ID=sa;Password=${SQL_PASSWORD};TrustServerCertificate=true;Initial Catalog=engine"
+      ENGINE_HOST: "sql"
+      ENGINE_PORT: "1433"
+      ENGINE_USERNAME: "sa"
+      ENGINE_PASSWORD: "${SQL_PASSWORD}"
+      ENGINE_URI: "mssql://sa:${SQL_PASSWORD}@sql:1433/engine"
+      ENGINE_JDBCCONNECTIONSTRING: "jdbc:sqlserver://sql:1433;databaseName=engine;trustServerCertificate=true"
+      ENGINE_DATABASENAME: "engine"
+      ConnectionStrings__minio: "Endpoint=http://minio:9000;AccessKey=${MINIO_ACCESS_KEY};SecretKey=${MINIO_SECRET_KEY}"
+      MINIO_HOST: "minio"
+      MINIO_PORT: "9000"
+      MINIO_ACCESSKEY: "${MINIO_ACCESS_KEY}"
+      MINIO_SECRETKEY: "${MINIO_SECRET_KEY}"
+      MINIO_URI: "http://minio:9000"
+    depends_on:
+      sql:
+        condition: "service_started"
+      minio:
+        condition: "service_started"
+      db-migrator:
+        condition: "service_completed_successfully"
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
+networks:
+  aspire:
+    driver: "bridge"
+volumes:
+  cosmospro.ml.demandforcast.apphost-3528fa87a7-sql-data:
+    driver: "local"
+  cosmospro.ml.demandforcast.apphost-3528fa87a7-minio-data:
+    driver: "local"
+  dbgate-data:
+    driver: "local"

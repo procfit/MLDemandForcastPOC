@@ -91,11 +91,11 @@ deploys seguidos.
 flowchart LR
     W["trabalhar em<br/>branch de fase"] --> T["dotnet test<br/>nos projetos afetados"]
     T --> F5["F5 do AppHost<br/>se a mudança tem tela"]
-    F5 --> V{"mexeu no<br/>extrator?"}
-    V -->|sim| B["subir Version<br/>no csproj"]
-    V -->|não| M["merge em main"]
-    B --> M
-    style B fill:#fea,stroke:#4a4a4a,color:#1a1a1a
+    F5 --> A{"mudou a topologia<br/>do AppHost?"}
+    A -->|sim| P["aspire publish e commitar<br/>deploy/docker-compose.yaml"]
+    A -->|não| M["merge em main"]
+    P --> M
+    style P fill:#fea,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 Dois pontos que não são cerimônia:
@@ -104,8 +104,9 @@ Dois pontos que não são cerimônia:
   executa SQL — as queries são recurso embarcado e os testes são unitários. Foi assim que uma
   coluna inexistente passou por 288 testes verdes e morreu na mão do comprador. Use o acesso
   de leitura à instância da Natusfarma.
-- **Mexeu no extrator, suba o `<Version>`.** Se não subir, o CI fica vermelho pedindo (§6) —
-  e é bem melhor descobrir aqui.
+- **Não há bump de versão do extrator para fazer.** O patch é derivado do histórico (§6). E se
+  você esquecer de regenerar o compose, o CI fica vermelho dizendo isso (§4) — nenhum dos dois
+  depende de você lembrar.
 
 ---
 
@@ -135,9 +136,9 @@ flowchart TB
 
 | Job | O que faz | Por que existe assim |
 |---|---|---|
-| `windows-tests` | Testes do extrator e o binário: publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json`, sobe o par como artefato `extrator`. | O extrator é WinForms (`net10.0-windows`) e **não compila em Linux** — nem ele nem o teste dele. A suíte é dividida por sistema operacional por necessidade, não por paralelismo. |
+| `windows-tests` | Testes do extrator, **deriva a versão** do histórico (§6) e publica o binário: `win-x64` self-contained, SHA-256, `manifesto.json`, tudo no artefato `extrator`. | O extrator é WinForms (`net10.0-windows`) e **não compila em Linux** — nem ele nem o teste dele. A suíte é dividida por sistema operacional por necessidade, não por paralelismo. |
 | `linux-tests` | Compila em **Debug**, roda os dez projetos de teste puros e depois os dois que sobem o AppHost real com SQL Server e MinIO em container. | Debug porque é a configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`. Integração e E2E ficam em passos **sequenciais**: eles se excluem por um lock de arquivo, e em paralelo o segundo esperaria o tempo do lock. |
-| `images` | Imagem base do worker, `aspire do push` (as quatro imagens, tag imutável), **smoke** da imagem do worker, tag móvel, `aspire publish`. | Só roda se os dois jobs de teste passarem. |
+| `images` | Imagem base do worker, `aspire do push` (as quatro imagens, tag imutável), **smoke** da imagem do worker, tag móvel, `aspire publish` e a **conferência do compose** (abaixo). | Só roda se os dois jobs de teste passarem. |
 | `publicar-extrator` | Compara versões e publica o extrator no destino. Só em `main`. | Não depende de `images` — o `.exe` não entra em imagem. Depende de `linux-tests` **por mérito**: extrator não vai para a mão do comprador a partir de commit com o backend vermelho. |
 
 ### O smoke do worker, e por que ele não é redundante
@@ -161,6 +162,39 @@ frameworks were found`, dois dias de fila parada).
 
 O smoke **não barra o push** (o `aspire do push` constrói e empurra na mesma operação). O que
 a falha impede é o **uso**: a tag móvel não avança e o artefato de compose não é publicado.
+
+### A conferência do compose, e as duas falhas silenciosas que ela mata
+
+`deploy/docker-compose.yaml` é o **registro** do que o AppHost gera. O job regenera e compara
+byte a byte; divergiu, fica vermelho.
+
+```mermaid
+flowchart TB
+    G["aspire publish"] --> D{"o gerado == deploy/docker-compose.yaml?"}
+    D -->|"sim"| OK["verde"]
+    D -->|"não"| E["VERMELHO com o diff no log<br/>e o arquivo no artefato"]
+    E --> V{"apareceu ${VAR} nova?"}
+    V -->|"sim"| VN["mensagem extra:<br/>preencha no Environment<br/>ANTES de deployar"]
+    V -->|"não"| TO["só topologia:<br/>recole o YAML"]
+
+    style OK fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+    style E fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
+    style VN fill:#fea,stroke:#4a4a4a,color:#1a1a1a
+```
+
+As duas falhas que isso mata já aconteceram. Uma correção de `pull_policy` viveu como edição à
+mão no YAML do Dokploy até a regeneração seguinte a apagar em silêncio. E um parâmetro novo do
+AppHost virou linha nova no compose que ninguém colou — a variável ficava preenchida no
+Environment e o processo não recebia nada, com a falha aparecendo como "não configurado" em vez
+de erro.
+
+**Não é preciso rodar nada localmente para consertar.** O passo imprime o diff e o arquivo
+regenerado sai no artefato `aspire-compose` da execução, pronto para commitar e para colar no
+Dokploy.
+
+**Se um bump do Aspire mudar o formato do YAML, isto fica vermelho — e é o comportamento
+desejado.** A ferramenta mudou o que roda em produção; alguém precisa olhar o diff e commitar.
+Não é intermitência, é notícia.
 
 ---
 
@@ -198,21 +232,28 @@ sequenceDiagram
 `depends_on` diferente. **Não recolar** quando só o código mudou: aí basta apontar as
 `*_IMAGE` para as tags novas e deployar.
 
+**Você não precisa mais decidir isso** — o CI decide (§4). Se `deploy/docker-compose.yaml`
+divergiu do que o AppHost gera, o build fica vermelho com o diff; se não divergiu, o YAML do
+Dokploy continua válido e basta trocar as `*_IMAGE`.
+
 ```mermaid
 flowchart TB
-    Q1{"o AppHost.cs<br/>mudou?"}
+    Q1{"o CI reclamou de<br/>divergência no compose?"}
     Q1 -->|não| SO["só trocar as *_IMAGE<br/>e clicar Deploy"]
-    Q1 -->|sim| Q2{"mudou parâmetro,<br/>env var ou recurso?"}
-    Q2 -->|não| SO
-    Q2 -->|sim| RE["aspire publish<br/>+ recolar o YAML<br/>+ preencher a variável nova"]
+    Q1 -->|sim| RE["pegar o YAML do artefato,<br/>recolar no Dokploy"]
+    RE --> Q2{"a mensagem apontou<br/>variável nova?"}
+    Q2 -->|não| DEP["clicar Deploy"]
+    Q2 -->|sim| VN["preencher o valor no Environment<br/>ANTES de deployar"]
+    VN --> DEP
 
     style RE fill:#fea,stroke:#4a4a4a,color:#1a1a1a
+    style VN fill:#fea,stroke:#4a4a4a,color:#1a1a1a
 ```
 
-**A armadilha silenciosa:** parâmetro novo no AppHost é **linha nova no compose**. Preencher a
-variável no Environment do Dokploy não basta — se o YAML colado não tiver o
-`Extrator__PublishToken: "${EXTRATOR_PUBLISH_TOKEN}"` no serviço, o processo não recebe nada e
-a falha não aparece como erro: a rota responde 503 como se ninguém tivesse configurado.
+**A ordem entre recolar e preencher importa.** Parâmetro novo no AppHost é linha nova no
+compose, e as duas pontas são necessárias: só o valor no Environment sem a linha no YAML deixa
+o processo sem receber nada, e a falha aparece como "não configurado" em vez de erro. É a
+armadilha que o passo do §4 passou a acusar antes de o deploy acontecer.
 
 ### Use a tag imutável
 
@@ -250,14 +291,11 @@ flowchart TB
     CMP -->|"não"| POST["POST do ZIP<br/>e confere versão + SHA<br/>que o servidor recalculou"]
     POST --> DONE["PUBLICADO"]
 
-    CMP -->|"sim"| GRD{"o extrator mudou depois<br/>do commit que definiu<br/>essa versão?"}
-    GRD -->|"não"| NOP["aviso: já está no ar,<br/>nada publicado"]
-    GRD -->|"sim"| EBMP["VERMELHO: suba o Version"]
+    CMP -->|"sim"| NOP["aviso: já está no ar,<br/>nada publicado"]
 
     style DONE fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
     style SKIP fill:#eef,stroke:#4a4a4a,color:#1a1a1a
     style NOP fill:#eef,stroke:#4a4a4a,color:#1a1a1a
-    style EBMP fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
     style E404 fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
     style E401 fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
     style E503 fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
@@ -268,12 +306,31 @@ extrator — o SDK anexa o commit ao `InformationalVersion`, então o SHA-256 sa
 o `<Version>` parado. Publicar por push encheria a tela do comprador de "0.18.2" com checksum
 novo a cada vez, e o checksum é justamente o que ele confere com `Get-FileHash`.
 
-**A guarda existe para o portão não virar o próprio problema.** A base da comparação é o commit
-que **definiu** a versão, não o push anterior: com o push anterior como base, ignorar um build
-vermelho e empurrar qualquer outra coisa devolveria o verde com a mudança ainda parada. Assim a
-guarda não esquece — fica vermelha em todo push até a versão subir. Ela nasceu de um caso real:
-`0.18.1` foi definida em `2d03534`, `cc31b0e` mexeu no extrator depois sem bump, e as duas
-correções atravessaram sete deploys sem chegar ao comprador.
+**E o número anda sozinho, porque o patch é derivado do histórico.** O csproj declara a base
+(`0.18.2`) e o `windows-tests` soma quantos commits tocaram o projeto do extrator desde o commit
+que introduziu essa base:
+
+```mermaid
+flowchart LR
+    B["base no csproj<br/>0.18.2"] --> C["commit que a introduziu<br/>git log -S"]
+    C --> N["quantos commits tocaram<br/>o projeto desde então"]
+    N --> V["-p:Version=0.18.&lt;2+N&gt;"]
+    V --> M["manifesto e assembly<br/>com o MESMO número"]
+
+    style V fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+    style M fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+```
+
+Mexeu no extrator, o número anda e publica. Não mexeu, fica e pula. **Você não bumpa nada** —
+minor e major continuam seus, e bumpar a base para `0.19.0` zera a contagem a partir dali (mexa
+no minor, nunca no patch: `0.18.2` com 3 commits em cima já é `0.18.5`, e cravar `0.18.5` na
+base faria duas árvores diferentes carregarem o mesmo número).
+
+Antes disso existia uma guarda que ficava vermelha quando o `<Version>` estava parado com código
+novo. Ela saiu junto com a causa: o estado que ela detectava passou a ser **impossível** em vez
+de detectável. Ela tinha nascido de um caso real — `0.18.1` definida em `2d03534`, `cc31b0e`
+mexendo no extrator depois sem bump, e as duas correções atravessando sete deploys sem chegar ao
+comprador.
 
 **Publicar antes de o backend novo subir é seguro, e por desenho.** O contrato de import é
 tolerante nas duas direções: entrada desconhecida no ZIP nunca é validada nem carregada,
@@ -294,13 +351,13 @@ flowchart TB
     START --> Q_EXT{"projeto<br/>Extractor?"}
     START --> Q_COD{"só código de<br/>backend?"}
 
-    Q_APP -->|sim| A_APP["aspire publish, recolar o YAML,<br/>preencher a variável nova<br/>no Environment"]
+    Q_APP -->|sim| A_APP["aspire publish e commitar<br/>deploy/docker-compose.yaml;<br/>recolar no Dokploy e preencher<br/>a variável nova"]
     Q_MIG -->|sim| A_MIG["nada a mais: o db-migrator aplica<br/>no deploy. Descreva a migration<br/>na descrição do deployment"]
-    Q_EXT -->|sim| A_EXT["subir Version no csproj.<br/>O CI publica no próximo push"]
+    Q_EXT -->|sim| A_EXT["nada: a versão é derivada<br/>e o CI publica sozinho"]
     Q_COD -->|sim| A_COD["trocar as *_IMAGE<br/>para a tag sha nova<br/>e clicar Deploy"]
 
     style A_APP fill:#fea,stroke:#4a4a4a,color:#1a1a1a
-    style A_EXT fill:#fea,stroke:#4a4a4a,color:#1a1a1a
+    style A_EXT fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
 ```
 
 **Mudança no contrato CSV toca os dois lados de uma vez** — `Database`, `Worker`, `ApiService`
@@ -315,9 +372,10 @@ duas definições divergirem em silêncio. Nesse caso valem as quatro linhas aci
 ```
 [ ] Testes verdes localmente nos projetos afetados
 [ ] Consulta nova do extrator rodada contra o PBS real
-[ ] <Version> do extrator subido, se o extrator mudou
+[ ] Se a topologia do AppHost mudou: aspire publish e commitar deploy/docker-compose.yaml
 [ ] Push em main; CI verde nos quatro jobs
-[ ] Se a topologia mudou: aspire publish, recolar o YAML no Dokploy
+[ ] Se o CI reclamou do compose: recolar o YAML no Dokploy
+[ ] Se a mensagem apontou variável nova: preencher o valor no Environment
 [ ] Environment do Dokploy com as *_IMAGE na tag sha-xxxxxxx
 [ ] Deploy clicado, com descrição dizendo quais migrations entram
 [ ] db-migrator saiu com exit 0 (senão nenhum serviço subiu)
@@ -334,7 +392,8 @@ duas definições divergirem em silêncio. Nesse caso valem as quatro linhas aci
 | Job `publicar-extrator` em 404 | a Web no ar é anterior à rota `/extrator/publicacao` | deploye o backend primeiro |
 | Job `publicar-extrator` em 503 | `EXTRATOR_PUBLISH_TOKEN` vazio no destino, **ou** o YAML colado sem a linha da env var | Environment do Dokploy **e** o compose colado |
 | Job `publicar-extrator` em 401 | secret do GitHub != env var do destino | os dois valores |
-| Job pede bump de versão | extrator mudou depois do commit que definiu a versão atual | `<Version>` no csproj do extrator |
+| Job `images` acusa divergência do compose | a topologia do AppHost mudou e `deploy/docker-compose.yaml` não foi regenerado | commite o arquivo do artefato `aspire-compose` e recole no Dokploy |
+| Serviço no ar com variável vazia | o YAML colado no Dokploy é anterior ao parâmetro | o compose colado, não só o Environment |
 | Nenhum serviço sobe depois do deploy | `db-migrator` saiu != 0 | log do `db-migrator` no Dokploy |
 | Deploy verde mas comportamento antigo | `*_IMAGE` apontando para a tag anterior | Environment do Dokploy |
 | Treino morre com `lib_lightgbm` | imagem do worker sem `libgomp1` | smoke do CI; `worker-base.Dockerfile` |

@@ -289,26 +289,30 @@ alguém publicar** — passo obrigatório a cada release do extrator, não só n
 manda para `POST /extrator/publicacao` no destino. Não há passo manual, e não há deploy
 envolvido — o `.exe` não viaja em imagem nenhuma.
 
-**O portão é a versão, não o commit.** O job só publica quando o `<Version>` do csproj do
-extrator difere da versão que está no ar (lida por `GET /extrator/publicacao`). Isso não é
-economia de tráfego: o binário muda em **todo** build mesmo sem mudança no extrator — o SDK
-anexa o commit ao `InformationalVersion`, então o SHA-256 sai diferente —, e publicar por
-push encheria a tela do comprador de "versão 0.18.1" com checksum novo a cada vez. O
-checksum é justamente o que ele confere com `Get-FileHash`.
+**O portão é a versão, não o commit.** O job só publica quando a versão do build difere da
+que está no ar (lida por `GET /extrator/publicacao`). Isso não é economia de tráfego: o
+binário muda em **todo** build mesmo sem mudança no extrator — o SDK anexa o commit ao
+`InformationalVersion`, então o SHA-256 sai diferente —, e publicar por push encheria a tela
+do comprador de "versão 0.18.2" com checksum novo a cada vez. O checksum é justamente o que
+ele confere com `Get-FileHash`.
 
-**E o portão tem uma guarda, porque senão ele viraria o próprio problema.** Quando a versão
-do build é igual à que está no ar, o job não se contenta em pular: ele confere se o extrator
-mudou **depois do commit que definiu essa versão** e, se mudou, falha pedindo o bump. A base
-da comparação é aquele commit, e não o push anterior, de propósito — com o push anterior como
-base, ignorar um build vermelho e empurrar qualquer outra coisa devolveria o verde com a
-mudança ainda parada. Assim a guarda não esquece: fica vermelha em todo push até a versão
-subir.
+**E a versão não é lida do csproj: o patch é derivado do histórico.** O csproj declara a
+**base** (`major.minor.patch`) e o `windows-tests` soma quantos commits tocaram o projeto do
+extrator desde o commit que introduziu aquela base, passando o resultado em `-p:Version=` —
+que alinha o assembly com o manifesto, dois números que antes divergiam em formato. Mexeu no
+extrator, o número anda e publica; não mexeu, fica e pula.
 
-A guarda existe porque o silêncio já aconteceu, e é o mesmo caso: `0.18.1` foi definida em
-`2d03534` e `cc31b0e` mexeu no extrator depois, sem bump; as duas correções atravessaram
-sete deploys sem chegar ao comprador. Automatizar a publicação sem essa conferência
-repetiria a falha com cara de sucesso — o job diria "nada novo" com a correção parada no
-repositório. Se o bump for de fato indevido, publique pela UI.
+O porquê é um caso real: `0.18.1` foi definida em `2d03534` e `cc31b0e` mexeu no extrator
+depois, sem bump — as duas correções atravessaram **sete deploys** sem chegar ao comprador, e
+nada no pipeline reclamava. Houve uma versão intermediária deste desenho em que o job
+detectava esse estado e falhava pedindo o bump; ela saiu junto com a causa, porque um estado
+impossível é melhor que um estado detectável. **Você não bumpa nada** — minor e major
+continuam seus, e bumpar a base para `0.19.0` zera a contagem a partir dali. Mexa no
+**minor**, nunca no patch: `0.18.2` com 3 commits em cima já é `0.18.5`, então cravar
+`0.18.5` na base faria duas árvores diferentes carregarem o mesmo número.
+
+O valor do csproj continua valendo no build local (F5, publicação à mão): sem histórico para
+contar, é ele que `ZipManifest.VersaoAtual()` lê.
 
 **Publicar antes de o backend novo subir é seguro, e por desenho.** O contrato de import é
 tolerante nas duas direções: entrada desconhecida no ZIP nunca é validada nem carregada,
@@ -473,9 +477,9 @@ onde começar.
 
 | Job | Runner | O que faz |
 |---|---|---|
-| `windows-tests` | `windows-latest` | Testes do extrator **e** o binário dele: publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json` e sobe o par como artefato `extrator`. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele, e é por isso que a suíte é dividida por sistema operacional, não por capricho de paralelismo. O `.exe` não entra em imagem nenhuma; quem o leva ao destino é o job `publicar-extrator`. |
+| `windows-tests` | `windows-latest` | Testes do extrator **e** o binário dele: **deriva a versão** do histórico (ver "Publicar o extrator no MinIO"), publica `win-x64` self-contained, calcula o SHA-256, escreve o `manifesto.json` e sobe o par como artefato `extrator`. Ele é WinForms (`net10.0-windows`, `WinExe`) e **não compila em Linux** — nem ele nem o projeto de teste dele, e é por isso que a suíte é dividida por sistema operacional, não por capricho de paralelismo. Este é o único job com `fetch-depth: 0`, e é a derivação da versão que exige. O `.exe` não entra em imagem nenhuma; quem o leva ao destino é o job `publicar-extrator`. |
 | `linux-tests` | `ubuntu-latest` | Compila em **Debug** (mesma configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`), roda os dez projetos de teste puros e, depois, os dois que sobem o AppHost real com SQL Server e MinIO em container (ClickHouse desativado — §3). |
-| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: constrói e empurra a **imagem base do worker** (abaixo), `aspire do push` (constrói e empurra as quatro imagens, na tag imutável), um **smoke** que abre a imagem do worker e confere as dependências nativas do LightGBM, um passo de `docker tag`/`docker push` que acrescenta a tag móvel, e `aspire publish` (gera `docker-compose.yaml` + `.env`), publicados como artefato `aspire-compose` da execução. |
+| `images` | `ubuntu-latest` | Só se os dois anteriores passarem: constrói e empurra a **imagem base do worker** (abaixo), `aspire do push` (constrói e empurra as quatro imagens, na tag imutável), um **smoke** que abre a imagem do worker e confere as dependências nativas do LightGBM, um passo de `docker tag`/`docker push` que acrescenta a tag móvel, `aspire publish` (gera `docker-compose.yaml` + `.env`, publicados como artefato `aspire-compose`) e a **conferência do compose**: o gerado é comparado com `deploy/docker-compose.yaml` e a divergência é build vermelho (ver "O que o operador precisa preencher no `.env`"). |
 | `publicar-extrator` | `ubuntu-latest` | Só em `main`, e só se os dois jobs de teste passarem: manda o par exe+manifesto para `POST /extrator/publicacao` no destino, **quando a versão difere da que está no ar** (ver "Publicar o extrator no MinIO"). Não depende de `images` nem faz deploy. |
 
 Os testes de integração e E2E ficam em **passos separados e sequenciais** do mesmo job de
@@ -587,6 +591,14 @@ não tiver o `Extrator__PublishToken: "${EXTRATOR_PUBLISH_TOKEN}"` no serviço, 
 recebe nada e a falha é silenciosa (a rota responde 503 como se ninguém tivesse configurado).
 Todo deploy que acrescenta parâmetro é um deploy de **regenerar e recolar** o compose, não de
 "topologia inalterada".
+
+**Isso deixou de depender de alguém lembrar.** `deploy/docker-compose.yaml` é o registro do
+que o AppHost gera, e o job `images` regenera e compara byte a byte a cada execução —
+divergiu, o build fica vermelho com o diff no log, e a mensagem nomeia a variável nova
+quando há uma. O arquivo regenerado sai no artefato `aspire-compose`, então consertar é
+commitar e colar, sem rodar nada localmente. Se um bump do Aspire mudar o formato do YAML
+isto também fica vermelho — e é o comportamento desejado: a ferramenta mudou o que roda em
+produção, e alguém precisa olhar.
 
 #### O schema dos dois bancos, no compose (buraco fechado)
 

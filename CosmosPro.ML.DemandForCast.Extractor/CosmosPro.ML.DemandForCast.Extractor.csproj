@@ -8,8 +8,21 @@
     <Nullable>enable</Nullable>
     <RootNamespace>CosmosPro.ML.DemandForCast.Extractor</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <!-- Sem isto, ZipManifest.VersaoAtual() lê a versão default do assembly
-         (1.0.0.0) pra sempre — bump manual a cada release relevante. -->
+    <!-- BASE da versão, não a versão publicada. O CI soma a este patch quantos commits
+         tocaram este projeto desde o commit que introduziu esta linha, e passa o resultado
+         em `-p:Version=` (ver o job `windows-tests` em .github/workflows/ci-imagens.yml).
+         Então `0.18.2` aqui com 3 commits em cima é publicado como `0.18.5`, e o número
+         nunca fica parado enquanto o código anda — que foi o que deixou duas correções
+         sete deploys sem chegar ao comprador.
+
+         O valor daqui vale no build local (F5, publicação à mão): sem histórico para
+         contar, é ele que ZipManifest.VersaoAtual() lê — sem esta linha seria 1.0.0.0
+         pra sempre.
+
+         Ao bumpar à mão, mexa no MINOR (0.19.0), nunca no patch: `0.18.2` com 3 commits em
+         cima já é `0.18.5`, então cravar `0.18.5` aqui faria duas árvores diferentes
+         carregarem o mesmo número. Mantenha o formato `major.minor.patch` literal — o CI
+         acha o commit da base procurando esta string exata. -->
     <Version>0.18.2</Version>
     <!-- RID/self-contained ficam fora daqui de propósito: manter build e testes
          simples. A distribuição usa o comando documentado em README.md. -->
