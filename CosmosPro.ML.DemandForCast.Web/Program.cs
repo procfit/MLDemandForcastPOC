@@ -95,9 +95,8 @@ builder.Services.AddRadzenComponents();
 // valer. Se a API sair numa versão futura, o build quebra aqui e não em silêncio.
 #pragma warning disable EXTEXP0001
 
-// Os três clientes que transferem arquivo grande (este, ComparacoesApiClient e
-// ExtratorApiClient) removem o handler de resiliência que o ServiceDefaults liga em todo
-// HttpClient. São dois defeitos, e o primeiro é silencioso:
+// Os dois clientes que transferem arquivo grande (este e ComparacoesApiClient) removem o
+// handler de resiliência que o ServiceDefaults liga em todo HttpClient. São dois defeitos, e o primeiro é silencioso:
 //
 // 1. O `AddStandardResilienceHandler` impõe timeout **de 10s por tentativa** (e 30s no
 //    total), *dentro* do Timeout do HttpClient. O `TimeSpan.FromMinutes(10)` abaixo nunca
@@ -158,15 +157,12 @@ builder.Services.AddHttpClient<QuestionariosApiClient>(client =>
     client.BaseAddress = new("https+http://apiservice");
 });
 
-builder.Services.AddHttpClient<ExtratorApiClient>(client =>
-{
-    client.BaseAddress = new("https+http://apiservice");
-    // O .exe tem dezenas de MB; o download precisa do mesmo teto generoso do upload,
-    // não do default de 100s do HttpClient.
-    client.Timeout = TimeSpan.FromMinutes(10);
-}).RemoveAllResilienceHandlers();
-
 #pragma warning restore EXTEXP0001
+
+// Singleton porque o conteúdo é imutável dentro da imagem: o manifesto é lido uma vez no
+// startup, e não a cada render da página da sessão. O extrator deixou de ser um objeto no
+// MinIO buscado pela apiservice — é um asset desta imagem (ver ExtratorEmbutido).
+builder.Services.AddSingleton<ExtratorEmbutido>();
 
 // Necessário pelo RedeContext: nos endpoints HTTP comuns (download do ZIP da sessão) o
 // principal vem do HttpContext, porque o AuthenticationStateProvider do Blazor só vale

@@ -24,6 +24,33 @@
          carregarem o mesmo número. Mantenha o formato `major.minor.patch` literal — o CI
          acha o commit da base procurando esta string exata. -->
     <Version>0.18.2</Version>
+
+    <!-- AS DUAS PROPRIEDADES ABAIXO EXISTEM PARA O EXECUTÁVEL SER BYTE A BYTE IDÊNTICO
+         enquanto o fonte e a versão não mudam. O build já é determinístico por default, mas
+         o commit entrava nos bytes por DUAS vias independentes, e desligar só uma não
+         resolve — medido, não deduzido:
+
+           1. `InformationalVersion` recebia o commit (`0.18.2+a42ed66…`);
+           2. o SourceLink grava o commit no PDB, e o PE do executável carrega o CHECKSUM do
+              PDB — então o exe mudava mesmo com a versão limpa. O SourceLink lê o HEAD do
+              git direto, e não a propriedade `SourceRevisionId`: sobrescrever aquela
+              propriedade não muda nada aqui.
+
+         Por que importa: o executável é embutido na imagem da Web (ver o job `images`). Sem
+         isto, o comprador veria a mesma versão com um SHA-256 diferente a cada deploy — e o
+         checksum é justamente o que ele confere com Get-FileHash — e a imagem ganharia uma
+         layer nova de ~118 MB para baixar em todo deploy, inclusive nos que não tocam o
+         extrator.
+
+         O que se perde com o SourceLink desligado: o PDB deixa de apontar para o fonte no
+         GitHub. Custa nada aqui, porque o PDB NÃO é distribuído — o CI copia só o `.exe` —,
+         então nunca houve mapeamento de fonte em diagnóstico de campo; e localmente o
+         desenvolvedor tem o fonte na mão.
+
+         O commit não se perde de vista: quem está rodando o quê continua sendo respondido
+         pela tag da imagem (`sha-<7>`), que é onde essa pergunta é feita. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <EnableSourceLink>false</EnableSourceLink>
     <!-- RID/self-contained ficam fora daqui de propósito: manter build e testes
          simples. A distribuição usa o comando documentado em README.md. -->
   </PropertyGroup>

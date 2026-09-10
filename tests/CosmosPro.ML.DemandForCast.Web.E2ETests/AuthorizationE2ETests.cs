@@ -75,18 +75,20 @@ public sealed class AuthorizationE2ETests(AppHostFixture fixture)
         await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
         var corpoExtrator = await page.TextContentAsync("body") ?? "";
         corpoExtrator.Should().NotContain("Acesso negado");
-        corpoExtrator.Should().Contain("Publicar nova versão",
+        corpoExtrator.Should().Contain("Versão nesta instalação",
             $"a página /admin/extrator deveria ter carregado. Conteúdo real: <<<{corpoExtrator.Trim()}>>>");
     }
 
     /// <summary>
-    /// A publicação do extrator é a única tela do sistema que escreve um **executável** que
-    /// todos os compradores, de todas as redes, vão baixar e rodar numa máquina com acesso
-    /// ao ERP deles. É o alvo de maior valor da aplicação: um usuário de rede que a
-    /// alcançasse distribuiria o binário que quisesse a todos os outros inquilinos.
+    /// A tela do extrator deixou de aceitar upload — o executável passou a ser asset da
+    /// imagem, embutido pelo CI —, então ela não é mais o alvo de maior valor da aplicação
+    /// que era quando distribuía binário para todos os inquilinos. O escopo continua sendo
+    /// `PowerUser` porque ela é administrativa e expõe a versão e o checksum do binário desta
+    /// instalação, e porque o teste guarda a **rota**, não o formulário: se um dia voltar a
+    /// existir operação aqui, o controle já está no lugar.
     /// </summary>
     [Fact]
-    public async Task UsuarioRede_nao_alcanca_a_publicacao_do_extrator()
+    public async Task UsuarioRede_nao_alcanca_a_tela_do_extrator()
     {
         var page = await fixture.NovaPaginaLogadaAsync(
             AppHostFixture.UsuarioRedeEmail, AppHostFixture.UsuarioRedeSenha);
@@ -95,7 +97,7 @@ public sealed class AuthorizationE2ETests(AppHostFixture fixture)
         await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
         var corpo = await page.TextContentAsync("body") ?? "";
-        corpo.Should().NotContain("Publicar nova versão",
-            $"o formulário de publicação não pode renderizar para quem não é PowerUser. Conteúdo real: <<<{corpo.Trim()}>>>");
+        corpo.Should().NotContain("Versão nesta instalação",
+            $"a tela administrativa do extrator não pode renderizar para quem não é PowerUser. Conteúdo real: <<<{corpo.Trim()}>>>");
     }
 }

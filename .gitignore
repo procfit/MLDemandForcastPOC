@@ -69,3 +69,7 @@ aspire-output/
 /Docs/*.html
 /Docs/*.png
 /Docs/*.jpeg
+
+# O extrator entra na imagem como asset, colocado aqui pelo CI antes do build do container
+# (ver CosmosPro.ML.DemandForCast.Web.csproj). São ~118 MB por versão: no git, inviável.
+CosmosPro.ML.DemandForCast.Web/Assets/extrator/

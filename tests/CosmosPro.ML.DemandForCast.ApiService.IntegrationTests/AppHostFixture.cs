@@ -34,7 +34,6 @@ public sealed class AppHostFixture : IAsyncLifetime
     public IComparisonApi ComparisonApi { get; private set; } = null!;
     public ITrainingApi TrainingApi { get; private set; } = null!;
     public IPurchasingApi PurchasingApi { get; private set; } = null!;
-    public IExtratorApi ExtratorApi { get; private set; } = null!;
 
     /// <summary>Rede semeada pela migration AddRedes — usada pelos testes que não criam rede própria.</summary>
     public const int RedeDemoId = 1;
@@ -60,11 +59,6 @@ public sealed class AppHostFixture : IAsyncLifetime
         // AppHost não sobe e nenhum teste roda. Nada nesta suíte usa o DbGate; ele existe
         // no modelo porque tem de existir no compose publicado.
         builder.Configuration["Parameters:dbgate-password"] = "TesteDbGate!2026";
-
-        // Mesmo caso: `extrator-publish-token` é secreto e sem valor no AppHost. Esta suíte
-        // fala só com a apiservice, e a rota que consome o token é da Web — mas parâmetro
-        // sem valor derruba o AppHost inteiro, não só o recurso que o usa.
-        builder.Configuration["Parameters:extrator-publish-token"] = "TesteExtratorPublish!2026";
 
         // Aqui existia um remendo (`OverrideSqlProjectWithBuiltDacpac`): o
         // `AddSqlProject` do CommunityToolkit descobria o caminho do .dacpac avaliando o
@@ -105,7 +99,6 @@ public sealed class AppHostFixture : IAsyncLifetime
         ComparisonApi = RestService.For<IComparisonApi>(httpClient);
         TrainingApi = RestService.For<ITrainingApi>(httpClient);
         PurchasingApi = RestService.For<IPurchasingApi>(httpClient);
-        ExtratorApi = RestService.For<IExtratorApi>(httpClient);
 
         using var healthyCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         try

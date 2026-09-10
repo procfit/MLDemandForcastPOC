@@ -61,12 +61,6 @@ public sealed class AppHostFixture : IAsyncLifetime
     public const string UsuarioRedeEmail = "e2e-usuario-rede@teste.local";
     public const string UsuarioRedeSenha = "TesteE2ERede!2026";
 
-    /// <summary>
-    /// Token de <c>POST /extrator/publicacao</c>, a rota que o CI usa para publicar o
-    /// extrator. Injetado como parâmetro do AppHost em <see cref="InitializeAsync"/>.
-    /// </summary>
-    public const string ExtratorPublishToken = "TesteExtratorPublish!2026";
-
     public async ValueTask InitializeAsync()
     {
         _exclusividade = await AppHostExclusiveLock.AcquireAsync();
@@ -85,13 +79,6 @@ public sealed class AppHostFixture : IAsyncLifetime
         // Mesmo caso: `dbgate-password` é secreto e sem valor no AppHost. Nenhum teste E2E
         // abre o DbGate, mas sem o parâmetro o AppHost inteiro não sobe.
         builder.Configuration["Parameters:dbgate-password"] = "TesteDbGate!2026";
-
-        // Idem para o token de publicação do extrator — e aqui ele é usado de verdade:
-        // `ExtratorPublicacaoE2ETests` exercita `POST /extrator/publicacao` com este valor.
-        // É o único teste que prova o fio inteiro (parâmetro Aspire -> env var
-        // `Extrator__PublishToken` -> chave de configuração lida pelo filtro), que nenhum
-        // teste unitário alcança porque o nome da env var não aparece no código da Web.
-        builder.Configuration["Parameters:extrator-publish-token"] = ExtratorPublishToken;
 
         App = await builder.BuildAsync();
 

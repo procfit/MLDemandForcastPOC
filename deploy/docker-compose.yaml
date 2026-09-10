@@ -155,7 +155,6 @@ services:
       APISERVICE_HTTPS: "https://apiservice:${APISERVICE_PORT}"
       PowerUser__Email: "${POWERUSER_EMAIL}"
       PowerUser__Password: "${POWERUSER_PASSWORD}"
-      Extrator__PublishToken: "${EXTRATOR_PUBLISH_TOKEN}"
     ports:
       - "${WEBFRONTEND_PORT}"
     depends_on:

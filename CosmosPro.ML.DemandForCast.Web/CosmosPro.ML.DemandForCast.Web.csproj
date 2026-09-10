@@ -19,6 +19,20 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- O extrator entra na imagem como asset: o CI baixa o par exe+manifesto do job que os
+         constrói no Windows e os deixa aqui antes de a imagem ser montada, então o .exe que o
+         comprador baixa vem sempre do mesmo commit que o backend que o atende.
+
+         FORA de wwwroot de propósito: `MapStaticAssets` serviria os ~118 MB sem autenticação
+         a quem descobrisse a URL, e o download é de comprador logado (ExtratorEndpoints).
+
+         O glob não casa nada no F5 e no `dotnet build` comum — a pasta só existe no CI —, e
+         isso é o esperado: sem o arquivo, a tela diz que não há extrator disponível. Os
+         binários estão no .gitignore; 118 MB por versão no git é inviável. -->
+    <Content Include="Assets\extrator\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.ServiceDefaults\CosmosPro.ML.DemandForCast.ServiceDefaults.csproj" />
     <ProjectReference Include="..\CosmosPro.ML.DemandForCast.Engine\CosmosPro.ML.DemandForCast.Engine.csproj" />
   </ItemGroup>
