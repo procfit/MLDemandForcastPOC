@@ -361,7 +361,9 @@ comprador, e nada no pipeline reclamava.
 `/admin/extrator` (só `PowerUser`) mostra versão, checksum e data de geração do executável
 desta instalação. É tela informativa, sem operação: responde "qual versão o comprador vai
 baixar?" sem abrir o Dokploy, e serve para conferir o hash que a página da sessão mostra a
-ele. O mesmo par aparece no log de startup da Web.
+ele. O mesmo par aparece no **log de startup** da Web — o serviço é resolvido de forma
+antecipada no `Program.cs` justamente para isso: singleton do .NET é lazy, e sem aquela
+linha o aviso de "extrator não embutido" só apareceria quando alguém abrisse uma tela.
 
 #### No F5 e no build local, não há extrator — e isso é o esperado
 

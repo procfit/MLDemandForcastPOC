@@ -16,10 +16,13 @@ internal static class ExtratorEndpoints
 
     /// <summary>
     /// <c>Results.File</c> com caminho físico, e não um stream montado à mão: o Kestrel
-    /// responde com <c>sendfile</c>, honra <c>Range</c> e emite <c>ETag</c>/
-    /// <c>Last-Modified</c>. Requisição parcial não é detalhe aqui — são ~118 MB indo para
-    /// um servidor de farmácia, e antes deste desenho um download interrompido recomeçava do
-    /// zero porque a origem era um stream do MinIO repassado por dois saltos.
+    /// responde com <c>sendfile</c>, honra <c>Range</c> e emite <c>Last-Modified</c> — que é
+    /// o bastante para <c>If-Modified-Since</c> devolver 304. <c>ETag</c> ele **não** emite:
+    /// <c>Results.File</c> só o manda se receber um <c>entityTag</c> explícito, e verificar
+    /// isso contra o ar foi o que corrigiu este comentário.
+    /// Requisição parcial não é detalhe aqui — são ~118 MB indo para um servidor de
+    /// farmácia, e antes deste desenho um download interrompido recomeçava do zero porque a
+    /// origem era um stream do MinIO repassado por dois saltos.
     /// </summary>
     internal static IResult Download(ExtratorEmbutido extrator)
     {

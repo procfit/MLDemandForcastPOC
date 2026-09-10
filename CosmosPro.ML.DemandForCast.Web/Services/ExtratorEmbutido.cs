@@ -36,8 +36,11 @@ internal sealed class ExtratorEmbutido
         var pasta = Path.Combine(ambiente.ContentRootPath, PastaRelativa);
         CaminhoDoExecutavel = Path.Combine(pasta, NomeExecutavel);
 
-        // Lido uma vez, no startup, porque este serviço é singleton e o conteúdo é imutável
-        // dentro da imagem. No F5 a pasta normalmente não existe (quem a preenche é o CI),
+        // Lido uma vez, porque este serviço é singleton e o conteúdo é imutável dentro da
+        // imagem. Quem garante que isso acontece no STARTUP, e não na primeira página que
+        // injeta o serviço, é a resolução antecipada no Program.cs — singleton do .NET é
+        // lazy, e o aviso abaixo precisa aparecer no log do deploy.
+        // No F5 a pasta normalmente não existe (quem a preenche é o CI),
         // e aí `Versao` fica nula e a tela diz que não há extrator disponível — o mesmo
         // estado que um ambiente novo tinha antes de alguém publicar. Para exercitar o
         // caminho localmente, publique o extrator à mão nessa pasta e reinicie.

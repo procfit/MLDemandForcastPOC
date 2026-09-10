@@ -180,6 +180,14 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
 
 var app = builder.Build();
 
+// Resolvido AQUI, e não na primeira página que o injeta: singleton do .NET é lazy, e sem
+// esta linha o `ExtratorEmbutido` só era construído quando alguém abria /admin/extrator ou
+// a página da sessão — então o aviso de "extrator não embutido nesta imagem" aparecia no log
+// horas depois do deploy, ou na frente de um comprador. Medido no primeiro deploy: o
+// startup registrou às 04:39:39 e a linha do extrator só saiu às 04:40:38, quando eu abri a
+// tela. O operador olha o log do deploy; é lá que a ausência precisa aparecer.
+_ = app.Services.GetRequiredService<ExtratorEmbutido>();
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
