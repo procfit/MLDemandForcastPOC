@@ -525,6 +525,66 @@ jobs:
             echo "ok: todas as dependencias nativas resolvidas"
           '
 
+
+      # Mesmo argumento do smoke do worker, uma linha acima: entre o build verde e o destino
+      # existe um artefato que nenhum teste abre. Aqui o artefato é a imagem da Web, e o que
+      # ela precisa carregar é o extrator — o passo "Conferir o par exe+manifesto" valida os
+      # arquivos NO DISCO, antes do build, e não diz nada sobre o que o SDK levou para dentro
+      # da imagem.
+      #
+      # A necessidade não é hipotética: o primeiro run com o extrator embutido quebrou porque
+      # o meu `<Content Include>` duplicava o item default do SDK (NETSDK1022) — erro que não
+      # aparece em build local nenhum, porque sem a pasta o glob não casa nada. Aquele erro
+      # foi barulhento; o vizinho silencioso dele é o SDK simplesmente NÃO copiar o asset e a
+      # aplicação subir dizendo ao comprador que esta instalação não traz o extrator.
+      #
+      # Confere as três coisas que a tela promete: o executável está lá, tem tamanho de
+      # executável (não um arquivo vazio ou um placeholder), e o manifesto declara a MESMA
+      # versão que este run construiu — que é o número que o comprador lê.
+      - name: Smoke da imagem da Web (o extrator embutido)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          imagem="$REGISTRY_ENDPOINT/$REGISTRY_REPOSITORY/webfrontend:$IMAGE_TAG"
+          esperada=$(jq -r '.versao' CosmosPro.ML.DemandForCast.Web/Assets/extrator/manifesto.json)
+          echo "Verificando $imagem (versão esperada: $esperada)"
+
+          docker run --rm --entrypoint sh "$imagem" -c '
+            set -e
+            exe=/app/Assets/extrator/extrator.exe
+            manifesto=/app/Assets/extrator/manifesto.json
+
+            for arquivo in "$exe" "$manifesto"; do
+              if [ ! -f "$arquivo" ]; then
+                echo "ausente na imagem: $arquivo"
+                exit 1
+              fi
+            done
+
+            # 50 MB e um piso folgado para os ~118 MB de um self-contained: pega arquivo
+            # vazio, truncado ou placeholder sem virar manutencao a cada crescimento do .NET.
+            bytes=$(stat -c%s "$exe")
+            if [ "$bytes" -lt 52428800 ]; then
+              echo "extrator.exe tem $bytes bytes -- pequeno demais para o self-contained"
+              exit 1
+            fi
+            echo "ok: extrator.exe presente ($((bytes / 1048576)) MB)"
+
+            cat "$manifesto"
+          ' > manifesto-da-imagem.txt
+
+          cat manifesto-da-imagem.txt
+
+          # A versao e conferida FORA do container porque `jq` nao existe na imagem de
+          # runtime do .NET; o `cat` de dentro entrega o conteudo para cá.
+          na_imagem=$(grep -o '"versao"[^,}]*' manifesto-da-imagem.txt | head -1 | sed 's/.*: *"\(.*\)"/\1/')
+          if [ "$na_imagem" != "$esperada" ]; then
+            echo "::error::O manifesto dentro da imagem declara '$na_imagem', e este run construiu '$esperada'."
+            exit 1
+          fi
+          echo "::notice::Imagem da Web carrega o extrator $na_imagem."
+
       # O Aspire empurra **uma** tag por imagem, então a móvel é acrescentada aqui, em cima do
       # que o passo anterior já publicou.
       #

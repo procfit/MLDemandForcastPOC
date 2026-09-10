@@ -135,7 +135,7 @@ flowchart TB
 |---|---|---|
 | `windows-tests` | Testes do extrator, **deriva a versão** do histórico (§6) e publica o binário: `win-x64` self-contained, SHA-256, `manifesto.json`, tudo no artefato `extrator`. | O extrator é WinForms (`net10.0-windows`) e **não compila em Linux** — nem ele nem o teste dele. A suíte é dividida por sistema operacional por necessidade, não por paralelismo. É o único job com `fetch-depth: 0`, e é a derivação da versão que exige. |
 | `linux-tests` | Compila em **Debug**, roda os dez projetos de teste puros e depois os dois que sobem o AppHost real com SQL Server e MinIO em container. | Debug porque é a configuração dos testes, e é dela que sai o DACPAC copiado para o `bin` do `Migrator`. Integração e E2E ficam em passos **sequenciais**: eles se excluem por um lock de arquivo, e em paralelo o segundo esperaria o tempo do lock. |
-| `images` | Baixa o artefato `extrator` para `Assets/extrator/`, confere o par, imagem base do worker, `aspire do push`, **smoke** da imagem do worker, tag móvel, `aspire publish` e a **conferência do compose**. | Só roda se os dois jobs de teste passarem. A dependência do `windows-tests` deixou de ser só ordem: o `.exe` daquele job entra **dentro** da imagem que este monta. |
+| `images` | Baixa o artefato `extrator` para `Assets/extrator/`, confere o par, imagem base do worker, `aspire do push`, **dois smokes** (worker e Web), tag móvel, `aspire publish` e a **conferência do compose**. | Só roda se os dois jobs de teste passarem. A dependência do `windows-tests` deixou de ser só ordem: o `.exe` daquele job entra **dentro** da imagem que este monta. |
 
 ### O extrator entrando na imagem
 
@@ -146,10 +146,23 @@ flowchart LR
     AS --> CK{"os dois arquivos,<br/>SHA-256 confere?"}
     CK -->|"não"| ERR["VERMELHO"]
     CK -->|"sim"| BLD["aspire do push<br/>monta a webfrontend"]
+    BLD --> SMK{"smoke: abre a IMAGEM<br/>o exe esta la, no tamanho<br/>e na versao deste run?"}
+    SMK -->|"não"| ERR
+    SMK -->|"sim"| OK2["verde"]
 
     style ERR fill:#fdd,stroke:#4a4a4a,color:#1a1a1a
     style BLD fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
+    style SMK fill:#eef,stroke:#4a4a4a,color:#1a1a1a
+    style OK2 fill:#dfd,stroke:#4a4a4a,color:#1a1a1a
 ```
+
+**A conferência do par olha o disco; o smoke olha a imagem.** São coisas diferentes, e a
+diferença já custou um run: o `<Content Include>` do csproj duplicava o item default do SDK
+e o build morria com `NETSDK1022` — erro que **nenhum build local pega**, porque sem a pasta
+o glob não casa nada. Aquele foi barulhento; o vizinho silencioso dele é o SDK simplesmente
+não copiar o asset e a aplicação subir dizendo ao comprador que esta instalação não traz o
+extrator. É a mesma razão do smoke do worker: entre o build verde e o destino existe um
+artefato que nenhum teste abre.
 
 O passo **recalcula** o SHA-256 e confere contra o declarado no manifesto. Os dois arquivos
 saem do mesmo passo no Windows, então divergir aqui significa artefato corrompido no
@@ -405,6 +418,7 @@ lados trocam juntos.
 |---|---|---|
 | Job `images` acusa divergência do compose | a topologia do AppHost mudou e `deploy/docker-compose.yaml` não foi regenerado | commite o arquivo do artefato `aspire-compose` e recole no Dokploy |
 | Job `images` acusa SHA-256 divergente do extrator | artefato corrompido no transporte entre os jobs | reexecute o run |
+| Smoke da Web acusa extrator ausente na imagem | o `Content` do csproj da Web deixou de levar o asset para o publish | `CosmosPro.ML.DemandForCast.Web.csproj`, item `Assets\extrator\**` |
 | Serviço no ar com variável vazia | o YAML colado no Dokploy é anterior ao parâmetro | o compose colado, não só o Environment |
 | Nenhum serviço sobe depois do deploy | `db-migrator` saiu != 0 | log do `db-migrator` no Dokploy |
 | Deploy verde mas comportamento antigo | `*_IMAGE` apontando para a tag anterior | Environment do Dokploy |
