@@ -1,5 +1,12 @@
 @* Seção G do Quadro Resumo: o veredito rápido do comprador sobre esta execução.
 
+   <b>Nada aqui nomeia uma versão do instrumento.</b> Havia "Questionário V5" cravado no botão
+   e na legenda; o patrocinador circulou o botão em vermelho em 16/09/2026 pedindo V6. A
+   correção não é trocar o número: a numeração ("V3", "V5", "V6") é controle do documento de
+   quem conduz a pesquisa, e não conceito de código — o usuário final não precisa dela, e em
+   disponibilidade geral o instrumento não muda mais. Se algum texto voltar a nomear versão
+   aqui, ele envelhece na próxima revisão do questionário, que foi exatamente o que aconteceu.
+
    <b>Isto não conclui a sessão</b>, e a diferença importa. Quem conclui é o envio do
    questionário — decisão do patrocinador (resposta 4a): a avaliação é o resumo, o questionário é
    o instrumento da pesquisa. Se o clique aqui fechasse a sessão, o questionário viraria opcional
@@ -42,7 +49,7 @@
 
         @if (Sessao.Status == "AguardandoQuestionario")
         {
-            <RadzenButton Text="Responder Questionário V5" Icon="assignment" Variant="Variant.Outlined"
+            <RadzenButton Text="Responder Questionário" Icon="assignment" Variant="Variant.Outlined"
                           data-test="ir-para-questionario"
                           Click="@(() => Nav.NavigateTo($"/comparacoes/{Sessao.Id}/questionario"))" />
         }
@@ -67,7 +74,7 @@
     }
 
     <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
-        Esta avaliação se refere a <strong>esta execução</strong>. O Questionário V5 avalia o
+        Esta avaliação se refere a <strong>esta execução</strong>. O Questionário avalia o
         protótipo como ferramenta, e é ele que encerra a comparação.
     </RadzenText>
 </RadzenStack>
