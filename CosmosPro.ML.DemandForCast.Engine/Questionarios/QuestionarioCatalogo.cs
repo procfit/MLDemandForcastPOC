@@ -98,6 +98,23 @@ public static class QuestionarioCatalogo
     public const int Versao = 4;
 
     /// <summary>
+    /// Quantas execuções o comprador precisa ter <b>avaliado</b> (Seção G) antes de o
+    /// questionário ser liberado.
+    ///
+    /// <para>
+    /// <b>Dois</b>, e é regra de protocolo da pesquisa, não parâmetro de desempenho: o
+    /// instrumento pergunta sobre a ferramenta, e uma execução só não dá base de comparação.
+    /// Orientação do Professor, registrada pelo patrocinador no documento de 16/09/2026.
+    /// </para>
+    ///
+    /// <para>
+    /// Conta execução <b>avaliada</b>, e não execução existente: ele exigiu as duas coisas,
+    /// realizar a simulação e responder a Seção G de cada uma.
+    /// </para>
+    /// </summary>
+    public const int MinimoDeExecucoes = 2;
+
+    /// <summary>
     /// Nome do instrumento correspondente a um número de catálogo — <c>4</c> devolve
     /// <c>"V6"</c>.
     ///

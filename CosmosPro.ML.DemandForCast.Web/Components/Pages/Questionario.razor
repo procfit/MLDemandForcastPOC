@@ -1,4 +1,4 @@
-@page "/comparacoes/{Id:guid}/questionario"
+@page "/questionario"
 @attribute [Authorize]
 @rendermode InteractiveServer
 @inject QuestionariosApiClient QuestionariosApi
@@ -8,12 +8,12 @@
 @inject ILogger<Questionario> Logger
 @using CosmosPro.ML.DemandForCast.Engine.Questionarios
 
-<PageTitle>Avaliação da comparação</PageTitle>
+<PageTitle>Questionário</PageTitle>
 
 <RadzenStack Orientation="Orientation.Vertical" Gap="1.5rem">
     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
         <RadzenButton Icon="arrow_back" Variant="Variant.Text" Click="@Voltar" />
-        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Avaliação da comparação</RadzenText>
+        <RadzenText TextStyle="TextStyle.H4" Style="margin: 0">Questionário</RadzenText>
     </RadzenStack>
 
     @if (!_carregou && _erro is null)
@@ -32,13 +32,26 @@
     }
     else if (!PodeResponder && !_questionario.Selado)
     {
-        @* Nem selado nem aberto: a comparação ainda não chegou ao fim. Mandar o comprador
-           preencher aqui produziria avaliação de um resultado que ele não viu. *@
-        <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">
-            <strong>Esta comparação ainda não está pronta para ser avaliada.</strong>
+        @* Nem selado nem aberto: o portão ainda não abriu. O questionário pergunta sobre a
+           ferramenta, e uma execução só não dá base de comparação — responder aqui produziria
+           opinião sobre o que o participante ainda não experimentou o bastante.
+
+           Diz QUANTAS faltam em vez de só recusar: "ainda não" sem número não indica o que
+           fazer, e manda o comprador tentar de novo sem saber o que mudou. *@
+        <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false" data-test="questionario-bloqueado">
+            <strong>O questionário ainda não está liberado.</strong>
             <div style="margin-top: 0.5rem">
-                O questionário abre quando o resultado fica pronto. Situação atual:
-                @SessaoView.EstadoLabel(_questionario.SessaoStatus).
+                Ele é respondido uma única vez, depois de pelo menos
+                <strong>@_questionario.MinimoExigido execuções avaliadas</strong> por você — e
+                você tem <strong>@_questionario.ExecucoesAvaliadas</strong>.
+                @if (_questionario.Faltam == 1)
+                {
+                    <text>Falta avaliar mais uma.</text>
+                }
+                else
+                {
+                    <text>Faltam avaliar mais @_questionario.Faltam.</text>
+                }
             </div>
         </RadzenAlert>
     }
@@ -47,10 +60,11 @@
         @if (_questionario.Selado)
         {
             <RadzenAlert AlertStyle="AlertStyle.Success" AllowClose="false" data-test="questionario-selado">
-                <strong>Você já avaliou esta comparação@(_questionario.EnviadoEm is { } q ? $" em {q.ToLocalTime():dd/MM/yyyy HH:mm}" : "").</strong>
+                <strong>Você já respondeu o questionário@(_questionario.EnviadoEm is { } q ? $" em {q.ToLocalTime():dd/MM/yyyy HH:mm}" : "").</strong>
                 <div style="margin-top: 0.5rem">@QuestionarioCatalogo.Agradecimento</div>
                 <div style="margin-top: 0.25rem">
-                    As respostas abaixo são o registro da avaliação e não podem ser alteradas.
+                    As respostas abaixo são o registro da sua avaliação do protótipo e não
+                    podem ser alteradas. O questionário é respondido uma única vez.
                 </div>
             </RadzenAlert>
         }
@@ -219,7 +233,9 @@
         <div class="apenas-impressao" data-test="impressao-respostas">
             <h1 style="font-size:1.4rem;margin:0 0 0.25rem">Avaliação da comparação</h1>
             <p style="margin:0 0 0.25rem">
-                Execução @Id.ToString()[..8] · Questionário @NomeDoInstrumento
+                Questionário &middot; @(_questionario?.EnviadoEm is { } e
+                    ? $"respondido em {e.ToLocalTime():dd/MM/yyyy 'às' HH:mm}"
+                    : "rascunho")
             </p>
             <p style="margin:0 0 1.25rem">
                 @if (_questionario?.EnviadoEm is { } enviado)
@@ -253,8 +269,6 @@
 </RadzenStack>
 
 @code {
-    [Parameter] public Guid Id { get; set; }
-
     private CatalogoView? _catalogo;
     private QuestionarioView? _questionario;
 
@@ -272,7 +286,12 @@
 
     private readonly CancellationTokenSource _cts = new();
 
-    private bool PodeResponder => _questionario?.SessaoStatus == "AguardandoAvaliacao";
+    /// <summary>
+    /// O portão abriu e ele ainda não enviou. Quem calcula é o servidor
+    /// (<c>QuestionarioView.PodeResponder</c>); esta tela só desenha — a recusa de um envio
+    /// fora do protocolo vive no endpoint, porque esconder botão não impede um POST direto.
+    /// </summary>
+    private bool PodeResponder => _questionario?.PodeResponder == true;
     private bool UltimoPasso => _catalogo is not null && _passo == _catalogo.Secoes.Count - 1;
 
     protected override async Task OnInitializedAsync()
@@ -284,7 +303,7 @@
         try
         {
             _catalogo = await QuestionariosApi.GetCatalogoAsync(_cts.Token);
-            _questionario = await QuestionariosApi.GetAsync(Id, _cts.Token);
+            _questionario = await QuestionariosApi.GetAsync(_cts.Token);
 
             if (_questionario is not null)
             {
@@ -326,14 +345,6 @@
         var livre = _respostas.TryGetValue(pergunta.Codigo, out var r) ? r.TextoLivre : null;
         return string.IsNullOrWhiteSpace(livre) ? opcao.Texto : $"{opcao.Texto} — {livre}";
     }
-
-    /// <summary>
-    /// Nome do instrumento, e não o contador interno do catálogo. O patrocinador leu "4" e
-    /// perguntou por que não era V6: os dois números nunca bateram, e não há como mapear um no
-    /// outro fora do código. Ver <c>QuestionarioCatalogo.NomeDaVersao</c>.
-    /// </summary>
-    private string NomeDoInstrumento =>
-        QuestionarioCatalogo.NomeDaVersao(_questionario?.VersaoCatalogo ?? QuestionarioCatalogo.Versao);
 
     private bool PedeTextoLivre(PerguntaView pergunta)
     {
@@ -429,7 +440,7 @@
         _ocupado = true;
         try
         {
-            var resultado = await QuestionariosApi.SalvarAsync(Id, passo, [.. _respostas.Values], _cts.Token);
+            var resultado = await QuestionariosApi.SalvarAsync(passo, [.. _respostas.Values], _cts.Token);
             if (!resultado.Success)
             {
                 _erro = string.Join(" · ", resultado.Errors ?? ["Não foi possível salvar o rascunho."]);
@@ -477,7 +488,7 @@
         _ocupado = true;
         try
         {
-            var resultado = await QuestionariosApi.EnviarAsync(Id, _passo, [.. _respostas.Values], _cts.Token);
+            var resultado = await QuestionariosApi.EnviarAsync(_passo, [.. _respostas.Values], _cts.Token);
 
             if (resultado.Success)
             {

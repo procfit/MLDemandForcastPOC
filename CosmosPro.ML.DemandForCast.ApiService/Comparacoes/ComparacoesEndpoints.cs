@@ -592,6 +592,20 @@ internal static class ComparacoesEndpoints
         sessao.AvaliacaoEm = DateTimeOffset.UtcNow;
         sessao.AvaliacaoUsuarioId = usuarioId?.ToString();
 
+        // A SECAO G CONCLUI A EXECUCAO, desde 19/09/2026. Ate entao quem concluia era o envio
+        // do questionario; com ele respondido uma vez so por comprador, da terceira execucao em
+        // diante nenhuma sessao chegaria a Concluida -- ficariam todas paradas para sempre numa
+        // fase que nenhum worker reclama.
+        //
+        // A guarda e sobre o status de ORIGEM, e nao um PodeTransicionar cego: registrar de
+        // novo numa sessao ja concluida e CORRECAO do veredito, nao transicao. Um
+        // PodeTransicionar recusaria Concluida -> Concluida e transformaria "corrigir" em erro.
+        if (sessao.Status == SessaoStatus.AguardandoAvaliacao)
+        {
+            sessao.Status = SessaoStatus.Concluida;
+            sessao.AtualizadoEm = sessao.AvaliacaoEm.Value;
+        }
+
         await db.SaveChangesAsync(ct);
         logger.LogInformation(
             "Avaliacao registrada na sessao {SessaoId} (rede {RedeId}): {Veredito}", id, redeId, corpo.Veredito);

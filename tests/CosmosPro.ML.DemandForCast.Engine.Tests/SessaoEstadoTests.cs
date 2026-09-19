@@ -67,23 +67,28 @@ public sealed class SessaoEstadoTests
 
     /// <summary>
     /// A segunda recusa de <c>PodeExcluir</c>, por motivo diferente das fases em andamento:
-    /// aqui não há job a proteger, há dado. Concluída significa que o comprador respondeu o
-    /// questionário, e resposta de pesquisa não desaparece por clique. Vale notar que a
-    /// equivalência "concluída ⟺ respondida" é o que a migration garante ao reclassificar as
-    /// sessões que já estavam concluídas antes do questionário existir.
+    /// aqui não há job a proteger, há dado. Concluída significa que o comprador registrou a
+    /// <b>seção G</b> desta execução, e avaliação de pesquisa não desaparece por clique.
+    ///
+    /// <para>
+    /// A equivalência "concluída ⟺ avaliada" é o que a migration
+    /// <c>RenomeiaStatusParaAguardandoAvaliacao</c> garante ao devolver a
+    /// <c>AguardandoAvaliacao</c> as sessões fechadas pelo questionário sem veredito. Ela
+    /// mudou de significado em 19/09/2026 — antes era "concluída ⟺ respondeu o questionário".
+    /// </para>
     /// </summary>
     [Fact]
     public void Concluida_recusa_exclusao_porque_a_resposta_esta_selada()
         => ComparacaoSessao.PodeExcluir(SessaoStatus.Concluida).Should().BeFalse();
 
     /// <summary>
-    /// O questionário é fase de humano: nenhuma fila a reclama, então não há job que possa
+    /// A avaliação é fase de humano: nenhuma fila a reclama, então não há job que possa
     /// falhar nem pré-condição que possa torná-la inviável. Uma aresta para <c>Falha</c> aqui
     /// seria código morto — e pior, sugeriria a quem lê a tabela que existe um worker por trás.
-    /// A sessão sai daqui por envio (<c>Concluida</c>) ou por exclusão.
+    /// A sessão sai daqui pelo registro da seção G (<c>Concluida</c>) ou por exclusão.
     /// </summary>
     [Fact]
-    public void Aguardando_questionario_so_sai_por_envio()
+    public void Aguardando_avaliacao_so_sai_pela_secao_G()
     {
         var destinos = Enum.GetValues<SessaoStatus>()
             .Where(d => ComparacaoSessao.PodeTransicionar(SessaoStatus.AguardandoAvaliacao, d))

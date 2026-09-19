@@ -1,56 +1,49 @@
 namespace CosmosPro.ML.DemandForCast.Engine.Entities;
 
 /// <summary>
-/// Avaliação do comprador sobre UMA comparação — a última fase da sessão, respondida
-/// depois que ela já mostrou o resultado.
+/// A avaliação do comprador sobre o <b>protótipo</b>, respondida uma única vez.
 ///
 /// <para>
-/// <b>Não tem coluna de situação, e isso é deliberado.</b> Quem afirma se a avaliação
-/// está selada é <see cref="ComparacaoSessao.Status"/>: rascunho é a sessão em
-/// <see cref="SessaoStatus.AguardandoAvaliacao"/> com uma linha destas existindo, e
-/// selado é a sessão em <see cref="SessaoStatus.Concluida"/>. Um <c>Status</c> aqui
-/// repetiria a mesma verdade em dois lugares que podem divergir — e a tela leria o
-/// errado. <see cref="EnviadoEm"/> é carimbo, não situação: existe porque a tela diz
-/// "respondido em dd/MM" e a sessão só guarda o <c>AtualizadoEm</c>, que é sobrescrito
-/// por qualquer avanço.
+/// <b>Não pertence a uma execução</b>, e essa é a mudança de 19/09/2026. Havia um
+/// questionário por sessão, e era o envio dele que a concluía; o Professor orientou que o
+/// comprador responda a Seção G a cada execução e o questionário uma vez só, sobre a
+/// experiência acumulada em pelo menos
+/// <see cref="Questionarios.QuestionarioCatalogo.MinimoDeExecucoes"/> delas (documento do
+/// patrocinador de 16/09/2026). Quem conclui a sessão passou a ser a Seção G — ver
+/// <see cref="ComparacaoSessao.AvaliacaoVeredito"/>.
 /// </para>
 ///
 /// <para>
-/// O selo é uma escrita só: gravar <see cref="EnviadoEm"/> e mover a sessão para
-/// <see cref="SessaoStatus.Concluida"/> acontecem na <b>mesma transação</b>, com o
-/// <c>WHERE ... AND Status = 'AguardandoAvaliacao'</c> no <c>UPDATE</c> da sessão
-/// servindo de guarda contra dois envios simultâneos — mesmo padrão do
-/// <c>SessaoResultadoMaterializador</c>. Separar as duas escritas deixaria uma janela em
-/// que a resposta está gravada e a sessão ainda pede resposta.
+/// <b>Sem coluna de situação</b>, como antes e pelo mesmo motivo: <see cref="EnviadoEm"/>
+/// nulo é rascunho, preenchido é selado. Um <c>Status</c> aqui repetiria a mesma verdade em
+/// dois lugares que podem divergir, e a tela leria o errado.
+/// </para>
+///
+/// <para>
+/// <b>Sobrevive à exclusão de qualquer execução.</b> A FK <c>Cascade</c> para a sessão saiu
+/// junto com a coluna <c>SessaoId</c>: o veredito do comprador sobre a ferramenta não evapora
+/// porque uma das execuções que ele avaliou foi apagada.
 /// </para>
 /// </summary>
 public sealed class Questionario
 {
     public Guid Id { get; set; }
+
+    /// <summary>
+    /// Rede em que o comprador respondeu. Continua sendo quem decide escopo de leitura, vindo
+    /// do <c>IRedeContext</c> — mas <b>não</b> é a chave de unicidade, que é o usuário.
+    /// </summary>
     public int RedeId { get; set; }
 
     /// <summary>
-    /// A comparação avaliada. Índice <b>único</b>: um questionário por sessão. Quem
-    /// respondeu fica em <see cref="UsuarioId"/>, mas não faz parte da chave — duas
-    /// pessoas da mesma rede não avaliam a mesma comparação em separado, porque o envio
-    /// fecha a sessão para todo mundo.
-    /// </summary>
-    public Guid SessaoId { get; set; }
-
-    /// <summary>
-    /// Quem respondeu. <b>FK lógica</b> — índice sim, constraint não, no mesmo padrão de
-    /// <c>SimulacaoCompra.TreinoJobId</c>: a resposta é dado de pesquisa e precisa
-    /// sobreviver à remoção do usuário que a deu. Auditoria, nunca escopo — quem decide
-    /// escopo é <see cref="RedeId"/>, vindo do <c>IRedeContext</c>.
+    /// Quem respondeu, e agora <b>a chave</b>: um questionário por comprador
+    /// (<c>UQ_Questionarios_UsuarioId</c>). Continua sem constraint de FK — índice sim,
+    /// referência não —, no mesmo padrão de <c>SimulacaoCompra.TreinoJobId</c>: resposta de
+    /// pesquisa precisa sobreviver à remoção do usuário que a deu.
     /// </summary>
     public Guid UsuarioId { get; set; }
 
-    /// <summary>
-    /// Versão do catálogo vigente no envio. O texto de cada pergunta e da opção escolhida
-    /// já vai denormalizado em <see cref="QuestionarioResposta"/>, então isto não é o que
-    /// torna a resposta legível — serve para agrupar respostas comparáveis entre si sem
-    /// diferenciar N textos.
-    /// </summary>
+    /// <inheritdoc cref="Questionarios.QuestionarioCatalogo.Versao"/>
     public int VersaoCatalogo { get; set; }
 
     /// <summary>Onde o wizard parou, para retomar de onde o comprador saiu.</summary>
@@ -59,29 +52,4 @@ public sealed class Questionario
     public DateTimeOffset CriadoEm { get; set; }
     public DateTimeOffset AtualizadoEm { get; set; }
     public DateTimeOffset? EnviadoEm { get; set; }
-
-    /// <summary>
-    /// Quantos itens da comparação tinham decisão do braço de ML, e quantos itens ela tinha
-    /// no total — copiados do <c>ResultadoJson</c> da sessão no momento do envio.
-    ///
-    /// <para>
-    /// Existem porque hoje o desfecho esperado é <c>CompraSugeridaMl</c> <b>nula</b>: a
-    /// cobertura do ERP é de 15 a 30 dias e o pipeline prevê 7
-    /// (<c>DecisionOptions.HorizonteMaximoMl</c>). Uma resposta dada sobre uma tela em que a
-    /// coluna do ML está vazia não é comparável com uma dada sobre a tela cheia, e sem estas
-    /// duas colunas as duas populações ficam misturadas e <b>irrecuperáveis</b> — o Stage é
-    /// apagado no import seguinte (<c>DELETE ... WHERE RedeId</c>) e a sessão pode ser
-    /// excluída antes da análise. É o mesmo motivo pelo qual
-    /// <c>ComparacaoSessao.SkusSemCadastro</c> mora na sessão em vez do manifesto.
-    /// </para>
-    ///
-    /// <para>
-    /// Anuláveis, e não zero: um <c>ResultadoJson</c> que não carregou os agregados não
-    /// afirma "nenhum item teve decisão do ML" — afirma que ninguém contou.
-    /// </para>
-    /// </summary>
-    public int? ItensComDecisaoMl { get; set; }
-
-    /// <inheritdoc cref="ItensComDecisaoMl"/>
-    public int? TotalDeItens { get; set; }
 }

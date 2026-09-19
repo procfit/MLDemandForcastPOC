@@ -1,3 +1,4 @@
+@using CosmosPro.ML.DemandForCast.Engine.Questionarios
 @* Seção G do Quadro Resumo: o veredito rápido do comprador sobre esta execução.
 
    <b>Nada aqui nomeia uma versão do instrumento.</b> Havia "Questionário V5" cravado no botão
@@ -7,10 +8,11 @@
    disponibilidade geral o instrumento não muda mais. Se algum texto voltar a nomear versão
    aqui, ele envelhece na próxima revisão do questionário, que foi exatamente o que aconteceu.
 
-   <b>Isto não conclui a sessão</b>, e a diferença importa. Quem conclui é o envio do
-   questionário — decisão do patrocinador (resposta 4a): a avaliação é o resumo, o questionário é
-   o instrumento da pesquisa. Se o clique aqui fechasse a sessão, o questionário viraria opcional
-   e o dado da dissertação deixaria de ser coletado.
+   <b>É isto que conclui a execução</b>, desde 19/09/2026. Antes quem concluía era o envio do
+   questionário; o Professor orientou que o questionário passe a ser respondido uma vez só por
+   comprador, sobre a experiência acumulada, e com ele por execução o comprador responderia o
+   mesmo instrumento a cada simulação. Se este veredito não concluísse, da terceira execução em
+   diante nenhuma sessão sairia de AguardandoAvaliacao.
 
    Nenhuma opção vem pré-selecionada, de propósito: um padrão marcado é uma resposta que a
    ferramenta dá no lugar do participante, e a pesquisa não pode distinguir isso de uma escolha. *@
@@ -32,9 +34,14 @@
         </RadzenRadioButtonList>
     </div>
 
-    <RadzenFormField Text="Comentário (opcional)" Variant="Variant.Outlined" Style="width: 100%">
+    @* Texto pedido pelo patrocinador em 16/09/2026, literal. Continua OPCIONAL: ele pediu o
+       enunciado, não a obrigatoriedade, e exigir texto livre para concluir travaria a execução
+       por uma caixa vazia. *@
+    <RadzenFormField Text="Por favor, indique os pontos fortes e os pontos fracos da execução realizada acima."
+                     Variant="Variant.Outlined" Style="width: 100%">
         <RadzenTextArea @bind-Value="@_comentario" Rows="4" MaxLength="4000" Disabled="@_gravando"
-                        Style="width: 100%" aria-label="Comentário sobre esta execução" />
+                        Style="width: 100%"
+                        aria-label="Pontos fortes e pontos fracos desta execução" />
     </RadzenFormField>
 
     @if (_erro is not null)
@@ -47,16 +54,31 @@
                       ButtonStyle="ButtonStyle.Primary" Disabled="@(_gravando || _veredito is null)"
                       Click="@RegistrarAsync" data-test="registrar-avaliacao" />
 
-        @if (Sessao.Status == "AguardandoAvaliacao")
+        @* O QUESTIONARIO NAO PERTENCE A ESTA EXECUCAO. E um por comprador, liberado depois de
+           N execucoes avaliadas, e a rota nao leva id de sessao nenhum.
+
+           Quando o portao esta fechado a tela EXPLICA em vez de esconder o botao: botao ausente
+           le-se como defeito, e a regra escrita le-se como regra. *@
+        @if (_questionario is { Selado: true })
+        {
+            <RadzenButton Text="Ver minhas respostas" Icon="assignment_turned_in" Variant="Variant.Text"
+                          data-test="ver-questionario"
+                          Click="@(() => Nav.NavigateTo("/questionario"))" />
+        }
+        else if (_questionario is { Liberado: true })
         {
             <RadzenButton Text="Responder Questionário" Icon="assignment" Variant="Variant.Outlined"
                           data-test="ir-para-questionario"
-                          Click="@(() => Nav.NavigateTo($"/comparacoes/{Sessao.Id}/questionario"))" />
+                          Click="@(() => Nav.NavigateTo("/questionario"))" />
         }
-        else if (Sessao.Status == "Concluida")
+        else if (_questionario is { } q)
         {
-            <RadzenButton Text="Ver minhas respostas" Icon="assignment_turned_in" Variant="Variant.Text"
-                          Click="@(() => Nav.NavigateTo($"/comparacoes/{Sessao.Id}/questionario"))" />
+            <RadzenText TextStyle="TextStyle.Body2" data-test="questionario-bloqueado"
+                        Style="margin: 0; color: var(--rz-text-secondary-color)">
+                O questionário sobre o protótipo é liberado depois de
+                <strong>@q.MinimoExigido execuções avaliadas</strong> — você tem
+                <strong>@q.ExecucoesAvaliadas</strong>.
+            </RadzenText>
         }
     </RadzenStack>
 
@@ -74,8 +96,10 @@
     }
 
     <RadzenText TextStyle="TextStyle.Caption" Style="margin: 0; color: var(--rz-text-secondary-color)">
-        Esta avaliação se refere a <strong>esta execução</strong>. O Questionário avalia o
-        protótipo como ferramenta, e é ele que encerra a comparação.
+        Esta avaliação se refere a <strong>esta execução</strong>, e é ela que a conclui. O
+        Questionário avalia o protótipo como ferramenta e é respondido <strong>uma única
+        vez</strong>, depois de pelo menos @QuestionarioCatalogo.MinimoDeExecucoes execuções
+        avaliadas.
     </RadzenText>
 </RadzenStack>
 
@@ -86,6 +110,8 @@
     [Parameter] public EventCallback OnRegistrada { get; set; }
 
     [Inject] private ComparacoesApiClient ComparacoesApi { get; set; } = default!;
+    [Inject] private QuestionariosApiClient QuestionariosApi { get; set; } = default!;
+    [Inject] private ILogger<AvaliacaoDaExecucao> Logger { get; set; } = default!;
     [Inject] private NavigationManager Nav { get; set; } = default!;
     [Inject] private NotificationService Notifications { get; set; } = default!;
 
@@ -93,13 +119,36 @@
     private string? _comentario;
     private bool _gravando;
     private string? _erro;
+    private QuestionarioView? _questionario;
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
         // Pré-carrega o que já foi respondido, para reenviar ser uma correção e não um
         // recomeço. Só quando o campo ainda não foi tocado nesta sessão de tela.
         _veredito ??= Sessao.AvaliacaoVeredito;
         _comentario ??= Sessao.AvaliacaoComentario;
+
+        // GUARD DE PRERENDER, como em Sessao.razor e Questionario.razor: o prerender roda isto
+        // antes de o circuito existir, e ali não há usuário resolvido para perguntar o portão.
+        if (!RendererInfo.IsInteractive) return;
+
+        // O estado do portão vem do servidor a cada render de parâmetro, e não é cacheado:
+        // registrar a Seção G desta execução pode ser justamente o que abre o portão, e a tela
+        // precisa refletir isso sem o comprador ter de recarregar à mão.
+        //
+        // FALHAR AQUI NÃO PODE DERRUBAR A SEÇÃO G. O portão é acessório — o essencial desta
+        // tela é o comprador registrar o veredito, que é o que conclui a execução. Uma exceção
+        // não tratada no OnParametersSetAsync leva a PÁGINA inteira junto, e o comprador fica
+        // sem conseguir avaliar por causa de uma chamada que só decide qual botão desenhar.
+        try
+        {
+            _questionario = await QuestionariosApi.GetAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Não foi possível ler a situação do questionário.");
+            _questionario = null;
+        }
     }
 
     private async Task RegistrarAsync()
@@ -117,7 +166,7 @@
                 {
                     Severity = NotificationSeverity.Success,
                     Summary = "Avaliação registrada",
-                    Detail = "Obrigado. Para concluir a comparação, responda o questionário.",
+                    Detail = "Obrigado. Esta execução está concluída.",
                     Duration = 5000,
                 });
                 await OnRegistrada.InvokeAsync();

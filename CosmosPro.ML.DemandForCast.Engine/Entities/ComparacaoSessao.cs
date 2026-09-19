@@ -63,10 +63,13 @@ public sealed class ComparacaoSessao
     /// <c>NaoValido</c>. Nulo enquanto ele nao avaliou.
     ///
     /// <para>
-    /// <b>Nao fecha a sessao.</b> Quem leva a sessao a <see cref="SessaoStatus.Concluida"/>
-    /// continua sendo o envio do questionario — decisao do patrocinador (resposta 4a): a
-    /// avaliacao e um resumo, o questionario e o instrumento da pesquisa. Se esta coluna
-    /// passasse a concluir, o questionario viraria opcional e o dado da dissertacao sumiria.
+    /// <b>E o que fecha a sessao</b>, desde 19/09/2026. Ate entao quem concluia era o envio do
+    /// questionario — decisao do patrocinador (resposta 4a) que ele mesmo reverteu no documento
+    /// de 16/09, por orientacao do Professor: o questionario passou a ser respondido uma vez so
+    /// por comprador, sobre a experiencia acumulada. Com ele por execucao, o comprador
+    /// responderia o mesmo instrumento a cada simulacao; e se este veredito nao concluisse, da
+    /// terceira execucao em diante nenhuma sessao sairia de
+    /// <see cref="SessaoStatus.AguardandoAvaliacao"/>.
     /// </para>
     /// </summary>
     public string? AvaliacaoVeredito { get; set; }
@@ -119,18 +122,20 @@ public sealed class ComparacaoSessao
     /// há uma carga, um treino ou uma comparação trabalhando pela sessão, e apagá-la deixaria
     /// o worker terminando no vazio. <see cref="SessaoStatus.Concluida"/> recusa para proteger
     /// o <i>dado</i>: sob esta máquina de estados, estar concluída significa que o comprador
-    /// respondeu o questionário, e resposta de pesquisa não evapora por clique. Note que a
-    /// segunda recusa depende de as duas afirmações serem equivalentes — é o que a migration
-    /// garante ao reclassificar as sessões que já estavam em <c>Concluida</c> sem questionário
-    /// para <see cref="SessaoStatus.AguardandoAvaliacao"/>. Sem aquele <c>UPDATE</c>,
-    /// sessões antigas ficariam impossíveis de excluir sem nunca ter sido respondidas.
+    /// registrou a <b>Seção G</b> desta execução, e avaliação de pesquisa não evapora por
+    /// clique. Note que a segunda recusa depende de as duas afirmações serem equivalentes — é
+    /// o que a migration <c>RenomeiaStatusParaAguardandoAvaliacao</c> garante ao devolver a
+    /// <see cref="SessaoStatus.AguardandoAvaliacao"/> as sessões que estavam em
+    /// <c>Concluida</c> sem veredito, porque haviam sido fechadas pelo questionário. Sem
+    /// aquele <c>UPDATE</c> elas ficariam impossíveis de excluir sem nunca ter sido avaliadas.
+    /// O questionário do comprador não entra nesta conta: ele deixou de pertencer à sessão e
+    /// sobrevive à exclusão de qualquer execução.
     /// </para>
     ///
     /// <para>
     /// Continua excluível em <see cref="SessaoStatus.AguardandoDados"/> — quem criou por
     /// engano e nunca enviou nada — e em <see cref="SessaoStatus.AguardandoAvaliacao"/>,
-    /// que é o comprador decidindo não avaliar. Um rascunho de questionário vai junto no
-    /// cascade: rascunho abandonado não pode trancar a sessão.
+    /// que é o comprador decidindo não avaliar.
     /// </para>
     ///
     /// <para>

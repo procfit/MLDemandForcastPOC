@@ -5,8 +5,14 @@ using CosmosPro.ML.DemandForCast.Web.Services;
 namespace CosmosPro.ML.DemandForCast.Web;
 
 /// <summary>
-/// O questionário da última fase da sessão. Como nos demais clients, <c>redeId</c> e
+/// O questionário do comprador sobre o protótipo. Como nos demais clients, <c>redeId</c> e
 /// <c>usuarioId</c> vêm do <see cref="IRedeContext"/> — nunca de parâmetro de página.
+///
+/// <para>
+/// <b>Não há id de sessão em rota nenhuma daqui.</b> O questionário deixou de pertencer à
+/// execução em 19/09/2026: é um por comprador, sobre a experiência acumulada em pelo menos
+/// duas execuções avaliadas.
+/// </para>
 /// </summary>
 public class QuestionariosApiClient(HttpClient httpClient, IRedeContext redeContext)
 {
@@ -23,26 +29,31 @@ public class QuestionariosApiClient(HttpClient httpClient, IRedeContext redeCont
     }
 
     /// <summary>
-    /// O questionário da sessão. Devolve <c>null</c> num 404 — sessão inexistente ou de outra
-    /// rede. <b>Não</b> confundir com <c>QuestionarioView.Id == null</c>, que é a resposta
-    /// legítima "esta sessão ainda não tem rascunho".
+    /// O questionário do comprador logado, com o estado do portão junto.
+    ///
+    /// <para>
+    /// <b>Portão fechado não é ausência.</b> A resposta vem com <c>Liberado = false</c> e as
+    /// contagens, porque a tela da Seção G explica quantas execuções faltam em vez de esconder
+    /// o botão — botão sumido lê-se como defeito.
+    /// </para>
     /// </summary>
-    public async Task<QuestionarioView?> GetAsync(Guid sessaoId, CancellationToken ct = default)
+    public async Task<QuestionarioView?> GetAsync(CancellationToken ct = default)
     {
         var redeId = await redeContext.GetRedeIdAtualAsync();
+        var usuarioId = await redeContext.GetUsuarioIdAtualAsync();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(LeituraTimeout);
 
         var resp = await httpClient.GetAsync(
-            $"/api/comparacoes/{sessaoId}/questionario?redeId={redeId}", cts.Token);
+            $"/api/questionario?redeId={redeId}&usuarioId={usuarioId}", cts.Token);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync<QuestionarioView>(cancellationToken: cts.Token);
     }
 
     /// <summary>
-    /// A tabulação da rede: uma linha por execução, com a seção G e as respostas do
-    /// questionário. É a fonte da tela de tabulação e da planilha.
+    /// A tabulação da rede, em dois blocos: as execuções com a Seção G, e os questionários por
+    /// comprador. É a fonte da tela de tabulação e da planilha.
     /// </summary>
     public async Task<TabulacaoView> GetTabulacaoAsync(CancellationToken ct = default)
     {
@@ -53,37 +64,38 @@ public class QuestionariosApiClient(HttpClient httpClient, IRedeContext redeCont
         var resp = await httpClient.GetFromJsonAsync<TabulacaoView>(
             $"/api/comparacoes/avaliacoes?redeId={redeId}", cts.Token);
 
-        return resp ?? new TabulacaoView(redeId, [], [], 0, []);
+        return resp ?? new TabulacaoView(redeId, [], [], 0, [], []);
     }
 
     /// <summary>Grava o rascunho. Idempotente: manda o estado completo do wizard.</summary>
     public Task<QuestionarioResult> SalvarAsync(
-        Guid sessaoId, int passoAtual, IReadOnlyList<RespostaEnviada> respostas, CancellationToken ct = default)
-        => EnviarCorpoAsync(sessaoId, passoAtual, respostas, selar: false, ct);
+        int passoAtual, IReadOnlyList<RespostaEnviada> respostas, CancellationToken ct = default)
+        => EnviarCorpoAsync(passoAtual, respostas, selar: false, ct);
 
     /// <summary>
-    /// Sela a avaliação e conclui a sessão. Falha com 400 quando falta pergunta obrigatória e
-    /// com 409 quando a sessão já foi avaliada.
+    /// Sela o questionário. Falha com 400 quando falta pergunta obrigatória, e com 409 quando
+    /// o comprador ainda não avaliou execuções suficientes ou já respondeu antes.
     /// </summary>
     public Task<QuestionarioResult> EnviarAsync(
-        Guid sessaoId, int passoAtual, IReadOnlyList<RespostaEnviada> respostas, CancellationToken ct = default)
-        => EnviarCorpoAsync(sessaoId, passoAtual, respostas, selar: true, ct);
+        int passoAtual, IReadOnlyList<RespostaEnviada> respostas, CancellationToken ct = default)
+        => EnviarCorpoAsync(passoAtual, respostas, selar: true, ct);
 
     /// <summary>
     /// Rascunho e envio diferem só na rota; a tradução do erro é a mesma, e duplicá-la faria
     /// as duas pontas divergirem na mensagem que o comprador lê.
     /// </summary>
     private async Task<QuestionarioResult> EnviarCorpoAsync(
-        Guid sessaoId, int passoAtual, IReadOnlyList<RespostaEnviada> respostas, bool selar, CancellationToken ct)
+        int passoAtual, IReadOnlyList<RespostaEnviada> respostas, bool selar, CancellationToken ct)
     {
         var redeId = await redeContext.GetRedeIdAtualAsync();
         var usuarioId = await redeContext.GetUsuarioIdAtualAsync();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(LeituraTimeout);
 
+        var escopo = $"redeId={redeId}&usuarioId={usuarioId}";
         var rota = selar
-            ? $"/api/comparacoes/{sessaoId}/questionario/enviar?redeId={redeId}&usuarioId={usuarioId}"
-            : $"/api/comparacoes/{sessaoId}/questionario?redeId={redeId}&usuarioId={usuarioId}";
+            ? $"/api/questionario/enviar?{escopo}"
+            : $"/api/questionario?{escopo}";
         var corpo = new SalvarQuestionarioRequest(passoAtual, respostas);
 
         var resp = selar
@@ -126,19 +138,36 @@ public sealed record PerguntaView(
 public sealed record OpcaoView(string Codigo, string Texto, int? Valor, bool PermiteTextoLivre);
 
 /// <param name="Id"><c>null</c> = ainda não há rascunho; a tela desenha o wizard vazio.</param>
+/// <param name="ExecucoesAvaliadas">Execuções com Seção G respondida por este comprador.</param>
 public sealed record QuestionarioView(
     Guid? Id,
-    string SessaoStatus,
     DateTimeOffset? EnviadoEm,
     int PassoAtual,
     int VersaoCatalogo,
+    int ExecucoesAvaliadas,
+    int MinimoExigido,
+    bool Liberado,
     IReadOnlyList<RespostaView> Respostas)
 {
     /// <summary>
-    /// Se a avaliação já foi selada — a tela entra em modo leitura. Vem do status da sessão, que
-    /// é a autoridade; <see cref="EnviadoEm"/> é só o carimbo que a tela mostra.
+    /// Se o questionário já foi selado — a tela entra em modo leitura.
+    ///
+    /// <para>
+    /// <b>Vem de <see cref="EnviadoEm"/>, e não mais do status da sessão.</b> Enquanto o
+    /// questionário pertencia a uma execução, a autoridade sobre "selado" era ela estar
+    /// concluída; agora o questionário não pertence a execução nenhuma, e o carimbo é a única
+    /// autoridade que resta — que é também por isso que a tabela não tem coluna de situação.
+    /// </para>
     /// </summary>
-    public bool Selado => SessaoStatus == "Concluida";
+    public bool Selado => EnviadoEm is not null;
+
+    /// <summary>
+    /// Se o comprador pode responder agora: o portão abriu e ele ainda não enviou.
+    /// </summary>
+    public bool PodeResponder => Liberado && !Selado;
+
+    /// <summary>Quantas execuções ainda faltam avaliar. Zero quando o portão já abriu.</summary>
+    public int Faltam => Math.Max(0, MinimoExigido - ExecucoesAvaliadas);
 }
 
 public sealed record RespostaView(
@@ -151,12 +180,19 @@ public sealed record RespostaView(
 /// pseudônimo — a tela não recalcula, senão passariam a existir duas definições de
 /// "participante".
 /// </param>
+/// <param name="Execucoes">Uma linha por execução, com a Seção G.</param>
+/// <param name="Questionarios">
+/// Uma linha por <b>comprador</b>. Os dois blocos são separados desde 19/09/2026: repetir as
+/// respostas do questionário em cada execução do mesmo comprador faria a planilha parecer ter
+/// N questionários onde há um.
+/// </param>
 public sealed record TabulacaoView(
     int RedeId,
     IReadOnlyList<string> Codigos,
     IReadOnlyList<string> CodigosDeTexto,
     int Participantes,
-    IReadOnlyList<AvaliacaoTabulada> Linhas)
+    IReadOnlyList<ExecucaoAvaliada> Execucoes,
+    IReadOnlyList<QuestionarioDoComprador> Questionarios)
 {
     /// <summary>
     /// Se a célula deste código traz o texto da opção em vez do número da escala. Vem do
@@ -165,38 +201,17 @@ public sealed record TabulacaoView(
     /// </summary>
     public bool EhTexto(string codigo) => CodigosDeTexto.Contains(codigo);
 
-    public int ComAvaliacao => Linhas.Count(l => l.AvaliacaoVeredito is not null);
+    public int ComAvaliacao => Execucoes.Count(l => l.AvaliacaoVeredito is not null);
 
-    public int ComQuestionario => Linhas.Count(l => l.QuestionarioEnviadoEm is not null);
-
-    /// <summary>
-    /// Quantas versões distintas do instrumento aparecem nas respostas. <b>Mais de uma é
-    /// aviso</b>, não curiosidade: o mesmo código designa afirmação diferente entre versões, e
-    /// somar a coluna inteira misturaria perguntas. A tela declara isso em vez de deixar quem
-    /// tabula descobrir depois.
-    /// </summary>
-    public IReadOnlyList<int> VersoesPresentes =>
-        [.. Linhas.Select(l => l.VersaoCatalogo).OfType<int>().Distinct().Order()];
-
-    /// <summary>
-    /// As versões presentes pelos <b>nomes do instrumento</b> — "V3", "V5", "V6" —, e não pelos
-    /// números do catálogo interno. O aviso da tela dizia "v2, v3, v4", que não é como o
-    /// questionário se chama em lugar nenhum fora deste código.
-    /// </summary>
-    public IReadOnlyList<string> NomesDasVersoes =>
-        [.. VersoesPresentes.Select(Engine.Questionarios.QuestionarioCatalogo.NomeDaVersao)];
+    public int Respondidos => Questionarios.Count(q => q.EnviadoEm is not null);
 }
 
 /// <param name="Avaliador">
-/// <b>Pseudônimo</b> de quem registrou a avaliação — P01, P02, P03… —, nunca nome nem e-mail. A
+/// <b>Pseudônimo</b> de quem registrou a Seção G — P01, P02, P03… —, nunca nome nem e-mail. A
 /// identidade não sai do banco: o servidor não consulta a tabela de usuários. Ver a nota em
 /// <c>QuestionariosEndpoints.TabulacaoAsync</c>.
 /// </param>
-/// <param name="Respondente">
-/// <b>Pseudônimo</b> de quem respondeu o questionário. Normalmente o mesmo código do
-/// <paramref name="Avaliador"/>, e não é obrigatório que seja.
-/// </param>
-public sealed record AvaliacaoTabulada(
+public sealed record ExecucaoAvaliada(
     Guid SessaoId,
     DateTimeOffset CriadoEm,
     string Status,
@@ -205,10 +220,19 @@ public sealed record AvaliacaoTabulada(
     string? AvaliacaoVeredito,
     string? AvaliacaoComentario,
     DateTimeOffset? AvaliacaoEm,
-    string? Avaliador,
-    DateTimeOffset? QuestionarioEnviadoEm,
-    int? VersaoCatalogo,
+    string? Avaliador)
+{
+    public bool Avaliada => AvaliacaoVeredito is not null;
+}
+
+/// <param name="Respondente">
+/// <b>Pseudônimo</b> de quem respondeu. É o mesmo código que aparece como
+/// <c>Avaliador</c> nas execuções dele — é o que liga os dois blocos sem identificar ninguém.
+/// </param>
+public sealed record QuestionarioDoComprador(
     string? Respondente,
+    DateTimeOffset? EnviadoEm,
+    int VersaoCatalogo,
     IReadOnlyList<RespostaTabulada> Respostas)
 {
     /// <summary>
@@ -233,7 +257,7 @@ public sealed record AvaliacaoTabulada(
     public string? TextoLivre(string codigo) =>
         Respostas.FirstOrDefault(x => x.PerguntaCodigo == codigo)?.TextoLivre;
 
-    public bool Respondido => QuestionarioEnviadoEm is not null;
+    public bool Respondido => EnviadoEm is not null;
 }
 
 public sealed record RespostaTabulada(

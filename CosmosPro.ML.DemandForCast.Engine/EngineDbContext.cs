@@ -266,7 +266,6 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.HasKey(x => x.Id);
 
             b.Property(x => x.RedeId).IsRequired();
-            b.Property(x => x.SessaoId).IsRequired();
             b.Property(x => x.UsuarioId).IsRequired();
             b.Property(x => x.VersaoCatalogo).IsRequired();
             b.Property(x => x.CriadoEm).IsRequired();
@@ -275,20 +274,16 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.HasOne<Rede>().WithMany().HasForeignKey(x => x.RedeId)
              .OnDelete(DeleteBehavior.Restrict);
 
-            // Cascade: excluir a sessão leva o questionário. Só alcança rascunho — sessão
-            // Concluida (questionário selado) recusa exclusão em ComparacaoSessao.PodeExcluir,
-            // e o endpoint repete a condição no WHERE do DELETE.
-            b.HasOne<ComparacaoSessao>().WithMany().HasForeignKey(x => x.SessaoId)
-             .OnDelete(DeleteBehavior.Cascade);
-
-            // Único: um questionário por sessão. É esta constraint — não a checagem do
-            // endpoint — que impede dois envios concorrentes de criarem duas avaliações da
-            // mesma comparação.
-            b.HasIndex(x => x.SessaoId).IsUnique().HasDatabaseName("UQ_Questionarios_SessaoId");
-
-            // FK lógica (índice sem constraint): a resposta é dado de pesquisa e sobrevive à
-            // remoção do usuário que a deu — mesmo padrão de SimulacoesCompra.TreinoJobId.
-            b.HasIndex(x => x.UsuarioId).HasDatabaseName("IX_Questionarios_UsuarioId");
+            // Único por COMPRADOR, e não mais por sessão: o questionário é respondido uma vez
+            // só, sobre a experiência acumulada em várias execuções. É esta constraint — não a
+            // checagem do endpoint — que impede dois envios concorrentes de criarem dois
+            // registros para a mesma pessoa.
+            //
+            // NÃO HÁ MAIS FK PARA A SESSÃO. Ela era Cascade, e mantê-la faria o veredito do
+            // comprador sobre a ferramenta sumir quando uma das execuções que ele avaliou
+            // fosse excluída. Continua sem constraint de FK para o usuário — índice sim,
+            // referência não —, porque resposta de pesquisa sobrevive à remoção de quem a deu.
+            b.HasIndex(x => x.UsuarioId).IsUnique().HasDatabaseName("UQ_Questionarios_UsuarioId");
 
             // Listagem e export do TCC: por rede, em ordem de envio. Sem índice de polling
             // porque nenhuma fila reclama questionário — a fase é de humano.

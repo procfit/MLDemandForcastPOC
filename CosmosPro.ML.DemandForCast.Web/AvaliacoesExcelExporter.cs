@@ -3,7 +3,16 @@ using ClosedXML.Excel;
 namespace CosmosPro.ML.DemandForCast.Web;
 
 /// <summary>
-/// A planilha de tabulação das avaliações: seção G e questionário, uma linha por execução.
+/// A planilha de tabulação das avaliações, em <b>duas abas de dado</b>: a seção G por execução e
+/// o questionário por comprador.
+///
+/// <para>
+/// <b>Por que duas, e não uma.</b> A seção G é por execução; o questionário é por comprador,
+/// respondido uma vez só (19/09/2026). Numa aba só, as respostas do questionário apareceriam
+/// repetidas em cada execução da mesma pessoa, e qualquer contagem feita sobre a coluna sairia
+/// multiplicada pelo número de execuções — a planilha pareceria ter N questionários onde há um.
+/// O que liga as duas abas é o <b>código do participante</b>.
+/// </para>
 ///
 /// <para>
 /// <b>São dados brutos, de propósito.</b> O pedido do patrocinador é explícito: o POC registra,
@@ -20,18 +29,9 @@ namespace CosmosPro.ML.DemandForCast.Web;
 /// </para>
 ///
 /// <para>
-/// <b>A chave é a execução, nunca o comprador.</b> O mesmo comprador avalia várias execuções, e
-/// consolidar por ele apagaria a variação que a pesquisa mede. Cada linha traz o
-/// <c>ID da execução</c>, que é o campo pelo qual as duas abas se relacionam com qualquer outro
-/// recorte que ele cruzar depois.
-/// </para>
-///
-/// <para>
-/// <b>A aba "Perguntas" existe porque o instrumento foi renumerado duas vezes.</b> O código
-/// <c>B7</c> já designou três afirmações distintas, então uma planilha com colunas B1..B11 e
-/// nenhuma legenda é ambígua — e a ambiguidade é silenciosa, do tipo que só aparece na
-/// conclusão. A legenda sai do <b>enunciado gravado com cada resposta</b>, não do catálogo
-/// atual: só assim uma resposta dada sob a V5 é lida com a pergunta que a V5 fazia.
+/// <b>A aba "Perguntas" traz o enunciado gravado com cada resposta</b>, e não o catálogo atual.
+/// É o que torna uma resposta legível independentemente de o instrumento ter sido editado depois
+/// — e é por isso que ela não depende de nenhum número de versão.
 /// </para>
 /// </summary>
 internal static class AvaliacoesExcelExporter
@@ -43,7 +43,8 @@ internal static class AvaliacoesExcelExporter
     {
         using var wb = new XLWorkbook();
         Capa(wb, tabulacao, redeNome, geradoEm);
-        Avaliacoes(wb, tabulacao, redeNome);
+        Execucoes(wb, tabulacao, redeNome);
+        Questionarios(wb, tabulacao, redeNome);
         Perguntas(wb, tabulacao);
 
         using var ms = new MemoryStream();
@@ -71,11 +72,20 @@ internal static class AvaliacoesExcelExporter
 
         Par("Gerado em", geradoEm.ToLocalTime().ToString("dd/MM/yyyy HH:mm"));
         Par("Rede", redeNome ?? $"rede {t.RedeId}");
-        Par("Execuções nesta planilha", $"{t.Linhas.Count:N0}");
+        Par("Execuções nesta planilha", $"{t.Execucoes.Count:N0}");
+        Par("Execuções avaliadas (seção G)", $"{t.ComAvaliacao:N0}");
         Par("Participantes distintos", $"{t.Participantes:N0}");
-        Par("Com avaliação (seção G)", $"{t.ComAvaliacao:N0}");
-        Par("Com questionário enviado", $"{t.ComQuestionario:N0}");
+        Par("Questionários respondidos", $"{t.Respondidos:N0}");
         l++;
+
+        ws.Cell(l, 1).Value =
+            "Esta planilha tem DUAS abas de dado, e elas medem coisas diferentes. 'Execucoes' "
+            + "traz a seção G, que avalia UMA execução. 'Questionarios' traz o questionário "
+            + "sobre o protótipo, que cada comprador responde UMA VEZ, depois de pelo menos duas "
+            + "execuções avaliadas. Não junte as duas por linha: o que as liga é o código do "
+            + "participante.";
+        ws.Cell(l, 1).Style.Font.Italic = true;
+        l += 2;
 
         ws.Cell(l, 1).Value =
             "As colunas Avaliador e Respondente trazem um CÓDIGO do participante (P01, P02, …), "
@@ -89,24 +99,11 @@ internal static class AvaliacoesExcelExporter
         // O denominador declarado. "12 avaliações" nao diz nada sem as execucoes de onde saíram,
         // e a planilha traz as duas coisas justamente para a conta poder ser feita.
         ws.Cell(l, 1).Value =
-            "A planilha lista TODAS as execuções da rede, inclusive as que ninguém avaliou — o "
-            + "denominador faz parte do dado. Linha sem avaliação e sem questionário fica com as "
-            + "células em branco.";
+            "A aba Execucoes lista TODAS as execuções da rede, inclusive as que ninguém avaliou "
+            + "— o denominador faz parte do dado. Linha sem avaliação fica com as células em "
+            + "branco.";
         ws.Cell(l, 1).Style.Font.Italic = true;
         l += 2;
-
-        if (t.VersoesPresentes.Count > 1)
-        {
-            ws.Cell(l, 1).Value = "ATENÇÃO";
-            ws.Cell(l, 1).Style.Font.Bold = true;
-            ws.Cell(l, 2).Value =
-                $"Há respostas de {t.VersoesPresentes.Count} versões diferentes do questionário "
-                + $"({string.Join(", ", t.NomesDasVersoes)}). O mesmo código "
-                + "designa afirmações diferentes entre versões, então NÃO some uma coluna inteira "
-                + "sem antes separar por 'Versão do questionário'. A aba Perguntas mostra o "
-                + "enunciado de cada código em cada versão.";
-            l += 2;
-        }
 
         ws.Cell(l, 1).Value =
             "Nas afirmações da Parte B a célula traz o valor da escala (1 a 5). Nas perguntas de "
@@ -120,24 +117,16 @@ internal static class AvaliacoesExcelExporter
         ws.Column(2).Width = 80;
     }
 
-    private static void Avaliacoes(XLWorkbook wb, TabulacaoView t, string? redeNome)
+    /// <summary>A seção G: uma linha por execução, inclusive as não avaliadas.</summary>
+    private static void Execucoes(XLWorkbook wb, TabulacaoView t, string? redeNome)
     {
-        var ws = wb.Worksheets.Add("Avaliacoes");
-
-        // Coluna de texto livre só para o código que de fato tem algum: uma por pergunta deixaria
-        // catorze colunas vazias entre as respostas e esconderia as que importam.
-        var comTextoLivre = t.Codigos
-            .Where(c => t.Linhas.Any(l => !string.IsNullOrWhiteSpace(l.TextoLivre(c))))
-            .ToList();
+        var ws = wb.Worksheets.Add("Execucoes");
 
         List<string> cabecalhos =
         [
             "ID da execução", "Data/hora da execução", "Status da execução",
             "Sugestão (ERP)", "Descrição da sugestão", "Rede",
-            "Avaliação (seção G)", "Comentário (seção G)", "Avaliado em", "Avaliador",
-            "Questionário enviado em", "Versão do questionário", "Respondente",
-            .. t.Codigos,
-            .. comTextoLivre.Select(c => $"{c} — outro"),
+            "Avaliação (seção G)", "Pontos fortes e fracos", "Avaliado em", "Avaliador",
         ];
 
         for (var c = 0; c < cabecalhos.Count; c++)
@@ -148,7 +137,7 @@ internal static class AvaliacoesExcelExporter
         ws.SheetView.FreezeRows(1);
 
         var linha = 2;
-        foreach (var l in t.Linhas)
+        foreach (var l in t.Execucoes)
         {
             var c = 1;
 
@@ -167,19 +156,55 @@ internal static class AvaliacoesExcelExporter
                 : "";
             ws.Cell(linha, c++).Value = l.Avaliador ?? "";
 
-            ws.Cell(linha, c++).Value = l.QuestionarioEnviadoEm is { } qe
-                ? qe.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
+            linha++;
+        }
+
+        ws.Columns(1, cabecalhos.Count).AdjustToContents();
+
+        // Descrição e comentário são texto longo; AdjustToContents os deixa absurdos.
+        ws.Column(5).Width = 40;
+        ws.Column(8).Width = 50;
+    }
+
+    /// <summary>O questionário: uma linha por comprador.</summary>
+    private static void Questionarios(XLWorkbook wb, TabulacaoView t, string? redeNome)
+    {
+        var ws = wb.Worksheets.Add("Questionarios");
+
+        // Coluna de texto livre só para o código que de fato tem algum: uma por pergunta deixaria
+        // catorze colunas vazias entre as respostas e esconderia as que importam.
+        var comTextoLivre = t.Codigos
+            .Where(c => t.Questionarios.Any(q => !string.IsNullOrWhiteSpace(q.TextoLivre(c))))
+            .ToList();
+
+        List<string> cabecalhos =
+        [
+            "Respondente", "Rede", "Respondido em",
+            .. t.Codigos,
+            .. comTextoLivre.Select(c => $"{c} — outro"),
+        ];
+
+        for (var c = 0; c < cabecalhos.Count; c++)
+        {
+            ws.Cell(1, c + 1).Value = cabecalhos[c];
+        }
+        ws.Row(1).Style.Font.Bold = true;
+        ws.SheetView.FreezeRows(1);
+
+        var linha = 2;
+        foreach (var q in t.Questionarios)
+        {
+            var c = 1;
+
+            ws.Cell(linha, c++).Value = q.Respondente ?? "";
+            ws.Cell(linha, c++).Value = redeNome ?? $"rede {t.RedeId}";
+            ws.Cell(linha, c++).Value = q.EnviadoEm is { } e
+                ? e.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
                 : "";
-            // NOME do instrumento (V3, V5, V6), e nao o contador interno. Quem tabula filtra
-            // por esta coluna, e "4" nao e como o questionario se chama em lugar nenhum.
-            ws.Cell(linha, c++).Value = l.VersaoCatalogo is { } v
-                ? Engine.Questionarios.QuestionarioCatalogo.NomeDaVersao(v)
-                : Vazio;
-            ws.Cell(linha, c++).Value = l.Respondente ?? "";
 
             foreach (var codigo in t.Codigos)
             {
-                var valor = l.Valor(codigo, t.EhTexto(codigo));
+                var valor = q.Valor(codigo, t.EhTexto(codigo));
 
                 // Número entra como número para o Excel poder somar; texto entra como texto.
                 // Célula vazia é ausência de resposta, e nunca zero — zero seria uma posição na
@@ -200,63 +225,61 @@ internal static class AvaliacoesExcelExporter
 
             foreach (var codigo in comTextoLivre)
             {
-                ws.Cell(linha, c++).Value = l.TextoLivre(codigo) ?? "";
+                ws.Cell(linha, c++).Value = q.TextoLivre(codigo) ?? "";
             }
 
             linha++;
         }
 
-        ws.Columns(1, cabecalhos.Count).AdjustToContents();
+        if (t.Questionarios.Count == 0)
+        {
+            ws.Cell(2, 1).Value = "Nenhum comprador respondeu o questionário ainda.";
+            ws.Cell(2, 1).Style.Font.Italic = true;
+        }
 
-        // Descrição e comentário são texto longo; AdjustToContents os deixa absurdos.
-        ws.Column(5).Width = 40;
-        ws.Column(8).Width = 50;
+        ws.Columns(1, cabecalhos.Count).AdjustToContents();
     }
 
     /// <summary>
-    /// A legenda: para cada versão presente, o enunciado que cada código de fato exibiu. Sai do
-    /// retrato gravado com a resposta — o catálogo atual só conhece a versão corrente.
+    /// A legenda: para cada código, o enunciado que ele de fato exibiu. Sai do retrato gravado
+    /// com a resposta, e não do catálogo atual — é o que mantém a resposta legível se o
+    /// instrumento for editado depois.
+    ///
+    /// <para>
+    /// <b>Duas linhas para o mesmo código significam que o catálogo foi editado com respostas já
+    /// coletadas.</b> A aba mostra as duas em vez de escolher uma: escolher seria a planilha
+    /// afirmando que todo mundo leu o mesmo enunciado.
+    /// </para>
     /// </summary>
     private static void Perguntas(XLWorkbook wb, TabulacaoView t)
     {
         var ws = wb.Worksheets.Add("Perguntas");
 
-        ws.Cell(1, 1).Value = "Versão do questionário";
-        ws.Cell(1, 2).Value = "Código";
-        ws.Cell(1, 3).Value = "Enunciado exibido";
-        ws.Cell(1, 4).Value = "Respostas";
+        ws.Cell(1, 1).Value = "Código";
+        ws.Cell(1, 2).Value = "Enunciado exibido";
+        ws.Cell(1, 3).Value = "Respostas";
         ws.Row(1).Style.Font.Bold = true;
         ws.SheetView.FreezeRows(1);
 
-        var legenda = t.Linhas
-            .Where(l => l.VersaoCatalogo is not null)
-            .SelectMany(l => l.Respostas.Select(r => new
-            {
-                Versao = l.VersaoCatalogo!.Value,
-                r.PerguntaCodigo,
-                r.PerguntaTexto,
-            }))
-            .GroupBy(x => (x.Versao, x.PerguntaCodigo, x.PerguntaTexto))
+        var legenda = t.Questionarios
+            .SelectMany(q => q.Respostas)
+            .GroupBy(r => (r.PerguntaCodigo, r.PerguntaTexto))
             .Select(g => new
             {
-                g.Key.Versao,
                 g.Key.PerguntaCodigo,
                 g.Key.PerguntaTexto,
                 Respostas = g.Count(),
             })
-            .OrderBy(x => x.Versao)
-            .ThenBy(x => Ordem(x.PerguntaCodigo))
+            .OrderBy(x => Ordem(x.PerguntaCodigo))
             .ThenBy(x => x.PerguntaCodigo, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         var linha = 2;
         foreach (var item in legenda)
         {
-            ws.Cell(linha, 1).Value =
-                Engine.Questionarios.QuestionarioCatalogo.NomeDaVersao(item.Versao);
-            ws.Cell(linha, 2).Value = item.PerguntaCodigo;
-            ws.Cell(linha, 3).Value = item.PerguntaTexto;
-            ws.Cell(linha, 4).Value = item.Respostas;
+            ws.Cell(linha, 1).Value = item.PerguntaCodigo;
+            ws.Cell(linha, 2).Value = item.PerguntaTexto;
+            ws.Cell(linha, 3).Value = item.Respostas;
             linha++;
         }
 
@@ -266,10 +289,9 @@ internal static class AvaliacoesExcelExporter
             ws.Cell(2, 1).Style.Font.Italic = true;
         }
 
-        ws.Column(1).Width = 22;
-        ws.Column(2).Width = 12;
-        ws.Column(3).Width = 110;
-        ws.Column(4).Width = 12;
+        ws.Column(1).Width = 12;
+        ws.Column(2).Width = 110;
+        ws.Column(3).Width = 12;
     }
 
     /// <summary>

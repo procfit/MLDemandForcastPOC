@@ -68,6 +68,18 @@ public interface IComparacoesApi
     Task<IApiResponse<SessaoAnaliseResposta>> AnaliseAsync(
         Guid id, [Query] int redeId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Registra a seção G. <b>É o que conclui a execução</b> desde 19/09/2026 — antes quem
+    /// concluía era o envio do questionário.
+    /// </summary>
+    [Post("/api/comparacoes/{id}/avaliacao")]
+    Task<IApiResponse<SessaoAvaliacaoResposta>> RegistrarAvaliacaoAsync(
+        Guid id,
+        [Body] AvaliacaoBody body,
+        [Query] int redeId,
+        [Query] Guid usuarioId,
+        CancellationToken ct = default);
+
     [Delete("/api/comparacoes/{id}")]
     Task<IApiResponse> ExcluirAsync(Guid id, [Query] int redeId, CancellationToken ct = default);
 }
@@ -172,3 +184,14 @@ public sealed record ItemPiorResposta(
     decimal? ErroPbs,
     decimal? ErroMl,
     bool JanelaAlemDoHistorico);
+
+public sealed record AvaliacaoBody(string Veredito, string? Comentario);
+
+/// <summary>
+/// Espelho de <c>SessaoAvaliacaoView</c>. Os nomes são os DELE, e não os das colunas da
+/// entidade (<c>AvaliacaoVeredito</c>, <c>AvaliacaoEm</c>) — um nome divergente aqui não
+/// quebra a desserialização, devolve <c>null</c> em silêncio e faz o teste afirmar o contrário
+/// do que aconteceu.
+/// </summary>
+public sealed record SessaoAvaliacaoResposta(
+    string? Veredito, string? Comentario, DateTimeOffset? RegistradaEm);

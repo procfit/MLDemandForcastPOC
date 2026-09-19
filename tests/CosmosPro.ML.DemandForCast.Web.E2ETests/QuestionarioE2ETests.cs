@@ -12,8 +12,8 @@ using Microsoft.Playwright;
 namespace CosmosPro.ML.DemandForCast.Web.E2ETests;
 
 /// <summary>
-/// O questionário como <b>última fase</b> do fluxo guiado, no navegador: da chamada na tela de
-/// resultado até a sessão virar <c>Concluida</c>.
+/// O fluxo de avaliação no navegador, do jeito que o Professor definiu: seção G a cada
+/// execução, e o questionário <b>uma vez só</b>, liberado depois de duas execuções avaliadas.
 ///
 /// <para>
 /// É o cenário que os testes de integração não alcançam. Eles provam o contrato dos endpoints;
@@ -24,8 +24,9 @@ namespace CosmosPro.ML.DemandForCast.Web.E2ETests;
 /// </para>
 ///
 /// <para>
-/// A sessão é semeada em <c>AguardandoAvaliacao</c> com resultado e detalhe materializados:
-/// chegar lá pelo caminho legítimo exigiria importar um ZIP e treinar um modelo dentro do E2E.
+/// <b>DUAS sessões</b> são semeadas em <c>AguardandoAvaliacao</c> com resultado e detalhe
+/// materializados, porque o portão exige duas: chegar lá pelo caminho legítimo exigiria
+/// importar dois ZIPs e treinar dois modelos dentro do E2E.
 /// As perguntas vêm do <see cref="QuestionarioCatalogo"/> real, lidas em tempo de teste em vez
 /// de escritas à mão — é o que mantém este cenário válido quando o instrumento definitivo
 /// substituir o catálogo provisório.
@@ -39,37 +40,68 @@ public sealed class QuestionarioE2ETests(AppHostFixture fixture)
     private const byte TipoCalculo = 2;
 
     [Fact]
-    public async Task Comprador_responde_o_questionario_e_a_sessao_conclui()
+    public async Task O_questionario_libera_na_segunda_execucao_avaliada_e_some_depois_do_envio()
     {
         var ct = TestContext.Current.CancellationToken;
-        var sessaoId = await SemearAsync(ct);
+
+        // O QUESTIONARIO E POR COMPRADOR, e o banco destes testes e persistente: um respondido
+        // numa execucao anterior da suite deixaria o portao selado, e o ATO 1 falharia sem
+        // relacao aparente com a causa. Limpa tambem os vereditos dele, porque o portao conta
+        // execucoes avaliadas por ele -- residuo abriria o portao cedo.
+        await fixture.LimparAvaliacoesDoCompradorAsync(AppHostFixture.PowerUserEmail, ct);
+
+        // NOMES DISTINTOS, e isto não é cosmético: `SemearSessaoConcluidaAsync` APAGA as
+        // sessões com o mesmo nome antes de inserir — é a dedup dela para o banco persistente
+        // entre execuções. Semear duas com o mesmo nome faria a segunda destruir a primeira, e
+        // o sintoma seria um timeout esperando a tela de uma sessão que não existe mais.
+        var primeira = await SemearAsync(ct, $"{NomeDaSessao} #1");
+        var segunda = await SemearAsync(ct, $"{NomeDaSessao} #2");
 
         var page = await fixture.NovaPaginaLogadaAsync();
         var baseUrl = fixture.WebfrontendUrl.TrimEnd('/');
 
-        // 1. O caminho inteiro até o instrumento, como o comprador o percorre: a tela de
-        //    resultado chama o Quadro Resumo, e é de lá — da seção G, depois da avaliação — que
-        //    se chega ao questionário. O atalho direto saiu quando o Quadro Resumo nasceu, e
-        //    este percurso é agora a ÚNICA porta: se ele quebrar, a sessão fica presa em
-        //    AguardandoAvaliacao para sempre, que é a fase que nenhum worker reclama.
-        //
-        //    A tela precisa renderizar em AguardandoAvaliacao, e não só em Concluida. Se o
-        //    gate voltasse a ser `Status == "Concluida"`, é aqui que apareceria.
-        await page.GotoAsync($"{baseUrl}/comparacoes/{sessaoId}");
-        var chamada = page.Locator("[data-test=chamada-quadro-resumo]");
-        await chamada.WaitForAsync(new() { Timeout = 60_000 });
+        // ATO 1 -- uma execucao avaliada NAO libera o questionario, e a tela EXPLICA quanto
+        // falta em vez de esconder o botao. Botao ausente le-se como defeito; a regra escrita
+        // le-se como regra.
+        await AvaliarAsync(page, baseUrl, primeira);
 
-        //    Espera-se o DOM do destino, e NAO a URL. `WaitForURLAsync` aguarda o estado
-        //    "Load", que a navegacao client-side do Blazor nao dispara — no CI isso estourou
-        //    em 30s enquanto a pagina ja estava na tela; localmente passava por timing. Um
-        //    marcador do destino e deterministico nos dois lugares.
-        //
-        //    E a ULTIMA secao do quadro, nao a primeira: a pagina e pre-renderizada e depois
-        //    reinicializada quando o circuito conecta, e esperar pela primeira devolve o
-        //    controle no meio da segunda carga, com o botao ainda fora do DOM.
-        await chamada.GetByText("Abrir Quadro Resumo").ClickAsync();
-        await page.Locator("[data-test=secao-g]").WaitForAsync(new() { Timeout = 60_000 });
+        await page.Locator("[data-test=questionario-bloqueado]")
+                  .WaitForAsync(new() { Timeout = 30_000 });
+        (await page.Locator("[data-test=ir-para-questionario]").CountAsync())
+            .Should().Be(0, "com uma execucao avaliada o questionario ainda nao abriu");
 
+        // E a execucao avaliada JA CONCLUIU -- quem conclui passou a ser a secao G.
+        //
+        // ESPERA UM MARCADOR, e nao le o body direto: `GotoAsync` volta antes de o circuito
+        // Blazor pintar, e o InnerText logo depois devolve o menu da moldura. "Execucao
+        // avaliada." so renderiza quando o status saiu de AguardandoAvaliacao, entao esperar
+        // por ele JA E a afirmacao -- e e deterministico.
+        await page.GotoAsync($"{baseUrl}/comparacoes/{primeira}");
+        await page.GetByText("Execução avaliada.").WaitForAsync(new() { Timeout = 60_000 });
+
+        // Comparacao sem diferenciar caixa: o rotulo do estado vive num RadzenBadge, que aplica
+        // `text-transform: uppercase`, e o InnerTextAsync devolve o texto RENDERIZADO --
+        // "CONCLUÍDA", nao "Concluída". Casar caixa aqui prenderia o teste a uma decisao de CSS.
+        var corpoDaPrimeira = await page.InnerTextAsync("body");
+        corpoDaPrimeira.Should().ContainEquivalentOf("Concluída",
+            "a secao G e o que encerra a execucao desde 19/09/2026");
+        corpoDaPrimeira.Should().NotContainEquivalentOf("Falta sua avaliação",
+            "a chamada nao pode sobreviver ao registro do veredito");
+
+        // ATO 2 -- a segunda execucao avaliada ABRE o portao, e o botao aparece. Continuamos na
+        //    secao G da segunda execucao, que e onde AvaliarAsync deixou a pagina.
+        //
+        //    O percurso ate o instrumento e o do comprador: tela de resultado -> Quadro Resumo
+        //    -> secao G -> questionario. O atalho direto saiu quando o Quadro Resumo nasceu, e
+        //    este e agora o UNICO caminho; se ele quebrar, ninguem responde o instrumento.
+        await AvaliarAsync(page, baseUrl, segunda);
+
+        await page.Locator("[data-test=ir-para-questionario]")
+                  .WaitForAsync(new() { Timeout = 30_000 });
+        (await page.Locator("[data-test=questionario-bloqueado]").CountAsync())
+            .Should().Be(0, "com duas execucoes avaliadas o portao abriu");
+
+        // ATO 3 -- responde o instrumento inteiro.
         await page.Locator("[data-test=ir-para-questionario]").ClickAsync();
         await page.GetByText("Passo 1 de").WaitForAsync(new() { Timeout = 60_000 });
 
@@ -215,27 +247,58 @@ public sealed class QuestionarioE2ETests(AppHostFixture fixture)
             await page.EmulateMediaAsync(new() { Media = Media.Screen });
         }
 
-        // 5. E a sessão de fato concluiu — a transição é feita pelo endpoint de envio, e é a
-        //    única da máquina de estados que não sai do Worker.
-        await page.GotoAsync($"{baseUrl}/comparacoes/{sessaoId}");
-        await page.GetByText("Comparação avaliada.").WaitForAsync(new() { Timeout = 60_000 });
+        // ATO 4 -- RESPONDIDO UMA VEZ SO. Voltando a QUALQUER execucao, o questionario nao e
+        //    mais oferecido: o botao vira "ver minhas respostas". E o pedido literal do
+        //    patrocinador -- "apos o envio, ele nao devera ser apresentado novamente ao mesmo
+        //    comprador em novas execucoes".
+        foreach (var execucao in new[] { primeira, segunda })
+        {
+            await AbrirSecaoGAsync(page, baseUrl, execucao);
 
-        // Comparação sem diferenciar caixa: o rótulo do estado vive num RadzenBadge, que aplica
-        // `text-transform: uppercase`, e o InnerTextAsync do Playwright devolve o texto
-        // *renderizado* — "CONCLUÍDA", não "Concluída". Casar caixa aqui prenderia o teste a uma
-        // decisão de CSS do componente.
-        var corpo = await page.InnerTextAsync("body");
-        corpo.Should().ContainEquivalentOf("Concluída",
-            $"a sessão tem de sair de 'Aguardando avaliação' depois do envio. Corpo: <<<{corpo.Trim()}>>>");
-        corpo.Should().NotContainEquivalentOf("Falta sua avaliação",
-            "a chamada não pode sobreviver ao envio");
+            await page.Locator("[data-test=ver-questionario]")
+                      .WaitForAsync(new() { Timeout = 30_000 });
+            (await page.Locator("[data-test=ir-para-questionario]").CountAsync())
+                .Should().Be(0, $"o questionario ja foi respondido; a execucao {execucao} nao pode reoferece-lo");
+            (await page.Locator("[data-test=questionario-bloqueado]").CountAsync())
+                .Should().Be(0, "respondido nao e o mesmo que bloqueado");
+        }
+    }
+
+    /// <summary>Abre o Quadro Resumo de uma execução e espera a seção G aparecer.</summary>
+    private static async Task AbrirSecaoGAsync(IPage page, string baseUrl, Guid sessaoId)
+    {
+        await page.GotoAsync($"{baseUrl}/comparacoes/{sessaoId}");
+
+        var chamada = page.Locator("[data-test=chamada-quadro-resumo]");
+        await chamada.WaitForAsync(new() { Timeout = 60_000 });
+
+        //    Espera-se o DOM do destino, e NAO a URL. `WaitForURLAsync` aguarda o estado
+        //    "Load", que a navegacao client-side do Blazor nao dispara.
+        await chamada.GetByText("Abrir Quadro Resumo").ClickAsync();
+        await page.Locator("[data-test=secao-g]").WaitForAsync(new() { Timeout = 60_000 });
+    }
+
+    /// <summary>
+    /// Registra a seção G de uma execução pela tela. É o que <b>conclui</b> a execução e o que a
+    /// faz contar para o portão do questionário.
+    /// </summary>
+    private static async Task AvaliarAsync(IPage page, string baseUrl, Guid sessaoId)
+    {
+        await AbrirSecaoGAsync(page, baseUrl, sessaoId);
+
+        await page.Locator("[data-test=opcoes-avaliacao]")
+                  .GetByText("Válido", new() { Exact = true })
+                  .First.ClickAsync();
+        await page.Locator("[data-test=registrar-avaliacao]").ClickAsync();
+        await page.Locator("[data-test=avaliacao-registrada]")
+                  .WaitForAsync(new() { Timeout = 30_000 });
     }
 
     // --- Semeadura -----------------------------------------------------------
 
-    private async Task<Guid> SemearAsync(CancellationToken ct) =>
+    private async Task<Guid> SemearAsync(CancellationToken ct, string nome) =>
         await fixture.SemearSessaoConcluidaAsync(
-            NomeDaSessao,
+            nome,
             SugestaoId,
             new DateTime(2026, 7, 1, 9, 30, 0),
             TipoCalculo,

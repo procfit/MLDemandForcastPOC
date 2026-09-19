@@ -216,4 +216,22 @@ public sealed class QuestionarioCatalogoTests
         qualquer.Opcao(qualquer.Opcoes[0].Codigo).Should().BeSameAs(qualquer.Opcoes[0]);
         qualquer.Opcao("NAO_EXISTE").Should().BeNull();
     }
+
+    /// <summary>
+    /// O portão do questionário: <b>duas</b> execuções avaliadas, e é regra de protocolo da
+    /// pesquisa, não parâmetro de desempenho. O instrumento pergunta sobre a ferramenta, e uma
+    /// execução só não dá base de comparação — orientação do Professor, registrada pelo
+    /// patrocinador no documento de 16/09/2026.
+    ///
+    /// <para>
+    /// O teste fixa o número de propósito: baixá-lo para 1 é o atalho tentador quando uma
+    /// demonstração está com pressa, e faria o dado da dissertação ser coletado fora do
+    /// protocolo sem que nada quebrasse.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void O_questionario_exige_duas_execucoes_avaliadas()
+    {
+        QuestionarioCatalogo.MinimoDeExecucoes.Should().Be(2);
+    }
 }

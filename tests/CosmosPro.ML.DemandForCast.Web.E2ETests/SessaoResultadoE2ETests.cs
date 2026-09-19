@@ -444,9 +444,33 @@ public sealed class SessaoResultadoE2ETests(AppHostFixture fixture)
             corpo.Should().Contain("Total da sugestão");
             corpo.Should().Contain("não são a base da comparação");
 
-            // O caminho ate o questionario passa por aqui desde que o atalho antigo saiu.
-            (await page.Locator("[data-test=ir-para-questionario]").CountAsync())
-                .Should().Be(1, "esta e a unica porta para o instrumento da pesquisa");
+            // A SECAO G ESTA AQUI, e o caminho ate o questionario tambem -- este quadro e a
+            // unica porta para o instrumento desde que o atalho antigo saiu.
+            //
+            // Mas o BOTAO nao aparece nesta execucao: desde 19/09/2026 o questionario e
+            // liberado so depois de duas execucoes avaliadas pelo mesmo comprador, e o cenario
+            // semeia uma. O que a tela mostra no lugar e a REGRA, e nao o vazio -- botao
+            // ausente le-se como defeito.
+            (await page.Locator("[data-test=secao-g]").CountAsync())
+                .Should().Be(1, "e por aqui que o comprador conclui a execucao");
+
+            // O QUE SE AFIRMA AQUI E A INVARIANTE, e nao qual das tres coisas aparece: a
+            // secao G sempre DIZ ALGO sobre o questionario -- ou oferece o botao, ou explica
+            // que falta avaliar mais execucoes, ou avisa que ja foi respondido.
+            //
+            // Afirmar o estado exato acoplaria este cenario ao do QuestionarioE2ETests: o
+            // questionario e por comprador, os dois logam com o mesmo usuario e o banco e
+            // persistente, entao qual dos tres aparece depende da ordem em que as classes
+            // rodam. O que NUNCA pode acontecer e a secao G ficar muda -- espaco vazio onde
+            // deveria haver caminho le-se como defeito.
+            var afordancias =
+                await page.Locator("[data-test=ir-para-questionario]").CountAsync()
+                + await page.Locator("[data-test=questionario-bloqueado]").CountAsync()
+                + await page.Locator("[data-test=ver-questionario]").CountAsync();
+
+            afordancias.Should().Be(1,
+                "a secao G tem de dizer exatamente uma coisa sobre o questionario: oferecer, "
+                + "explicar o que falta, ou avisar que ja foi respondido");
 
         }
         finally

@@ -20,8 +20,11 @@ internal static class QuestionariosEndpoints
            .WithTags("Questionarios")
            .Produces<CatalogoView>();
 
-        var group = app.MapGroup("/api/comparacoes/{sessaoId:guid}/questionario")
-                       .WithTags("Questionarios");
+        // A ROTA NAO TEM MAIS SESSAO. O questionario passou a ser do comprador
+        // (19/09/2026): um por pessoa, sobre a experiencia acumulada em varias execucoes.
+        // Mante-la sob /api/comparacoes/{id} faria a URL afirmar um vinculo que nao existe
+        // mais, e obrigaria a tela a escolher arbitrariamente uma execucao para citar.
+        var group = app.MapGroup("/api/questionario").WithTags("Questionarios");
 
         group.MapGet("/", GetAsync)
              .WithName("GetQuestionario")
@@ -75,6 +78,46 @@ internal static class QuestionariosEndpoints
     /// única coisa que este endpoint acrescenta ao que foi pedido.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Quantas execucoes este comprador ja avaliou, e se o questionario esta liberado.
+    ///
+    /// <para>
+    /// Conta sessao com a <b>Secao G respondida por ele</b>, e nao sessao existente: o
+    /// patrocinador exigiu as duas coisas -- realizar a execucao e avalia-la.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>AvaliacaoUsuarioId</c> e <c>string</c> e o parametro e <c>Guid</c>: a coluna guarda
+    /// o <c>ToString()</c> desde que nasceu. A conversao acontece aqui, uma vez, e nao dentro
+    /// da consulta -- traduzir <c>Guid</c> para texto no SQL dependeria do formato que o
+    /// provider escolhesse, e a contagem erraria <b>em silencio</b> se ele mudasse.
+    /// </para>
+    /// </summary>
+    private static async Task<Portao> PortaoAsync(
+        EngineDbContext db, Guid usuarioId, int redeId, CancellationToken ct)
+    {
+        var chave = usuarioId.ToString();
+
+        var avaliadas = await db.ComparacaoSessoes
+            .CountAsync(x => x.RedeId == redeId
+                          && x.AvaliacaoUsuarioId == chave
+                          && x.AvaliacaoVeredito != null, ct);
+
+        var enviadoEm = await db.Questionarios
+            .Where(q => q.UsuarioId == usuarioId)
+            .Select(q => q.EnviadoEm)
+            .FirstOrDefaultAsync(ct);
+
+        return new Portao(avaliadas, QuestionarioCatalogo.MinimoDeExecucoes, enviadoEm);
+    }
+
+    /// <param name="ExecucoesAvaliadas">Execucoes com Secao G respondida por este comprador.</param>
+    /// <param name="EnviadoEm">Nulo enquanto ele nao enviou. Carimbo, nao situacao.</param>
+    private sealed record Portao(int ExecucoesAvaliadas, int MinimoExigido, DateTimeOffset? EnviadoEm)
+    {
+        public bool Liberado => ExecucoesAvaliadas >= MinimoExigido;
+    }
+
     private static async Task<IResult> TabulacaoAsync(
         EngineDbContext db,
         CancellationToken ct,
@@ -100,20 +143,20 @@ internal static class QuestionariosEndpoints
             })
             .ToListAsync(ct);
 
-        if (sessoes.Count == 0) return Results.Ok(new TabulacaoView(redeId, [], [], 0, []));
-
-        var ids = sessoes.Select(s => s.Id).ToList();
-
-        // Cabeçalho e respostas em duas idas, e não numa junção só: a junção repetiria o
-        // cabeçalho em cada resposta (onze linhas por execução) e o custo de montar passaria a
-        // crescer com o produto em vez de com a soma.
+        // QUESTIONARIO NAO E MAIS POR EXECUCAO, entao a busca e por REDE e nao por sessao.
+        // Antes havia um `ids.Contains(q.SessaoId)` aqui; hoje isso nao existe, e e por isso
+        // que a tabulacao devolve DOIS blocos em vez de uma linha por execucao carregando as
+        // respostas: repeti-las em cada execucao do mesmo comprador faria a planilha parecer
+        // ter N questionarios onde ha um.
         var questionarios = await db.Questionarios
             .AsNoTracking()
-            .Where(q => ids.Contains(q.SessaoId))
-            .Select(q => new { q.Id, q.SessaoId, q.UsuarioId, q.VersaoCatalogo, q.EnviadoEm })
+            .Where(q => q.RedeId == redeId)
+            .Select(q => new { q.Id, q.UsuarioId, q.VersaoCatalogo, q.EnviadoEm })
             .ToListAsync(ct);
 
-        var porSessao = questionarios.ToDictionary(q => q.SessaoId);
+        if (sessoes.Count == 0 && questionarios.Count == 0)
+            return Results.Ok(new TabulacaoView(redeId, [], [], 0, [], []));
+
         var qids = questionarios.Select(q => q.Id).ToList();
 
         var respostas = (await db.QuestionarioRespostas
@@ -165,7 +208,18 @@ internal static class QuestionariosEndpoints
             }
 
             Marcar(s.AvaliacaoUsuarioId);
-            if (porSessao.TryGetValue(s.Id, out var qq)) Marcar(qq.UsuarioId.ToString());
+        }
+
+        // Quem respondeu o questionario mas nunca avaliou execucao nenhuma tambem precisa de
+        // codigo. Entra depois das execucoes, entao recebe numero mais alto -- a ordem de
+        // primeira aparicao continua sendo a das execucoes, que e a que o patrocinador le.
+        foreach (var q in questionarios.OrderBy(q => q.EnviadoEm ?? DateTimeOffset.MaxValue))
+        {
+            var id = q.UsuarioId.ToString();
+            if (!primeiraAparicao.ContainsKey(id))
+            {
+                primeiraAparicao[id] = q.EnviadoEm ?? DateTimeOffset.MaxValue;
+            }
         }
 
         var pseudonimos = primeiraAparicao
@@ -179,38 +233,34 @@ internal static class QuestionariosEndpoints
         string? Quem(string? id) =>
             id is not null && pseudonimos.TryGetValue(id, out var c) ? c : null;
 
-        var linhas = sessoes.Select(s =>
-        {
-            porSessao.TryGetValue(s.Id, out var q);
+        var execucoes = sessoes.Select(s => new ExecucaoAvaliadaView(
+            s.Id,
+            s.CriadoEm,
+            s.Status.ToString(),
+            s.SugestaoId,
+            s.SugestaoDescricao,
+            s.AvaliacaoVeredito,
+            s.AvaliacaoComentario,
+            s.AvaliacaoEm,
+            Quem(s.AvaliacaoUsuarioId))).ToList();
 
-            IReadOnlyList<RespostaTabuladaView> respostasDaLinha = q is null
-                ? []
-                : [.. respostas.GetValueOrDefault(q.Id, [])
+        var respondidos = questionarios
+            .OrderBy(q => q.EnviadoEm ?? DateTimeOffset.MaxValue)
+            .Select(q => new QuestionarioDoCompradorView(
+                Quem(q.UsuarioId.ToString()),
+                q.EnviadoEm,
+                q.VersaoCatalogo,
+                [.. respostas.GetValueOrDefault(q.Id, [])
                     .Select(r => new RespostaTabuladaView(
                         r.PerguntaCodigo, r.PerguntaTexto, r.OpcaoTexto, r.OpcaoValor,
-                        r.TextoLivre))];
-
-            return new AvaliacaoTabuladaView(
-                s.Id,
-                s.CriadoEm,
-                s.Status.ToString(),
-                s.SugestaoId,
-                s.SugestaoDescricao,
-                s.AvaliacaoVeredito,
-                s.AvaliacaoComentario,
-                s.AvaliacaoEm,
-                Quem(s.AvaliacaoUsuarioId),
-                q?.EnviadoEm,
-                q?.VersaoCatalogo,
-                q is null ? null : Quem(q.UsuarioId.ToString()),
-                respostasDaLinha);
-        }).ToList();
+                        r.TextoLivre))]))
+            .ToList();
 
         // Colunas na ordem do catálogo ATUAL, e depois os códigos que só existem em respostas de
         // versões anteriores — sem isso uma pergunta que saiu do instrumento desapareceria da
         // planilha junto com as respostas que alguém de fato deu a ela.
         var doCatalogo = QuestionarioCatalogo.Perguntas.Select(p => p.Codigo).ToList();
-        var extras = linhas
+        var extras = respondidos
             .SelectMany(l => l.Respostas.Select(r => r.PerguntaCodigo))
             .Distinct()
             .Where(c => !doCatalogo.Contains(c))
@@ -225,7 +275,8 @@ internal static class QuestionariosEndpoints
             .ToList();
 
         return Results.Ok(new TabulacaoView(
-            redeId, [.. doCatalogo, .. extras], comoTexto, pseudonimos.Count, linhas));
+            redeId, [.. doCatalogo, .. extras], comoTexto, pseudonimos.Count,
+            execucoes, respondidos));
     }
 
     private static IResult Catalogo() => Results.Ok(
@@ -241,17 +292,31 @@ internal static class QuestionariosEndpoints
                     [.. p.Opcoes.Select(o => new OpcaoView(
                         o.Codigo, o.Texto, o.Valor, o.PermiteTextoLivre))]))]))]));
 
+    /// <summary>
+    /// O questionario do comprador, com o estado do portao junto.
+    ///
+    /// <para>
+    /// <b>Um endpoint so, e nao um <c>/situacao</c> separado.</b> A tela da Secao G precisa
+    /// saber se o botao aparece e, quando nao aparece, quantas execucoes faltam; a tela do
+    /// questionario precisa das respostas. Os dois numeros do portao custam duas contagens, e
+    /// parti-los em dois endpoints criaria duas verdades que podem divergir entre a chamada de
+    /// uma tela e a da outra.
+    /// </para>
+    ///
+    /// <para>
+    /// Portao fechado NAO e 404: devolve a view com <c>Liberado = false</c> e as contagens,
+    /// porque a tela explica a regra em vez de esconder o botao.
+    /// </para>
+    /// </summary>
     private static async Task<IResult> GetAsync(
-        Guid sessaoId,
         EngineDbContext db,
         CancellationToken ct,
+        [FromQuery] Guid usuarioId,
         [FromQuery] int redeId = 1)
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
 
-        if (await SessaoAsync(db, sessaoId, redeId, ct) is not { } sessao) return Results.NotFound();
-
-        return Results.Ok(await MontarAsync(db, sessaoId, sessao.Status, ct));
+        return Results.Ok(await MontarAsync(db, usuarioId, redeId, ct));
     }
 
     // `usuarioId` é obrigatório, e NÃO pode ganhar `= default`. Um `Guid` opcional com valor
@@ -263,24 +328,22 @@ internal static class QuestionariosEndpoints
     // ficar saudável e o AppHost não subir. Se algum chamador legítimo puder não ter usuário,
     // use `Guid?` — nunca `= default`.
     private static async Task<IResult> SalvarAsync(
-        Guid sessaoId,
         [FromBody] SalvarQuestionarioRequest req,
         EngineDbContext db,
         CancellationToken ct,
         [FromQuery] Guid usuarioId,
         [FromQuery] int redeId = 1)
-        => await GravarAsync(sessaoId, req.PassoAtual, req.Respostas, selar: false,
+        => await GravarAsync(req.PassoAtual, req.Respostas, selar: false,
                              db, redeId, usuarioId, ct);
 
     /// <inheritdoc cref="SalvarAsync"/>
     private static async Task<IResult> EnviarAsync(
-        Guid sessaoId,
         [FromBody] EnviarQuestionarioRequest req,
         EngineDbContext db,
         CancellationToken ct,
         [FromQuery] Guid usuarioId,
         [FromQuery] int redeId = 1)
-        => await GravarAsync(sessaoId, req.PassoAtual, req.Respostas, selar: true,
+        => await GravarAsync(req.PassoAtual, req.Respostas, selar: true,
                              db, redeId, usuarioId, ct);
 
     /// <summary>
@@ -290,7 +353,6 @@ internal static class QuestionariosEndpoints
     /// com o tempo, e é justamente a guarda que impede gravar sobre uma avaliação já selada.
     /// </summary>
     private static async Task<IResult> GravarAsync(
-        Guid sessaoId,
         int passoAtual,
         IReadOnlyList<RespostaRequest>? respostas,
         bool selar,
@@ -301,18 +363,28 @@ internal static class QuestionariosEndpoints
     {
         if (await Redes.RedesEndpoints.ValidateRedeAsync(db, redeId, ct) is { } invalida) return invalida;
 
-        if (await SessaoAsync(db, sessaoId, redeId, ct) is not { } sessao) return Results.NotFound();
+        var portao = await PortaoAsync(db, usuarioId, redeId, ct);
 
-        if (sessao.Status != SessaoStatus.AguardandoAvaliacao)
+        // O PORTAO E DO SERVIDOR, e nao da tela. Esconder o botao nao impede um POST direto, e
+        // uma resposta entrando fora do protocolo da pesquisa nao tem como ser identificada
+        // depois. Vale para o rascunho tambem: aceita-lo antes da liberacao criaria a linha que
+        // a propria checagem de "ja respondeu" passaria a encontrar.
+        //
+        // Duas recusas com mensagens diferentes: "ja foi" e "ainda nao" mandam o chamador para
+        // lados opostos, e um texto generico faria o comprador tentar de novo no caso em que
+        // nada vai mudar.
+        if (portao.EnviadoEm is not null)
         {
-            // Duas recusas com mensagens diferentes: "já foi" e "ainda não" mandam o chamador
-            // para lados opostos, e um texto genérico faria o comprador tentar de novo no caso
-            // em que nada vai mudar.
             return Results.Conflict(new ValidationErrorResponse(
-                sessao.Status == SessaoStatus.Concluida
-                    ? ["Esta comparação já foi avaliada. As respostas enviadas não podem ser alteradas."]
-                    : [$"Esta comparação está em '{sessao.Status}' e ainda não pode ser avaliada: " +
-                       "o questionário abre quando o resultado fica pronto."]));
+                ["Você já respondeu o questionário. Ele é respondido uma única vez, e as " +
+                 "respostas enviadas não podem ser alteradas."]));
+        }
+
+        if (!portao.Liberado)
+        {
+            return Results.Conflict(new ValidationErrorResponse(
+                [$"O questionário é liberado depois de {portao.MinimoExigido} execuções " +
+                 $"avaliadas. Você tem {portao.ExecucoesAvaliadas}."]));
         }
 
         var informadas = (respostas ?? [])
@@ -341,19 +413,18 @@ internal static class QuestionariosEndpoints
         // `ChangeTracker.Clear()` na entrada é o que torna a retentativa segura: uma tentativa
         // que rolou atrás deixa as entidades dela rastreadas como Added, e a volta seguinte
         // reconsultaria o banco (sem vê-las), adicionaria um segundo `Questionario` e morreria no
-        // índice único de `SessaoId` — transformando uma falha transitória em erro permanente.
+        // índice único de `UsuarioId` — transformando uma falha transitória em erro permanente.
         var estrategia = db.Database.CreateExecutionStrategy();
 
         var recusa = await estrategia.ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
-            return await EscreverAsync(db, sessaoId, redeId, usuarioId, passoAtual, informadas, selar, agora, ct);
+            return await EscreverAsync(db, redeId, usuarioId, passoAtual, informadas, selar, agora, ct);
         });
 
         if (recusa is not null) return recusa;
 
-        var status = selar ? SessaoStatus.Concluida : SessaoStatus.AguardandoAvaliacao;
-        return Results.Ok(await MontarAsync(db, sessaoId, status, ct));
+        return Results.Ok(await MontarAsync(db, usuarioId, redeId, ct));
     }
 
     /// <summary>
@@ -363,7 +434,6 @@ internal static class QuestionariosEndpoints
     /// </summary>
     private static async Task<IResult?> EscreverAsync(
         EngineDbContext db,
-        Guid sessaoId,
         int redeId,
         Guid usuarioId,
         int passoAtual,
@@ -374,14 +444,13 @@ internal static class QuestionariosEndpoints
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
-        var questionario = await db.Questionarios.FirstOrDefaultAsync(q => q.SessaoId == sessaoId, ct);
+        var questionario = await db.Questionarios.FirstOrDefaultAsync(q => q.UsuarioId == usuarioId, ct);
         if (questionario is null)
         {
             questionario = new Questionario
             {
                 Id = Guid.CreateVersion7(),
                 RedeId = redeId,
-                SessaoId = sessaoId,
                 UsuarioId = usuarioId,
                 VersaoCatalogo = QuestionarioCatalogo.Versao,
                 CriadoEm = agora,
@@ -393,9 +462,6 @@ internal static class QuestionariosEndpoints
         else
         {
             questionario.AtualizadoEm = agora;
-            // UsuarioId acompanha quem gravou por último de propósito: é auditoria de "quem
-            // respondeu", e quem enviou é mais informativo que quem abriu o rascunho.
-            questionario.UsuarioId = usuarioId;
         }
 
         questionario.PassoAtual = passoAtual;
@@ -424,101 +490,48 @@ internal static class QuestionariosEndpoints
             });
         }
 
+        // O SELO NAO MEXE MAIS EM SESSAO NENHUMA. Antes ele levava a sessao a Concluida, e um
+        // UPDATE condicional era o que impedia dois envios simultaneos de se sobrescreverem.
+        // Quem conclui a execucao passou a ser a Secao G; aqui a corrida e entre dois envios do
+        // MESMO comprador, e quem a resolve e o indice unico UQ_Questionarios_UsuarioId -- o
+        // segundo INSERT estoura, a transacao volta atras, e a tentativa seguinte recebe a
+        // recusa de "ja respondeu" pela checagem do portao.
         if (selar)
         {
             questionario.EnviadoEm = agora;
-
-            var (total, comMl) = await ContarItensAsync(db, sessaoId, ct);
-            questionario.TotalDeItens = total;
-            questionario.ItensComDecisaoMl = comMl;
         }
 
         await db.SaveChangesAsync(ct);
-
-        if (selar)
-        {
-            // A transição por último e condicional, no mesmo padrão do
-            // SessaoResultadoMaterializador: se dois envios chegarem juntos, só um encontra a
-            // sessão em AguardandoAvaliacao. O outro acha zero linha, a transação inteira
-            // volta atrás e as respostas que ele gravou desaparecem com ela — em vez de dois
-            // envios se sobrescreverem com a sessão concluída uma vez só.
-            var linhas = await db.ComparacaoSessoes
-                .Where(s => s.Id == sessaoId && s.Status == SessaoStatus.AguardandoAvaliacao)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(x => x.Status, SessaoStatus.Concluida)
-                    .SetProperty(x => x.AtualizadoEm, agora), ct);
-
-            if (linhas == 0)
-            {
-                await tx.RollbackAsync(ct);
-                return Results.Conflict(new ValidationErrorResponse(
-                    ["Esta comparação já foi avaliada. As respostas enviadas não podem ser alteradas."]));
-            }
-        }
-
         await tx.CommitAsync(ct);
         return null;
     }
 
     /// <summary>
-    /// Quantos itens a comparação avaliada tinha e em quantos o braço de ML decidiu — contados
-    /// da tabela materializada, não do <c>ResultadoJson</c>, para não acoplar o selo ao formato
-    /// do payload da manchete.
+    /// O questionário do comprador, com o estado do portão junto.
     ///
     /// <para>
-    /// Sem item materializado os dois saem nulos, e não zero: zero afirmaria "a comparação não
-    /// tinha item nenhum", quando o que houve foi não ter o que contar. Ver a nota de
-    /// <see cref="Questionario.ItensComDecisaoMl"/>.
+    /// <b>O escopo aqui é o usuário, não a rede</b>, e não é exceção à regra de inquilino: o
+    /// <c>usuarioId</c> vem do <c>IRedeContext</c>, então o chamador só consegue perguntar por
+    /// si mesmo — não há registro de terceiro a proteger. A rede continua gravada na linha, e é
+    /// por ela que a tabulação lê.
     /// </para>
     /// </summary>
-    private static async Task<(int? Total, int? ComMl)> ContarItensAsync(
-        EngineDbContext db, Guid sessaoId, CancellationToken ct)
-    {
-        var contagem = await db.ComparacaoSessaoItens
-            .Where(i => i.SessaoId == sessaoId)
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                Total = g.Count(),
-                ComMl = g.Count(i => i.CompraSugeridaMl != null),
-            })
-            .FirstOrDefaultAsync(ct);
-
-        return contagem is null ? (null, null) : (contagem.Total, contagem.ComMl);
-    }
-
-    /// <summary>
-    /// A sessão, já filtrada pelo inquilino. <c>null</c> tanto para inexistente quanto para
-    /// sessão de outra rede, e quem chama responde <b>404 nos dois casos</b>: um 403 confirmaria
-    /// a quem sondasse que a sessão existe em outro inquilino.
-    /// </summary>
-    private static async Task<SessaoEscopo?> SessaoAsync(
-        EngineDbContext db, Guid sessaoId, int redeId, CancellationToken ct)
-        => await db.ComparacaoSessoes
-            .AsNoTracking()
-            .Where(s => s.Id == sessaoId && s.RedeId == redeId)
-            .Select(s => new SessaoEscopo(s.Status))
-            .FirstOrDefaultAsync(ct);
-
-    /// <summary>
-    /// <c>QuestionarioRespostas</c> não tem <c>RedeId</c> — o escopo é transitivo pela FK. A
-    /// junção com o pai vai no mesmo round-trip, e o pai já veio filtrado por rede em
-    /// <see cref="SessaoAsync"/>: consultar por <c>SessaoId</c> solto entregaria a avaliação de
-    /// um inquilino a quem acertasse um Guid.
-    /// </summary>
     private static async Task<QuestionarioView> MontarAsync(
-        EngineDbContext db, Guid sessaoId, SessaoStatus status, CancellationToken ct)
+        EngineDbContext db, Guid usuarioId, int redeId, CancellationToken ct)
     {
+        var portao = await PortaoAsync(db, usuarioId, redeId, ct);
+
         var cabecalho = await db.Questionarios
             .AsNoTracking()
-            .Where(q => q.SessaoId == sessaoId)
+            .Where(q => q.UsuarioId == usuarioId)
             .Select(q => new { q.Id, q.PassoAtual, q.VersaoCatalogo, q.EnviadoEm })
             .FirstOrDefaultAsync(ct);
 
         if (cabecalho is null)
         {
             return new QuestionarioView(
-                null, status.ToString(), null, 0, QuestionarioCatalogo.Versao, []);
+                null, null, 0, QuestionarioCatalogo.Versao,
+                portao.ExecucoesAvaliadas, portao.MinimoExigido, portao.Liberado, []);
         }
 
         var respostas = await db.QuestionarioRespostas
@@ -530,10 +543,12 @@ internal static class QuestionariosEndpoints
 
         return new QuestionarioView(
             cabecalho.Id,
-            status.ToString(),
             cabecalho.EnviadoEm,
             cabecalho.PassoAtual,
             cabecalho.VersaoCatalogo,
+            portao.ExecucoesAvaliadas,
+            portao.MinimoExigido,
+            portao.Liberado,
             respostas);
     }
 
@@ -545,7 +560,6 @@ internal static class QuestionariosEndpoints
     private static string? Limpar(string? texto) =>
         string.IsNullOrWhiteSpace(texto) ? null : texto.Trim();
 
-    private sealed record SessaoEscopo(SessaoStatus Status);
 }
 
 internal sealed record RespostaRequest(string PerguntaCodigo, string OpcaoCodigo, string? TextoLivre);
@@ -567,16 +581,27 @@ internal sealed record OpcaoView(string Codigo, string Texto, int? Valor, bool P
 /// <c>null</c> quando ainda não há rascunho — a tela desenha o wizard vazio pelo mesmo caminho,
 /// em vez de tratar "sem questionário" como erro.
 /// </param>
-/// <param name="SessaoStatus">
-/// Viaja aqui, e não só no GET da sessão, para a tela decidir modo leitura sem depender de duas
-/// respostas que podem discordar entre si.
+/// <param name="EnviadoEm">
+/// Carimbo do envio, e a <b>única</b> autoridade sobre "selado": nulo é rascunho, preenchido é
+/// respondido. Não há coluna de situação, aqui nem na tabela.
+/// </param>
+/// <param name="ExecucoesAvaliadas">
+/// Execuções com Seção G respondida por este comprador. Viaja mesmo com o portão fechado
+/// porque a tela <b>explica</b> quanto falta em vez de esconder o botão — botão ausente lê-se
+/// como defeito, e a regra escrita lê-se como regra.
+/// </param>
+/// <param name="Liberado">
+/// <c>ExecucoesAvaliadas &gt;= MinimoExigido</c>, calculado no servidor. A tela usa para
+/// decidir o que desenhar; quem <b>recusa</b> um envio fora do protocolo é o endpoint.
 /// </param>
 internal sealed record QuestionarioView(
     Guid? Id,
-    string SessaoStatus,
     DateTimeOffset? EnviadoEm,
     int PassoAtual,
     int VersaoCatalogo,
+    int ExecucoesAvaliadas,
+    int MinimoExigido,
+    bool Liberado,
     IReadOnlyList<RespostaView> Respostas);
 
 internal sealed record RespostaView(
@@ -597,27 +622,30 @@ internal sealed record RespostaView(
 /// dos pseudônimos: quantas responderam, ao lado de quantas execuções elas avaliaram. Sai dos
 /// códigos atribuídos, então não há uma segunda definição de "participante" em lugar nenhum.
 /// </param>
+/// <param name="Execucoes">
+/// Uma linha por execução, com a Seção G. <b>Inclui execução não avaliada de propósito</b>: é
+/// o denominador da taxa de resposta.
+/// </param>
+/// <param name="Questionarios">
+/// Uma linha por <b>comprador</b>, e não por execução. Os dois blocos são separados desde
+/// 19/09/2026, quando o questionário deixou de pertencer à sessão: repetir as respostas em
+/// cada execução do mesmo comprador faria a planilha parecer ter N questionários onde há um,
+/// e qualquer contagem feita sobre ela sairia multiplicada pelo número de execuções.
+/// </param>
 internal sealed record TabulacaoView(
     int RedeId,
     IReadOnlyList<string> Codigos,
     IReadOnlyList<string> CodigosDeTexto,
     int Participantes,
-    IReadOnlyList<AvaliacaoTabuladaView> Linhas);
+    IReadOnlyList<ExecucaoAvaliadaView> Execucoes,
+    IReadOnlyList<QuestionarioDoCompradorView> Questionarios);
 
-/// <param name="VersaoCatalogo">
-/// Versão do instrumento sob a qual esta linha foi respondida. <b>Sem ela a planilha soma
-/// perguntas diferentes na mesma coluna</b>: o código B7 já designou três afirmações distintas
-/// (V2, V5, V6). Nulo quando não há questionário.
-/// </param>
 /// <param name="Avaliador">
-/// <b>Pseudônimo</b> de quem registrou a avaliação — P01, P02, P03… —, nunca o nome nem o
-/// e-mail. Ver a nota em <c>TabulacaoAsync</c>: a identidade não sai do banco.
+/// <b>Pseudônimo</b> de quem registrou a Seção G — P01, P02, P03… —, nunca o nome nem o
+/// e-mail. Ver a nota em <c>TabulacaoAsync</c>: a identidade não sai do banco. Nulo quando
+/// ninguém avaliou esta execução.
 /// </param>
-/// <param name="Respondente">
-/// <b>Pseudônimo</b> de quem respondeu o questionário. Costuma ser o mesmo código do
-/// <paramref name="Avaliador"/>, e não é obrigatório que seja.
-/// </param>
-internal sealed record AvaliacaoTabuladaView(
+internal sealed record ExecucaoAvaliadaView(
     Guid SessaoId,
     DateTimeOffset CriadoEm,
     string Status,
@@ -626,10 +654,17 @@ internal sealed record AvaliacaoTabuladaView(
     string? AvaliacaoVeredito,
     string? AvaliacaoComentario,
     DateTimeOffset? AvaliacaoEm,
-    string? Avaliador,
-    DateTimeOffset? QuestionarioEnviadoEm,
-    int? VersaoCatalogo,
+    string? Avaliador);
+
+/// <param name="Respondente">
+/// <b>Pseudônimo</b> de quem respondeu. O mesmo código que aparece como <c>Avaliador</c> nas
+/// execuções dele — é o que liga os dois blocos sem identificar ninguém.
+/// </param>
+/// <param name="EnviadoEm">Nulo enquanto for rascunho.</param>
+internal sealed record QuestionarioDoCompradorView(
     string? Respondente,
+    DateTimeOffset? EnviadoEm,
+    int VersaoCatalogo,
     IReadOnlyList<RespostaTabuladaView> Respostas);
 
 /// <param name="OpcaoValor">

@@ -21,23 +21,31 @@ namespace CosmosPro.ML.DemandForCast.Web.Tests;
 /// produziria média onde não existe média, e 0 numa ausência viraria "discordo totalmente" de
 /// quem não respondeu. As duas confusões são silenciosas: a planilha soma e fecha.
 /// </para>
+///
+/// <para>
+/// <b>As respostas vivem em <see cref="QuestionarioDoComprador"/>, e não mais na execução</b>
+/// (19/09/2026): o questionário é um por comprador. Os testes de versão saíram junto — não há
+/// mais uma coluna de versão a somar errado, porque não há mais instrumentos convivendo.
+/// </para>
 /// </summary>
 public sealed class AvaliacaoTabuladaTests
 {
-    private static AvaliacaoTabulada Linha(params RespostaTabulada[] respostas) => new(
+    private static QuestionarioDoComprador Respondido(params RespostaTabulada[] respostas) => new(
+        Respondente: "P01",
+        EnviadoEm: DateTimeOffset.UnixEpoch,
+        VersaoCatalogo: 4,
+        Respostas: respostas);
+
+    private static ExecucaoAvaliada Execucao(string? veredito = "Valido", string? avaliador = "P01") => new(
         SessaoId: Guid.Parse("0199a1b2-c3d4-7e5f-8a9b-000000000001"),
         CriadoEm: DateTimeOffset.UnixEpoch,
         Status: "Concluida",
         SugestaoId: 125595,
         SugestaoDescricao: "Compra semanal",
-        AvaliacaoVeredito: "Valido",
+        AvaliacaoVeredito: veredito,
         AvaliacaoComentario: null,
-        AvaliacaoEm: DateTimeOffset.UnixEpoch,
-        Avaliador: "comprador@rede.com",
-        QuestionarioEnviadoEm: DateTimeOffset.UnixEpoch,
-        VersaoCatalogo: 4,
-        Respondente: "comprador@rede.com",
-        Respostas: respostas);
+        AvaliacaoEm: veredito is null ? null : DateTimeOffset.UnixEpoch,
+        Avaliador: avaliador);
 
     private static RespostaTabulada Ordinal(string codigo, int valor) =>
         new(codigo, $"enunciado de {codigo}", $"{valor} – Concordo", valor, null);
@@ -48,79 +56,71 @@ public sealed class AvaliacaoTabuladaTests
     [Fact]
     public void Afirmacao_da_parte_B_exporta_o_numero_da_escala()
     {
-        var linha = Linha(Ordinal("B1", 4), Ordinal("B11", 5));
+        var q = Respondido(Ordinal("B1", 4), Ordinal("B11", 5));
 
-        linha.Valor("B1").Should().Be("4");
-        linha.Valor("B11").Should().Be("5");
+        q.Valor("B1").Should().Be("4");
+        q.Valor("B11").Should().Be("5");
     }
 
     [Fact]
     public void Pergunta_de_caracterizacao_exporta_o_texto_da_opcao()
     {
-        var linha = Linha(Nominal("A1", "Comprador"), Nominal("A2", "Mais de 10 anos"));
+        var q = Respondido(Nominal("A1", "Comprador"), Nominal("A2", "Mais de 10 anos"));
 
-        linha.Valor("A1").Should().Be("Comprador");
-        linha.Valor("A2").Should().Be("Mais de 10 anos");
+        q.Valor("A1").Should().Be("Comprador");
+        q.Valor("A2").Should().Be("Mais de 10 anos");
     }
 
     /// <summary>
-    /// Ausência de resposta é célula vazia, e é o caso mais fácil de errar: "0" é um valor
-    /// válido da escala e o mais baixo dela, então um zero aqui viraria "discordo totalmente"
-    /// na análise de alguém que não respondeu.
+    /// Célula vazia é ausência de resposta, e <b>nunca zero</b>: zero seria uma posição na
+    /// escala, e a mais baixa dela — "discordo totalmente" de quem não respondeu.
     /// </summary>
     [Fact]
     public void Pergunta_sem_resposta_fica_vazia_e_nunca_zero()
     {
-        var linha = Linha(Ordinal("B1", 4));
+        var q = Respondido(Ordinal("B1", 4));
 
-        linha.Valor("B7").Should().BeEmpty();
-        linha.Valor("B7").Should().NotBe("0");
-        linha.Valor("A1").Should().BeEmpty();
+        q.Valor("B2").Should().BeEmpty();
+        q.Valor("B2").Should().NotBe("0");
     }
 
     /// <summary>
-    /// O 1 da escala existe e não pode ser confundido com ausência: se "discordo totalmente"
-    /// virasse célula vazia, a análise perderia justamente a resposta mais negativa.
+    /// O oposto do caso acima, e a razão de ele importar: 1 é resposta de verdade — "discordo
+    /// totalmente" — e tem de sair como 1, não como vazio.
     /// </summary>
     [Fact]
     public void Discordo_totalmente_e_resposta_e_nao_ausencia()
     {
-        var linha = Linha(Ordinal("B1", 1));
+        var q = Respondido(Ordinal("B1", 1));
 
-        linha.Valor("B1").Should().Be("1");
-        linha.Valor("B1").Should().NotBeEmpty();
+        q.Valor("B1").Should().Be("1");
     }
 
     /// <summary>
-    /// O A2 tem escala (1 a 4, faixas de experiência ordenadas) e ainda assim a planilha exporta
-    /// o TEXTO — pedido do patrocinador em 07/09/2026, e o caso que derrubou a regra anterior.
-    ///
-    /// <para>
-    /// A regra velha era "tem <c>OpcaoValor</c>? exporta número", e ela confundia duas perguntas
-    /// diferentes: <i>a escala é ordenada?</i> e <i>o que vai na planilha?</i>. Quem decide agora
-    /// é o catálogo (<c>PerguntaDef.TabularTexto</c>), e a ordem continua gravada para quem quiser
-    /// calcular com ela.
-    /// </para>
+    /// A2 tem escala ordenada <b>e</b> exporta texto. A regra anterior deduzia o formato do
+    /// dado e confundia duas perguntas diferentes: <i>a escala é ordenada?</i> e <i>o que vai
+    /// na planilha?</i>. Quem decide agora é o catálogo (<c>PerguntaDef.TabularTexto</c>), e a
+    /// ordem continua gravada para quem quiser calcular com ela.
     /// </summary>
     [Fact]
     public void Pergunta_marcada_como_texto_exporta_o_rotulo_mesmo_tendo_escala()
     {
-        var linha = Linha(Ordinal("A2", 2), Ordinal("B1", 4));
+        var q = Respondido(Ordinal("A2", 2), Ordinal("B1", 4));
 
         // A resposta TEM valor de escala...
-        linha.Respostas.Single(r => r.PerguntaCodigo == "A2").OpcaoValor.Should().Be(2);
+        q.Respostas.Single(r => r.PerguntaCodigo == "A2").OpcaoValor.Should().Be(2);
 
         // ...e ainda assim a celula traz o texto, porque o catalogo pediu.
-        linha.Valor("A2", comoTexto: true).Should().Be("2 – Concordo",
+        q.Valor("A2", comoTexto: true).Should().Be("2 – Concordo",
             "o texto da opcao e o que vai na planilha; aqui o helper de teste rotula assim");
-        linha.Valor("A2").Should().Be("2", "sem a marca, a regra de escala continua valendo");
-        linha.Valor("B1", comoTexto: false).Should().Be("4");
+        q.Valor("A2").Should().Be("2", "sem a marca, a regra de escala continua valendo");
+        q.Valor("B1", comoTexto: false).Should().Be("4");
     }
 
     [Fact]
     public void EhTexto_sai_do_catalogo_e_nao_do_formato_do_dado()
     {
-        var t = new TabulacaoView(1, ["A1", "A2", "B1"], ["A2"], Participantes: 0, []);
+        var t = new TabulacaoView(1, ["A1", "A2", "B1"], ["A2"], Participantes: 0, [], []);
 
         t.EhTexto("A2").Should().BeTrue();
         t.EhTexto("B1").Should().BeFalse();
@@ -131,34 +131,32 @@ public sealed class AvaliacaoTabuladaTests
     [Fact]
     public void Texto_livre_sai_em_coluna_propria_e_e_nulo_quando_nao_existe()
     {
-        var linha = Linha(
+        var q = Respondido(
             new("A1", "Qual a função?", "Outro:", null, "Coordenador de categoria"),
             Ordinal("B1", 4));
 
-        linha.TextoLivre("A1").Should().Be("Coordenador de categoria");
-        linha.TextoLivre("B1").Should().BeNull();
-        linha.TextoLivre("B7").Should().BeNull("pergunta sem resposta nao tem texto livre");
+        q.TextoLivre("A1").Should().Be("Coordenador de categoria");
+        q.TextoLivre("B1").Should().BeNull();
+        q.TextoLivre("B7").Should().BeNull("pergunta sem resposta nao tem texto livre");
     }
 
     /// <summary>
-    /// Mais de uma versão do instrumento na mesma tabulação é aviso, não curiosidade: o mesmo
-    /// código designa afirmação diferente entre versões, e somar a coluna inteira misturaria
-    /// perguntas distintas sem produzir erro nenhum.
+    /// <b>Os dois blocos contam coisas diferentes, e é por isso que são dois.</b> O mesmo
+    /// comprador avalia várias execuções e responde UM questionário; numa tabela só, as
+    /// respostas dele apareceriam repetidas em cada execução e qualquer contagem sobre a coluna
+    /// sairia multiplicada pelo número de execuções.
     /// </summary>
     [Fact]
-    public void Versoes_presentes_saem_ordenadas_e_sem_repeticao()
+    public void Execucoes_e_questionarios_sao_contados_separadamente()
     {
         var t = new TabulacaoView(1, ["B1"], [], Participantes: 1,
-        [
-            Linha(Ordinal("B1", 4)) with { VersaoCatalogo = 4 },
-            Linha(Ordinal("B1", 5)) with { VersaoCatalogo = 3 },
-            Linha(Ordinal("B1", 3)) with { VersaoCatalogo = 4 },
-            Linha() with { VersaoCatalogo = null, QuestionarioEnviadoEm = null },
-        ]);
+            Execucoes: [Execucao(), Execucao(), Execucao(veredito: null, avaliador: null)],
+            Questionarios: [Respondido(Ordinal("B1", 4))]);
 
-        t.VersoesPresentes.Should().Equal([3, 4]);
-        t.ComQuestionario.Should().Be(3, "a linha sem questionario nao conta");
-        t.ComAvaliacao.Should().Be(4, "todas as quatro tem veredito");
+        t.Execucoes.Should().HaveCount(3);
+        t.ComAvaliacao.Should().Be(2, "a terceira execucao nao foi avaliada");
+        t.Respondidos.Should().Be(1,
+            "duas execucoes avaliadas pela mesma pessoa produzem UM questionario, nao dois");
     }
 
     /// <summary>
@@ -166,24 +164,30 @@ public sealed class AvaliacaoTabuladaTests
     /// nada sem as execuções de onde saíram, e filtrar aqui esconderia a taxa de resposta.
     /// </summary>
     [Fact]
-    public void Execucao_sem_avaliacao_e_sem_questionario_nao_e_filtrada()
+    public void Execucao_sem_avaliacao_nao_e_filtrada()
     {
-        var vazia = Linha() with
-        {
-            AvaliacaoVeredito = null,
-            AvaliacaoEm = null,
-            Avaliador = null,
-            QuestionarioEnviadoEm = null,
-            VersaoCatalogo = null,
-            Respondente = null,
-        };
+        var vazia = Execucao(veredito: null, avaliador: null);
 
-        var t = new TabulacaoView(1, ["B1"], [], Participantes: 1, [vazia]);
+        var t = new TabulacaoView(1, ["B1"], [], Participantes: 1, [vazia], []);
 
-        t.Linhas.Should().HaveCount(1);
+        t.Execucoes.Should().HaveCount(1);
         t.ComAvaliacao.Should().Be(0);
-        t.ComQuestionario.Should().Be(0);
-        vazia.Respondido.Should().BeFalse();
-        vazia.Valor("B1").Should().BeEmpty();
+        vazia.Avaliada.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Rascunho não conta como respondido. <c>EnviadoEm</c> é a única autoridade sobre selado —
+    /// não há coluna de situação, aqui nem na tabela.
+    /// </summary>
+    [Fact]
+    public void Rascunho_nao_conta_como_respondido()
+    {
+        var rascunho = Respondido(Ordinal("B1", 4)) with { EnviadoEm = null };
+
+        var t = new TabulacaoView(1, ["B1"], [], Participantes: 1, [], [rascunho]);
+
+        rascunho.Respondido.Should().BeFalse();
+        t.Respondidos.Should().Be(0);
+        rascunho.Valor("B1").Should().Be("4", "o rascunho tem respostas, só não foi selado");
     }
 }

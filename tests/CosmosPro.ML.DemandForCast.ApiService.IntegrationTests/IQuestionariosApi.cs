@@ -4,19 +4,31 @@ namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 
 /// <summary>
 /// Contrato Refit dos endpoints do questionário. Mesmo papel de <see cref="IComparacoesApi"/>.
+///
+/// <para>
+/// <b>Nenhuma rota leva id de sessão.</b> O questionário passou a ser do comprador em
+/// 19/09/2026: um por pessoa, sobre a experiência acumulada em pelo menos duas execuções
+/// avaliadas.
+/// </para>
 /// </summary>
 public interface IQuestionariosApi
 {
     [Get("/api/questionarios/catalogo")]
     Task<IApiResponse<CatalogoResposta>> CatalogoAsync(CancellationToken ct = default);
 
-    [Get("/api/comparacoes/{sessaoId}/questionario")]
+    [Get("/api/questionario")]
     Task<IApiResponse<QuestionarioResposta>> GetAsync(
-        Guid sessaoId, [Query] int redeId, CancellationToken ct = default);
+        [Query] int redeId, [Query] Guid usuarioId, CancellationToken ct = default);
 
-    [Put("/api/comparacoes/{sessaoId}/questionario")]
+    [Put("/api/questionario")]
     Task<IApiResponse<QuestionarioResposta>> SalvarAsync(
-        Guid sessaoId,
+        [Body] SalvarQuestionarioBody body,
+        [Query] int redeId,
+        [Query] Guid usuarioId,
+        CancellationToken ct = default);
+
+    [Post("/api/questionario/enviar")]
+    Task<IApiResponse<QuestionarioResposta>> EnviarAsync(
         [Body] SalvarQuestionarioBody body,
         [Query] int redeId,
         [Query] Guid usuarioId,
@@ -25,14 +37,6 @@ public interface IQuestionariosApi
     [Get("/api/comparacoes/avaliacoes")]
     Task<IApiResponse<TabulacaoResposta>> TabulacaoAsync(
         [Query] int redeId, CancellationToken ct = default);
-
-    [Post("/api/comparacoes/{sessaoId}/questionario/enviar")]
-    Task<IApiResponse<QuestionarioResposta>> EnviarAsync(
-        Guid sessaoId,
-        [Body] SalvarQuestionarioBody body,
-        [Query] int redeId,
-        [Query] Guid usuarioId,
-        CancellationToken ct = default);
 }
 
 public sealed record SalvarQuestionarioBody(int PassoAtual, List<RespostaBody> Respostas);
@@ -48,12 +52,18 @@ public sealed record PerguntaResposta(
 
 public sealed record OpcaoResposta(string Codigo, string Texto, int? Valor, bool PermiteTextoLivre);
 
+/// <param name="EnviadoEm">
+/// Carimbo do envio, e a única autoridade sobre "selado" — não há coluna de situação.
+/// </param>
+/// <param name="ExecucoesAvaliadas">Execuções com seção G respondida por este comprador.</param>
 public sealed record QuestionarioResposta(
     Guid? Id,
-    string SessaoStatus,
     DateTimeOffset? EnviadoEm,
     int PassoAtual,
     int VersaoCatalogo,
+    int ExecucoesAvaliadas,
+    int MinimoExigido,
+    bool Liberado,
     List<RespostaItemResposta> Respostas);
 
 public sealed record RespostaItemResposta(
@@ -64,9 +74,10 @@ public sealed record TabulacaoResposta(
     List<string> Codigos,
     List<string> CodigosDeTexto,
     int Participantes,
-    List<AvaliacaoTabuladaResposta> Linhas);
+    List<ExecucaoAvaliadaResposta> Execucoes,
+    List<QuestionarioDoCompradorResposta> Questionarios);
 
-public sealed record AvaliacaoTabuladaResposta(
+public sealed record ExecucaoAvaliadaResposta(
     Guid SessaoId,
     DateTimeOffset CriadoEm,
     string Status,
@@ -75,10 +86,12 @@ public sealed record AvaliacaoTabuladaResposta(
     string? AvaliacaoVeredito,
     string? AvaliacaoComentario,
     DateTimeOffset? AvaliacaoEm,
-    string? Avaliador,
-    DateTimeOffset? QuestionarioEnviadoEm,
-    int? VersaoCatalogo,
+    string? Avaliador);
+
+public sealed record QuestionarioDoCompradorResposta(
     string? Respondente,
+    DateTimeOffset? EnviadoEm,
+    int VersaoCatalogo,
     List<RespostaTabuladaResposta> Respostas);
 
 public sealed record RespostaTabuladaResposta(

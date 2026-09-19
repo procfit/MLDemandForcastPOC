@@ -454,6 +454,57 @@ public sealed class AppHostFixture : IAsyncLifetime
     /// o teste acumularia sessões idênticas na lista.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Devolve o comprador do E2E ao estado "nunca respondeu e nunca avaliou nada".
+    ///
+    /// <para>
+    /// <b>Existe porque o questionário passou a ser por COMPRADOR</b> (19/09/2026), e o banco
+    /// destes testes é persistente. Um questionário respondido numa execução anterior da suíte
+    /// — ou por outro cenário da mesma execução — deixaria o portão já selado, e o teste do
+    /// fluxo falharia num ponto a quilômetros da causa. Mesma razão pela qual
+    /// <see cref="SemearSessaoConcluidaAsync"/> apaga as sessões de mesmo nome antes de
+    /// inserir.
+    /// </para>
+    ///
+    /// <para>
+    /// Limpa também os vereditos de seção G daquele comprador: o portão conta execuções
+    /// avaliadas <b>por ele</b>, e resíduo de outro cenário abriria o portão cedo. Os testes
+    /// desta suíte vivem na mesma <c>AspireCollection</c>, então rodam em série e esta limpeza
+    /// não corre com ninguém.
+    /// </para>
+    /// </summary>
+    public async Task LimparAvaliacoesDoCompradorAsync(string email, CancellationToken ct = default)
+    {
+        var connectionString = await App.GetConnectionStringAsync("engine", ct)
+            ?? throw new InvalidOperationException("Recurso 'engine' sem connection string.");
+
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            DECLARE @uid nvarchar(450) = (SELECT Id FROM dbo.AspNetUsers WHERE Email = @email);
+            IF @uid IS NULL RETURN;
+
+            DELETE FROM dbo.QuestionarioRespostas
+             WHERE QuestionarioId IN (SELECT Id FROM dbo.Questionarios WHERE UsuarioId = @uid);
+            DELETE FROM dbo.Questionarios WHERE UsuarioId = @uid;
+
+            -- Devolve as execucoes avaliadas por ele a AguardandoAvaliacao. A equivalencia
+            -- "Concluida <=> avaliada" e o que ComparacaoSessao.PodeExcluir exige, entao
+            -- limpar o veredito sem devolver o status deixaria sessao concluida sem avaliacao.
+            UPDATE dbo.ComparacaoSessoes
+               SET AvaliacaoVeredito = NULL,
+                   AvaliacaoComentario = NULL,
+                   AvaliacaoEm = NULL,
+                   AvaliacaoUsuarioId = NULL,
+                   Status = CASE WHEN Status = 'Concluida' THEN 'AguardandoAvaliacao' ELSE Status END
+             WHERE AvaliacaoUsuarioId = @uid;
+            """;
+        cmd.Parameters.AddWithValue("@email", email);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<Guid> SemearSessaoConcluidaAsync(
         string nome,
         long sugestaoId,
