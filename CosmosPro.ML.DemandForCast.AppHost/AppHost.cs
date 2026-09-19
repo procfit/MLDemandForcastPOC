@@ -130,6 +130,18 @@ var engineDb = sqlServer.AddDatabase("engine");
 // de vendas, estoque, etc.). Persistido em volume; credenciais fixas via
 // ParameterResource (ver bloco de parameters acima).
 var minio = builder.AddMinioContainer("minio", minioAccessKey, minioSecretKey)
+                   // REGISTRY EXPLICITO: a MinIO tirou as imagens publicas do Docker Hub, e
+                   // `docker pull docker.io/minio/minio:<tag>` passou a responder "pull access
+                   // denied ... may require 'docker login'". A mesma tag continua publica no
+                   // quay.io, que e o registry que a propria MinIO publica.
+                   //
+                   // Medido em 19/09/2026: o CI quebrou inteiro sem uma linha de codigo ter
+                   // mudado no caminho do MinIO. Localmente nao aparecia -- a imagem ja estava
+                   // no cache do Docker da maquina, entao o `F5` seguia funcionando e so o
+                   // runner limpo via a falha. O sintoma tambem enganava: `minio` nao subia,
+                   // `apiservice` espera por ele, e o erro que chegava aos testes era
+                   // "apiservice nao ficou saudavel".
+                   .WithImageRegistry("quay.io")
                    .WithLifetime(ContainerLifetime.Persistent)
                    .WithDataVolume();
 

@@ -239,7 +239,7 @@ jobs:
         run: |
           for imagem in \
             mcr.microsoft.com/mssql/server:2022-latest \
-            docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
           do
             docker pull "$imagem" || true
           done
