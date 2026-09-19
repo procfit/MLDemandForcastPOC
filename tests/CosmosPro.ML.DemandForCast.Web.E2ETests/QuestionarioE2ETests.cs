@@ -162,6 +162,53 @@ public sealed class QuestionarioE2ETests(AppHostFixture fixture)
         {
             await Assertions.Expect(blocoImpresso).ToBeVisibleAsync();
             await Assertions.Expect(botoes).ToBeHiddenAsync();
+
+            // 4d. E O LAYOUT DO RADZEN TEM DE ESTAR SOLTO, SENAO A FOLHA SAI COM UMA PAGINA SO.
+            //
+            // Segundo relato do patrocinador, 16/09/2026: o bloco plano de 4b ja aparecia -- a
+            // correcao anterior funcionou --, mas a pre-visualizacao declarava "1 pagina" e
+            // cortava no meio da Parte B. A causa nao e nossa: sao tres regras do
+            // `radzen.blazor/8.4.2/staticwebassets/css/default-base.css`.
+            //
+            //     .rz-layout { height:100vh; overflow:hidden; display:grid; ... }
+            //     .rz-body   { transform: translateZ(0) }
+            //     .rz-body   { width: 100vw }
+            //
+            // A decisiva e o `transform`: ELEMENTO TRANSFORMADO NAO FRAGMENTA ENTRE PAGINAS --
+            // o Chrome imprime o que cabe na primeira folha e descarta o resto. A regra
+            // anterior do nosso @media print soltava `overflow` e `height` de
+            // `html, body, .rz-body, main`, o que nao bastava: faltava o `.rz-layout`, faltava
+            // matar o `transform`, e `main` nem existe neste layout.
+            //
+            // Afirma o efeito das regras, e nao a contagem de paginas: a contagem exigiria
+            // `page.pdf()` mais um parser de PDF. Sao TRES invariantes, e cada uma morde --
+            // conferido revertendo a correcao.
+            //
+            // CUIDADO AO ACRESCENTAR ASSERCAO AQUI: `getComputedStyle` devolve valor USADO,
+            // nao declarado. `height` e `width` vem sempre em pixels, mesmo sob `auto`, entao
+            // comparar com "auto" ou com "100vw" produz asserção que nunca morde -- foi o erro
+            // da primeira versao deste bloco. Compare NUMEROS, ou compare propriedades cujo
+            // computado e categorico (`overflow`, `transform`).
+            var medidas = await page.EvaluateAsync<string[]>(
+                "() => { const l = getComputedStyle(document.querySelector('.rz-layout')); "
+                + "const c = getComputedStyle(document.querySelector('.rz-body')); "
+                + "const bloco = document.querySelector('[data-test=impressao-respostas]'); "
+                + "return [l.overflow, c.transform, l.height, String(bloco.scrollHeight)]; }");
+
+            medidas[0].Should().Be("visible",
+                "o .rz-layout tem overflow:hidden fora da impressao e cortaria a folha");
+
+            medidas[1].Should().Be("none",
+                "elemento transformado NAO fragmenta entre paginas -- e o que fazia sair 1 pagina so");
+
+            // A altura do layout tem de acomodar a folha inteira. Presa em 100vh ela pararia na
+            // altura da JANELA, com o resto do questionario fora do fluxo de impressao.
+            var alturaDoLayout = double.Parse(medidas[2].Replace("px", ""),
+                System.Globalization.CultureInfo.InvariantCulture);
+            var alturaDaFolha = double.Parse(medidas[3], System.Globalization.CultureInfo.InvariantCulture);
+
+            alturaDoLayout.Should().BeGreaterThanOrEqualTo(alturaDaFolha,
+                "o layout precisa crescer com o conteudo; preso em 100vh ele para na altura da janela");
         }
         finally
         {

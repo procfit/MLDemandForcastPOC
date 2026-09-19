@@ -62,10 +62,41 @@ html, body {
         padding: 0 !important;
     }
 
-    /* O layout rola num container interno; na impressao ele tem de deixar o conteudo fluir,
-       senao a folha sai com a primeira tela e nada depois. */
-    html, body, .rz-body, main {
+    /* O layout do Radzen e uma grade de ALTURA FIXA, e o corpo dela e um elemento
+       TRANSFORMADO. As regras abaixo saem do proprio pacote
+       (radzen.blazor/8.4.2/staticwebassets/css/default-base.css):
+
+           .rz-layout { height:100vh; overflow:hidden; display:grid; ... }
+           .rz-layout { height:100dvh }
+           .rz-body   { transform: translateZ(0) }
+           .rz-body   { width: 100vw }
+
+       A decisiva e o `transform`: elemento transformado NAO fragmenta entre paginas, entao o
+       Chrome imprime o que cabe na primeira folha e descarta o resto. Era o "1 pagina"
+       cortando no meio da Parte B que o patrocinador reportou em 16/09/2026 -- o bloco plano
+       de impressao ja estava correto, o que faltava era deixar a folha paginar.
+
+       A versao anterior desta regra soltava `overflow` e `height` de
+       `html, body, .rz-body, main`. Nao bastava por tres motivos: faltava o `.rz-layout`
+       (que e quem tem `overflow:hidden`), faltava matar o `transform`, e `main` nem existe
+       neste layout -- o seletor nunca casou com nada. */
+    html, body {
         overflow: visible !important;
         height: auto !important;
+    }
+
+    .rz-layout {
+        display: block !important;
+        height: auto !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+    }
+
+    .rz-layout .rz-body,
+    .rz-body {
+        transform: none !important;
+        width: auto !important;
+        height: auto !important;
+        overflow: visible !important;
     }
 }
