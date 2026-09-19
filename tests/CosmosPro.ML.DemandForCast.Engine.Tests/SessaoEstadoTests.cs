@@ -10,8 +10,8 @@ public sealed class SessaoEstadoTests
     [InlineData(SessaoStatus.AguardandoDados, SessaoStatus.ProcessandoDados, true)]
     [InlineData(SessaoStatus.ProcessandoDados, SessaoStatus.Treinando, true)]
     [InlineData(SessaoStatus.Treinando, SessaoStatus.Comparando, true)]
-    [InlineData(SessaoStatus.Comparando, SessaoStatus.AguardandoQuestionario, true)]
-    [InlineData(SessaoStatus.AguardandoQuestionario, SessaoStatus.Concluida, true)]
+    [InlineData(SessaoStatus.Comparando, SessaoStatus.AguardandoAvaliacao, true)]
+    [InlineData(SessaoStatus.AguardandoAvaliacao, SessaoStatus.Concluida, true)]
     [InlineData(SessaoStatus.AguardandoDados, SessaoStatus.Concluida, false)]
     [InlineData(SessaoStatus.Concluida, SessaoStatus.Treinando, false)]
     // Comparar não conclui mais a sessão: o questionário é a última fase, então o pulo direto
@@ -59,7 +59,7 @@ public sealed class SessaoEstadoTests
 
     [Theory]
     [InlineData(SessaoStatus.AguardandoDados)]
-    [InlineData(SessaoStatus.AguardandoQuestionario)]
+    [InlineData(SessaoStatus.AguardandoAvaliacao)]
     [InlineData(SessaoStatus.Inviavel)]
     [InlineData(SessaoStatus.Falha)]
     public void Fora_das_fases_em_andamento_a_sessao_pode_ser_excluida(SessaoStatus status)
@@ -86,7 +86,7 @@ public sealed class SessaoEstadoTests
     public void Aguardando_questionario_so_sai_por_envio()
     {
         var destinos = Enum.GetValues<SessaoStatus>()
-            .Where(d => ComparacaoSessao.PodeTransicionar(SessaoStatus.AguardandoQuestionario, d))
+            .Where(d => ComparacaoSessao.PodeTransicionar(SessaoStatus.AguardandoAvaliacao, d))
             .ToList();
 
         destinos.Should().Equal(SessaoStatus.Concluida);

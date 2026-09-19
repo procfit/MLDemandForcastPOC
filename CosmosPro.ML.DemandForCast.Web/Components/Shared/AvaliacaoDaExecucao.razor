@@ -47,7 +47,7 @@
                       ButtonStyle="ButtonStyle.Primary" Disabled="@(_gravando || _veredito is null)"
                       Click="@RegistrarAsync" data-test="registrar-avaliacao" />
 
-        @if (Sessao.Status == "AguardandoQuestionario")
+        @if (Sessao.Status == "AguardandoAvaliacao")
         {
             <RadzenButton Text="Responder Questionário" Icon="assignment" Variant="Variant.Outlined"
                           data-test="ir-para-questionario"

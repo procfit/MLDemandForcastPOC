@@ -175,7 +175,7 @@
                                  JustifyContent="JustifyContent.SpaceBetween" Gap="1rem" Wrap="FlexWrap.Wrap">
                         <RadzenStack Gap="0.25rem">
                             <RadzenText TextStyle="TextStyle.H6" Style="margin: 0">
-                                @(_sessao.Status == "AguardandoQuestionario" ? "Falta sua avaliação" : "Quadro Resumo")
+                                @(_sessao.Status == "AguardandoAvaliacao" ? "Falta sua avaliação" : "Quadro Resumo")
                             </RadzenText>
                             <RadzenText TextStyle="TextStyle.Body2" Style="margin: 0">
                                 Os resultados desta execução reunidos numa tela só: comparação PBS × ML,
@@ -187,7 +187,7 @@
                     </RadzenStack>
                 </RadzenCard>
 
-                @if (_sessao.Status != "AguardandoQuestionario")
+                @if (_sessao.Status != "AguardandoAvaliacao")
                 {
                     <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
                         <RadzenIcon Icon="task_alt" Style="color: var(--rz-success)" />
@@ -203,7 +203,7 @@
                    depois lê os quadros-resumo e por último a análise PBS × ML. O atalho do
                    questionário CONTINUA aqui: hoje ele é o único caminho para o instrumento em
                    toda a aplicação, e retirá-lo antes da tela de conclusão existir deixaria a
-                   sessão parada em AguardandoQuestionario sem ninguém conseguir respondê-la —
+                   sessão parada em AguardandoAvaliacao sem ninguém conseguir respondê-la —
                    condição que o próprio patrocinador pôs ao aprovar a mudança. *@
                 <RadzenCard Variant="Variant.Outlined">
                     <RadzenTabs RenderMode="TabRenderMode.Client" @bind-SelectedIndex="@_abaSelecionada">
@@ -351,7 +351,7 @@
     /// Para de fazer poll quando não há mais nada que o servidor mude por conta própria —
     /// senão o timer roda pra sempre mesmo com nada mais a atualizar. Reativa automaticamente
     /// se um novo upload (a partir de Inviavel/Falha) puser a sessão de volta em movimento.
-    /// Inclui <c>AguardandoQuestionario</c>, que está no meio do fluxo mas só sai dali por
+    /// Inclui <c>AguardandoAvaliacao</c>, que está no meio do fluxo mas só sai dali por
     /// ação do usuário nesta tela — ver <c>SessaoView.SemPollNecessario</c>.
     /// </summary>
     private void AtualizarPolling()

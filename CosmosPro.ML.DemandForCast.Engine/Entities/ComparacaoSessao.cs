@@ -88,13 +88,13 @@ public sealed class ComparacaoSessao
         [SessaoStatus.AguardandoDados] = [SessaoStatus.ProcessandoDados, SessaoStatus.Inviavel, SessaoStatus.Falha],
         [SessaoStatus.ProcessandoDados] = [SessaoStatus.Treinando, SessaoStatus.Inviavel, SessaoStatus.Falha],
         [SessaoStatus.Treinando] = [SessaoStatus.Comparando, SessaoStatus.Inviavel, SessaoStatus.Falha],
-        [SessaoStatus.Comparando] = [SessaoStatus.AguardandoQuestionario, SessaoStatus.Inviavel, SessaoStatus.Falha],
+        [SessaoStatus.Comparando] = [SessaoStatus.AguardandoAvaliacao, SessaoStatus.Inviavel, SessaoStatus.Falha],
         // A única transição da máquina que NÃO é feita pelo Worker: quem a executa é o
-        // POST /api/comparacoes/{id}/questionario/enviar, porque o que falta é um humano
-        // responder. O ClaimNextAsync do SessaoWorker tem allowlist das três fases de fila,
+        // POST /api/comparacoes/{id}/avaliacao, porque o que falta é um humano registrar a
+        // Seção G. O ClaimNextAsync do SessaoWorker tem allowlist das três fases de fila,
         // então esta sessão não é reclamada por ninguém enquanto espera — e é por isso que o
         // relógio de LimiteDeFaseSemProgresso não a alcança, ver a nota daquele campo.
-        [SessaoStatus.AguardandoQuestionario] = [SessaoStatus.Concluida],
+        [SessaoStatus.AguardandoAvaliacao] = [SessaoStatus.Concluida],
         [SessaoStatus.Concluida] = [],
         [SessaoStatus.Inviavel] = [SessaoStatus.AguardandoDados],  // reenviar outro ZIP
         [SessaoStatus.Falha] = [SessaoStatus.AguardandoDados],
@@ -122,13 +122,13 @@ public sealed class ComparacaoSessao
     /// respondeu o questionário, e resposta de pesquisa não evapora por clique. Note que a
     /// segunda recusa depende de as duas afirmações serem equivalentes — é o que a migration
     /// garante ao reclassificar as sessões que já estavam em <c>Concluida</c> sem questionário
-    /// para <see cref="SessaoStatus.AguardandoQuestionario"/>. Sem aquele <c>UPDATE</c>,
+    /// para <see cref="SessaoStatus.AguardandoAvaliacao"/>. Sem aquele <c>UPDATE</c>,
     /// sessões antigas ficariam impossíveis de excluir sem nunca ter sido respondidas.
     /// </para>
     ///
     /// <para>
     /// Continua excluível em <see cref="SessaoStatus.AguardandoDados"/> — quem criou por
-    /// engano e nunca enviou nada — e em <see cref="SessaoStatus.AguardandoQuestionario"/>,
+    /// engano e nunca enviou nada — e em <see cref="SessaoStatus.AguardandoAvaliacao"/>,
     /// que é o comprador decidindo não avaliar. Um rascunho de questionário vai junto no
     /// cascade: rascunho abandonado não pode trancar a sessão.
     /// </para>
@@ -201,8 +201,16 @@ public enum SessaoStatus
 
     /// <summary>
     /// A comparação terminou e o resultado já está materializado; falta o comprador
-    /// responder o questionário. <b>Fase de humano, não de worker</b> — nenhuma das filas a
-    /// reclama.
+    /// registrar a <b>Seção G</b> desta execução. <b>Fase de humano, não de worker</b> —
+    /// nenhuma das filas a reclama.
+    ///
+    /// <para>
+    /// Chamava-se <c>AguardandoQuestionario</c> até 19/09/2026, quando o questionário deixou
+    /// de ser por execução (documento do patrocinador de 16/09, por orientação do Professor).
+    /// Quem tira a sessão daqui passou a ser o registro da Seção G; o nome antigo descreveria
+    /// uma espera que não existe mais — é a mesma lição do <c>JanelaInicio</c>, dois
+    /// significados sob um nome.
+    /// </para>
     ///
     /// <para>
     /// Numerado no fim, e não entre <see cref="Comparando"/> e <see cref="Concluida"/>, onde
@@ -213,5 +221,5 @@ public enum SessaoStatus
     /// entendê-lo.
     /// </para>
     /// </summary>
-    AguardandoQuestionario = 7,
+    AguardandoAvaliacao = 7,
 }

@@ -335,7 +335,7 @@ public sealed class FiltrosDosItensIntegrationTests(AppHostFixture fixture)
             Id = sessaoId,
             RedeId = redeId,
             Nome = Slug,
-            Status = SessaoStatus.AguardandoQuestionario,
+            Status = SessaoStatus.AguardandoAvaliacao,
             CriadoEm = DateTimeOffset.UtcNow,
             AtualizadoEm = DateTimeOffset.UtcNow,
             SugestaoId = 555,

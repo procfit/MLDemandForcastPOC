@@ -7,7 +7,7 @@ namespace CosmosPro.ML.DemandForCast.Engine.Entities;
 /// <para>
 /// <b>Não tem coluna de situação, e isso é deliberado.</b> Quem afirma se a avaliação
 /// está selada é <see cref="ComparacaoSessao.Status"/>: rascunho é a sessão em
-/// <see cref="SessaoStatus.AguardandoQuestionario"/> com uma linha destas existindo, e
+/// <see cref="SessaoStatus.AguardandoAvaliacao"/> com uma linha destas existindo, e
 /// selado é a sessão em <see cref="SessaoStatus.Concluida"/>. Um <c>Status</c> aqui
 /// repetiria a mesma verdade em dois lugares que podem divergir — e a tela leria o
 /// errado. <see cref="EnviadoEm"/> é carimbo, não situação: existe porque a tela diz
@@ -18,7 +18,7 @@ namespace CosmosPro.ML.DemandForCast.Engine.Entities;
 /// <para>
 /// O selo é uma escrita só: gravar <see cref="EnviadoEm"/> e mover a sessão para
 /// <see cref="SessaoStatus.Concluida"/> acontecem na <b>mesma transação</b>, com o
-/// <c>WHERE ... AND Status = 'AguardandoQuestionario'</c> no <c>UPDATE</c> da sessão
+/// <c>WHERE ... AND Status = 'AguardandoAvaliacao'</c> no <c>UPDATE</c> da sessão
 /// servindo de guarda contra dois envios simultâneos — mesmo padrão do
 /// <c>SessaoResultadoMaterializador</c>. Separar as duas escritas deixaria uma janela em
 /// que a resposta está gravada e a sessão ainda pede resposta.

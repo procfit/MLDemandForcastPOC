@@ -163,10 +163,11 @@ public sealed class EngineDbContext(DbContextOptions<EngineDbContext> options)
             b.ToTable("ComparacaoSessoes");
             b.HasKey(x => x.Id);
 
-            // 30, e não os 20 das outras filas: "AguardandoQuestionario" tem 22 caracteres e
-            // não caberia. O valor viaja como texto (HasConversion<string>), então um nome de
-            // estado mais longo que a coluna estoura na escrita — a alternativa era contorcer
-            // o nome do estado para caber num limite arbitrário.
+            // 30, e não os 20 das outras filas: o valor viaja como texto
+            // (HasConversion<string>), então um nome de estado mais longo que a coluna estoura
+            // na escrita — a alternativa era contorcer o nome do estado para caber num limite
+            // arbitrário. Os 30 foram dimensionados por "AguardandoQuestionario" (22); o nome
+            // atual, "AguardandoAvaliacao", tem 19 e continua folgado.
             b.Property(x => x.Status)
              .HasConversion<string>()
              .HasMaxLength(30)

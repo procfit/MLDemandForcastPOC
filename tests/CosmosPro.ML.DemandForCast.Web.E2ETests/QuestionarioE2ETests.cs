@@ -24,7 +24,7 @@ namespace CosmosPro.ML.DemandForCast.Web.E2ETests;
 /// </para>
 ///
 /// <para>
-/// A sessão é semeada em <c>AguardandoQuestionario</c> com resultado e detalhe materializados:
+/// A sessão é semeada em <c>AguardandoAvaliacao</c> com resultado e detalhe materializados:
 /// chegar lá pelo caminho legítimo exigiria importar um ZIP e treinar um modelo dentro do E2E.
 /// As perguntas vêm do <see cref="QuestionarioCatalogo"/> real, lidas em tempo de teste em vez
 /// de escritas à mão — é o que mantém este cenário válido quando o instrumento definitivo
@@ -51,9 +51,9 @@ public sealed class QuestionarioE2ETests(AppHostFixture fixture)
         //    resultado chama o Quadro Resumo, e é de lá — da seção G, depois da avaliação — que
         //    se chega ao questionário. O atalho direto saiu quando o Quadro Resumo nasceu, e
         //    este percurso é agora a ÚNICA porta: se ele quebrar, a sessão fica presa em
-        //    AguardandoQuestionario para sempre, que é a fase que nenhum worker reclama.
+        //    AguardandoAvaliacao para sempre, que é a fase que nenhum worker reclama.
         //
-        //    A tela precisa renderizar em AguardandoQuestionario, e não só em Concluida. Se o
+        //    A tela precisa renderizar em AguardandoAvaliacao, e não só em Concluida. Se o
         //    gate voltasse a ser `Status == "Concluida"`, é aqui que apareceria.
         await page.GotoAsync($"{baseUrl}/comparacoes/{sessaoId}");
         var chamada = page.Locator("[data-test=chamada-quadro-resumo]");

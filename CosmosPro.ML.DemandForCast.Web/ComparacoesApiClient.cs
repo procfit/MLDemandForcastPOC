@@ -299,17 +299,17 @@ public sealed record SessaoView(
     ///
     /// <para>
     /// <b>Não é o mesmo que "fluxo concluído"</b>, e desde o questionário os dois conceitos
-    /// deixaram de coincidir: <c>AguardandoQuestionario</c> está no meio do fluxo e entra aqui,
+    /// deixaram de coincidir: <c>AguardandoAvaliacao</c> está no meio do fluxo e entra aqui,
     /// porque quem a move é um clique do próprio usuário nesta tela — não um worker. Sem isso a
     /// tela ficaria fazendo poll para sempre esperando um humano que já está olhando para ela.
     /// Quem quer saber se o fluxo terminou olha o status, não este predicado.
     /// </para>
     /// </summary>
     public bool SemPollNecessario =>
-        Status is "Concluida" or "Inviavel" or "Falha" or "AguardandoQuestionario";
+        Status is "Concluida" or "Inviavel" or "Falha" or "AguardandoAvaliacao";
 
     /// <summary>Se a comparação já tem resultado para mostrar (materializado).</summary>
-    public bool TemResultado => Status is "AguardandoQuestionario" or "Concluida";
+    public bool TemResultado => Status is "AguardandoAvaliacao" or "Concluida";
 
     /// <summary>
     /// Espelha <c>ComparacaoSessao.PodeExcluir</c>, com as duas recusas: as fases em andamento
@@ -328,7 +328,7 @@ public sealed record SessaoView(
         "ProcessandoDados" => "Processando dados",
         "Treinando" => "Treinando",
         "Comparando" => "Comparando",
-        "AguardandoQuestionario" => "Aguardando avaliação",
+        "AguardandoAvaliacao" => "Aguardando avaliação",
         "Concluida" => "Concluída",
         "Inviavel" => "Inviável",
         "Falha" => "Falha",
@@ -341,7 +341,7 @@ public sealed record SessaoView(
         "ProcessandoDados" or "Treinando" or "Comparando" => BadgeStyle.Info,
         // Primary, não Success: a comparação deu certo, mas o fluxo pede uma ação do
         // comprador — verde de "pronto" o faria ignorar a pendência.
-        "AguardandoQuestionario" => BadgeStyle.Primary,
+        "AguardandoAvaliacao" => BadgeStyle.Primary,
         "Concluida" => BadgeStyle.Success,
         "Inviavel" => BadgeStyle.Warning,
         "Falha" => BadgeStyle.Danger,

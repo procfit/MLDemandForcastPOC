@@ -454,7 +454,7 @@ internal sealed class SessaoResultadoMaterializador(
 
     /// <summary>
     /// Apaga o detalhe anterior, grava o novo e passa a sessão para
-    /// <c>AguardandoQuestionario</c> — <b>uma transação, nesta ordem</b>. Não conclui: quem
+    /// <c>AguardandoAvaliacao</c> — <b>uma transação, nesta ordem</b>. Não conclui: quem
     /// grava <c>Concluida</c> é o endpoint de envio do questionário, a última fase do fluxo.
     ///
     /// <para>
@@ -515,7 +515,7 @@ internal sealed class SessaoResultadoMaterializador(
             int linhas;
             await using (var concluir = new SqlCommand("""
                 UPDATE dbo.ComparacaoSessoes
-                    SET Status = 'AguardandoQuestionario',
+                    SET Status = 'AguardandoAvaliacao',
                         ResultadoJson = @resultado,
                         AtualizadoEm = SYSDATETIMEOFFSET()
                 WHERE Id = @sessaoId AND Status = @statusEsperado;

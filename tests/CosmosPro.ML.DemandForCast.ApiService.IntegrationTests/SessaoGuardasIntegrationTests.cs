@@ -387,8 +387,8 @@ public sealed class SessaoGuardasIntegrationTests(AppHostFixture fixture)
                 sessaoId, redeId, TestContext.Current.CancellationToken);
 
             // Ver a nota do mesmo predicado em SessaoOrquestracaoIntegrationTests: o caminho
-            // felizes para em AguardandoQuestionario, esperando o comprador.
-            if (resp.Content is { Status: "AguardandoQuestionario" or "Concluida" or "Inviavel" or "Falha" } sessao)
+            // felizes para em AguardandoAvaliacao, esperando o comprador.
+            if (resp.Content is { Status: "AguardandoAvaliacao" or "Concluida" or "Inviavel" or "Falha" } sessao)
             {
                 return sessao;
             }

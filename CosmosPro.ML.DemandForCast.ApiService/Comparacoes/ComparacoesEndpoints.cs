@@ -360,7 +360,7 @@ internal static class ComparacoesEndpoints
                      // A segunda recusa de PodeExcluir, por motivo diferente: aqui não há job
                      // a proteger, há dado. Concluida significa que o comprador respondeu o
                      // questionário, e a resposta é dado de pesquisa. Um rascunho de
-                     // questionário (sessão em AguardandoQuestionario) continua indo embora
+                     // questionário (sessão em AguardandoAvaliacao) continua indo embora
                      // por cascade — rascunho abandonado não pode trancar a sessão.
                      && s.Status != SessaoStatus.Concluida)
             .ExecuteDeleteAsync(ct);
@@ -581,7 +581,7 @@ internal static class ComparacoesEndpoints
         if (sessao is null) return Results.NotFound();
 
         // Avaliar exige resultado na tela: sem ele o comprador estaria opinando sobre nada.
-        if (sessao.Status is not (SessaoStatus.AguardandoQuestionario or SessaoStatus.Concluida))
+        if (sessao.Status is not (SessaoStatus.AguardandoAvaliacao or SessaoStatus.Concluida))
         {
             return Results.BadRequest(new ValidationErrorResponse(
                 ["Esta comparação ainda não tem resultado para avaliar."]));

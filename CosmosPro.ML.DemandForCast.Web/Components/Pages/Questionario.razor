@@ -272,7 +272,7 @@
 
     private readonly CancellationTokenSource _cts = new();
 
-    private bool PodeResponder => _questionario?.SessaoStatus == "AguardandoQuestionario";
+    private bool PodeResponder => _questionario?.SessaoStatus == "AguardandoAvaliacao";
     private bool UltimoPasso => _catalogo is not null && _passo == _catalogo.Secoes.Count - 1;
 
     protected override async Task OnInitializedAsync()

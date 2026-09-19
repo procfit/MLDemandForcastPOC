@@ -303,7 +303,7 @@ internal static class QuestionariosEndpoints
 
         if (await SessaoAsync(db, sessaoId, redeId, ct) is not { } sessao) return Results.NotFound();
 
-        if (sessao.Status != SessaoStatus.AguardandoQuestionario)
+        if (sessao.Status != SessaoStatus.AguardandoAvaliacao)
         {
             // Duas recusas com mensagens diferentes: "já foi" e "ainda não" mandam o chamador
             // para lados opostos, e um texto genérico faria o comprador tentar de novo no caso
@@ -352,7 +352,7 @@ internal static class QuestionariosEndpoints
 
         if (recusa is not null) return recusa;
 
-        var status = selar ? SessaoStatus.Concluida : SessaoStatus.AguardandoQuestionario;
+        var status = selar ? SessaoStatus.Concluida : SessaoStatus.AguardandoAvaliacao;
         return Results.Ok(await MontarAsync(db, sessaoId, status, ct));
     }
 
@@ -439,11 +439,11 @@ internal static class QuestionariosEndpoints
         {
             // A transição por último e condicional, no mesmo padrão do
             // SessaoResultadoMaterializador: se dois envios chegarem juntos, só um encontra a
-            // sessão em AguardandoQuestionario. O outro acha zero linha, a transação inteira
+            // sessão em AguardandoAvaliacao. O outro acha zero linha, a transação inteira
             // volta atrás e as respostas que ele gravou desaparecem com ela — em vez de dois
             // envios se sobrescreverem com a sessão concluída uma vez só.
             var linhas = await db.ComparacaoSessoes
-                .Where(s => s.Id == sessaoId && s.Status == SessaoStatus.AguardandoQuestionario)
+                .Where(s => s.Id == sessaoId && s.Status == SessaoStatus.AguardandoAvaliacao)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(x => x.Status, SessaoStatus.Concluida)
                     .SetProperty(x => x.AtualizadoEm, agora), ct);

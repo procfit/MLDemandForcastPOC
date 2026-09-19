@@ -12,7 +12,7 @@ namespace CosmosPro.ML.DemandForCast.ApiService.IntegrationTests;
 /// a selagem trava depois.
 ///
 /// <para>
-/// A sessão é posta em <c>AguardandoQuestionario</c> por escrita direta no banco, e não pelo
+/// A sessão é posta em <c>AguardandoAvaliacao</c> por escrita direta no banco, e não pelo
 /// caminho legítimo: chegar lá de verdade custa importar um ZIP, treinar um modelo e esperar
 /// três filas — dezenas de minutos, já cobertos por
 /// <see cref="SessaoOrquestracaoIntegrationTests"/>. O que estes testes exercitam é o
@@ -49,7 +49,7 @@ public sealed class QuestionarioIntegrationTests(AppHostFixture fixture)
             "ainda não haver rascunho é o estado inicial normal, não erro");
         resp.Content!.Id.Should().BeNull();
         resp.Content.Respostas.Should().BeEmpty();
-        resp.Content.SessaoStatus.Should().Be("AguardandoQuestionario");
+        resp.Content.SessaoStatus.Should().Be("AguardandoAvaliacao");
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public sealed class QuestionarioIntegrationTests(AppHostFixture fixture)
         lido.Content!.PassoAtual.Should().Be(1);
         lido.Content.Respostas.Should().ContainSingle()
             .Which.PerguntaCodigo.Should().Be(primeira[0].PerguntaCodigo);
-        lido.Content.SessaoStatus.Should().Be("AguardandoQuestionario",
+        lido.Content.SessaoStatus.Should().Be("AguardandoAvaliacao",
             "gravar rascunho não pode concluir a sessão");
     }
 
@@ -129,7 +129,7 @@ public sealed class QuestionarioIntegrationTests(AppHostFixture fixture)
             "400 e não 409: o que falta é conteúdo da requisição, e quem chama pode corrigir");
 
         var sessao = await fixture.ComparacoesApi.GetAsync(sessaoId, rede);
-        sessao.Content!.Status.Should().Be("AguardandoQuestionario");
+        sessao.Content!.Status.Should().Be("AguardandoAvaliacao");
     }
 
     [Fact]
@@ -450,7 +450,7 @@ public sealed class QuestionarioIntegrationTests(AppHostFixture fixture)
     }
 
     /// <summary>
-    /// Cria a sessão pela API e a move para <c>AguardandoQuestionario</c> por escrita direta.
+    /// Cria a sessão pela API e a move para <c>AguardandoAvaliacao</c> por escrita direta.
     /// Ver a nota da classe para por que o caminho legítimo não é usado aqui.
     /// </summary>
     private async Task<(int Rede, Guid SessaoId)> SessaoAguardandoAsync(string slug, int? redeExistente = null)
@@ -463,7 +463,7 @@ public sealed class QuestionarioIntegrationTests(AppHostFixture fixture)
 
         await using var db = await AbrirEngineAsync();
         var sessao = await db.ComparacaoSessoes.SingleAsync(s => s.Id == id);
-        sessao.Status = SessaoStatus.AguardandoQuestionario;
+        sessao.Status = SessaoStatus.AguardandoAvaliacao;
         sessao.AtualizadoEm = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync();
 

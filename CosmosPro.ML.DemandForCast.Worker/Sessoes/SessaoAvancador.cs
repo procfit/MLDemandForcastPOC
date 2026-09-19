@@ -40,7 +40,7 @@ internal static class SessaoAvancador
         // Comparar não conclui: falta o comprador avaliar. A transição para Concluida é a
         // única da máquina que não sai daqui — quem a faz é o endpoint de envio do
         // questionário, porque o que falta é um humano, não um job.
-        (SessaoStatus.Comparando, JobResultado.Concluido) => SessaoStatus.AguardandoQuestionario,
+        (SessaoStatus.Comparando, JobResultado.Concluido) => SessaoStatus.AguardandoAvaliacao,
 
         (SessaoStatus.ProcessandoDados or SessaoStatus.Treinando or SessaoStatus.Comparando,
             JobResultado.Falhou) => SessaoStatus.Falha,

@@ -134,7 +134,7 @@ internal sealed class SessaoWorker(
                 // Materializa o resultado e deixa a sessão aguardando a avaliação. É o último
                 // passo do worker nesta sessão: o estado de destino não está no allowlist do
                 // ClaimNextAsync, então ela não é reclamada de novo.
-                SessaoStatus.AguardandoQuestionario => await ConcluirAsync(scoped, sessao, ct),
+                SessaoStatus.AguardandoAvaliacao => await ConcluirAsync(scoped, sessao, ct),
                 SessaoStatus.Falha => await GravarStatusAsync(
                     db, sessao, SessaoStatus.Falha, mensagemErro: mensagemErro, ct: ct),
                 _ => false,
@@ -189,7 +189,7 @@ internal sealed class SessaoWorker(
     {
         SessaoStatus.Treinando => "iniciar o aprendizado do padrão de venda das suas lojas",
         SessaoStatus.Comparando => "iniciar a comparação dos dois métodos",
-        SessaoStatus.AguardandoQuestionario => "montar o resultado desta comparação",
+        SessaoStatus.AguardandoAvaliacao => "montar o resultado desta comparação",
         _ => "dar continuidade a esta comparação",
     };
 
@@ -398,9 +398,9 @@ internal sealed class SessaoWorker(
             return false;
         }
 
-        // AguardandoQuestionario entra aqui: é onde o worker larga a sessão, mesmo não sendo o
+        // AguardandoAvaliacao entra aqui: é onde o worker larga a sessão, mesmo não sendo o
         // fim do fluxo. Concluida sai — quem a grava é o endpoint de envio, não este método.
-        if (novo is SessaoStatus.Inviavel or SessaoStatus.Falha or SessaoStatus.AguardandoQuestionario)
+        if (novo is SessaoStatus.Inviavel or SessaoStatus.Falha or SessaoStatus.AguardandoAvaliacao)
         {
             logger.LogInformation(
                 "Sessão {SessaoId} terminou em {Novo}. {Detalhe}",
