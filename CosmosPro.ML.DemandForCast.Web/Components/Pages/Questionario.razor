@@ -231,16 +231,11 @@
            le-se como "B1 — enunciado → 4 - Concordo", e nao como uma foto de botoes de
            radio em que so um esta marcado. *@
         <div class="apenas-impressao" data-test="impressao-respostas">
-            <h1 style="font-size:1.4rem;margin:0 0 0.25rem">Avaliação da comparação</h1>
-            <p style="margin:0 0 0.25rem">
-                Questionário &middot; @(_questionario?.EnviadoEm is { } e
-                    ? $"respondido em {e.ToLocalTime():dd/MM/yyyy 'às' HH:mm}"
-                    : "rascunho")
-            </p>
+            <h1 style="font-size:1.4rem;margin:0 0 0.25rem">Questionário de avaliação</h1>
             <p style="margin:0 0 1.25rem">
                 @if (_questionario?.EnviadoEm is { } enviado)
                 {
-                    <text>Respondido em @enviado.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</text>
+                    <text>Respondido em @enviado.ToLocalTime().ToString("dd/MM/yyyy 'às' HH:mm")</text>
                 }
                 else
                 {
