@@ -92,10 +92,20 @@ public static class QuestionarioCatalogo
     /// 2 = instrumento real (Questionário V3). A versão 1 foi o catálogo provisório que existiu
     /// enquanto o documento não estava disponível; nenhuma resposta foi coletada sob ela.
     /// 3 = Questionário V5 (Parte B de B1 a B12). 4 = Questionário V6, que removeu a antiga B6 e
-    /// renumerou as seguintes — ver o aviso de renumeração no doc da classe.
+    /// renumerou as seguintes — ver o aviso de renumeração no doc da classe. 5 = Questionário V7,
+    /// que reescreveu B3, B10 e B11 <b>sem remanejar código nenhum</b>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Este número não é o nome do instrumento, e não existe mapa entre os dois no código.</b>
+    /// "V3"/"V5"/"V6"/"V7" é a numeração do documento de quem conduz a pesquisa; houve um
+    /// <c>NomeDaVersao</c> aqui traduzindo um no outro, e ele existia só porque a tela mostrava
+    /// versão ao participante. Não mostra mais — o usuário final não vê versão em lugar nenhum, e
+    /// este campo é carimbo de procedência sem leitor. Se a análise precisar do nome, ele está
+    /// nesta lista.
     /// </para>
     /// </summary>
-    public const int Versao = 4;
+    public const int Versao = 5;
 
     /// <summary>
     /// Quantas execuções o comprador precisa ter <b>avaliado</b> (Seção G) antes de o
@@ -113,36 +123,6 @@ public static class QuestionarioCatalogo
     /// </para>
     /// </summary>
     public const int MinimoDeExecucoes = 2;
-
-    /// <summary>
-    /// Nome do instrumento correspondente a um número de catálogo — <c>4</c> devolve
-    /// <c>"V6"</c>.
-    ///
-    /// <para>
-    /// <b>Existe porque os dois números nunca bateram, e ninguém fora do código consegue
-    /// mapeá-los.</b> O contador aqui é uma sequência interna (1, 2, 3, 4); o instrumento se
-    /// chama V3, V5, V6, pelos nomes que quem conduz a pesquisa usa no documento. A tabulação
-    /// mostrava o contador sob o rótulo "Versão do questionário", e o patrocinador leu o número
-    /// e perguntou por que não era V6 (09/09/2026) — pergunta justa, porque a tela afirmava uma
-    /// versão que não é a que ele conhece.
-    /// </para>
-    ///
-    /// <para>
-    /// Número desconhecido devolve <c>"catálogo N"</c>, e não um palpite: resposta gravada sob
-    /// uma versão que este código não conhece existe de verdade — é o que acontece ao ler dado
-    /// antigo depois de um rollback —, e inventar um nome ali seria pior que admitir a lacuna.
-    /// </para>
-    /// </summary>
-    public static string NomeDaVersao(int versao) => versao switch
-    {
-        // 1 foi o catálogo provisório, que existiu enquanto o documento não estava disponível;
-        // nenhuma resposta foi coletada sob ele.
-        1 => "provisório",
-        2 => "V3",
-        3 => "V5",
-        4 => "V6",
-        _ => $"catálogo {versao}",
-    };
 
     /// <summary>
     /// Apresentação e termo de consentimento, exibidos <b>antes</b> do primeiro passo. Não é
@@ -279,8 +259,8 @@ public static class QuestionarioCatalogo
                     "com o método atualmente utilizado pela organização.", Likert),
 
                 new PerguntaDef("B3",
-                    "O artefacto fornece informações úteis para apoiar a tomada de decisão no " +
-                    "processo de reposição de stocks.", Likert),
+                    "Considero o artefacto útil para apoiar a tomada de decisão no processo de " +
+                    "reposição de stocks.", Likert),
 
                 new PerguntaDef("B4",
                     "Considero que o artefacto poderá contribuir para reduzir ruturas de stock e " +
@@ -295,12 +275,19 @@ public static class QuestionarioCatalogo
                 // que perguntava sobre coisas que o artefacto nao faz. Nao "restaure" -- a
                 // ausencia e deliberada, como a da A4.
                 //
-                // ATENCAO AO CODIGO: daqui para baixo todo codigo mudou de dono na V6, e este e o
-                // SEGUNDO remanejamento do instrumento. A afirmacao abaixo era B7 na V5 e agora e
-                // B6; a de uso diario foi B7 na V2, B12 na V5 e e B11 aqui. Respostas de versoes
-                // diferentes NAO podem ser agrupadas por codigo: agrupe por
+                // ATENCAO AO CODIGO: daqui para baixo todo codigo mudou de dono NA V6, que foi o
+                // SEGUNDO remanejamento do instrumento. A afirmacao abaixo era B7 na V5 e passou
+                // a B6; a de intencao de uso foi B7 na V2, B12 na V5 e e B11 desde a V6.
+                //
+                // A V7 NAO REMANEJOU NADA: mesmos onze codigos, mesma ordem, mesmos assuntos --
+                // ela so reescreveu os enunciados de B3, B10 e B11. E a primeira revisao que nao
+                // cria a armadilha de agregacao, e vale dizer porque o reflexo correto ao ver
+                // "V7" e desconfiar da comparacao entre versoes.
+                //
+                // O que continua valendo das duas primeiras: respostas de versoes diferentes NAO
+                // podem ser agrupadas por codigo quando o codigo mudou de dono -- agrupe por
                 // (VersaoCatalogo, Codigo). Cada resposta guarda o retrato do enunciado exibido,
-                // entao o registro individual continua correto -- o risco e so na agregacao, e ele
+                // entao o registro individual continua correto; o risco e so na agregacao, e ele
                 // nao da erro nenhum.
                 new PerguntaDef("B6",
                     "Considero que a utilização de Inteligência Artificial em conjunto com os " +
@@ -323,13 +310,18 @@ public static class QuestionarioCatalogo
                     "adequadas para apoiar as decisões de reposição de stocks.", Likert),
 
                 new PerguntaDef("B10",
-                    "As informações apresentadas pelo artefacto permitem compreender e avaliar " +
-                    "de forma clara as recomendações de compra geradas pela Inteligência " +
-                    "Artificial.", Likert),
+                    "As recomendações de compra geradas pela Inteligência Artificial são " +
+                    "apresentadas de forma clara e compreensível.", Likert),
 
+                // A V7 MUDOU O SENTIDO desta afirmacao, e nao so a redacao: saiu de potencial
+                // institucional ("este artefacto apresenta potencial para ser utilizado na
+                // operacao diaria da minha organizacao") para intencao de uso em PRIMEIRA
+                // PESSOA. Num instrumento de aceitacao de tecnologia e a intencao pessoal que se
+                // mede; a forma anterior permitia concordar alto sobre a empresa sem se
+                // comprometer.
                 new PerguntaDef("B11",
-                    "Considero que este artefacto apresenta potencial para ser utilizado na " +
-                    "operação diária da minha organização.", Likert),
+                    "Eu utilizaria este artefacto nas minhas atividades profissionais de apoio " +
+                    "à decisão de compras e reposição de stocks.", Likert),
             ]),
     ];
 

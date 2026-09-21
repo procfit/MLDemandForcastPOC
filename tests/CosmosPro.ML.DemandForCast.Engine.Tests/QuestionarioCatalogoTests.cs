@@ -117,7 +117,7 @@ public sealed class QuestionarioCatalogoTests
     [Fact]
     public void Parte_B_da_V6_tem_onze_afirmacoes_nos_codigos_do_documento()
     {
-        QuestionarioCatalogo.Versao.Should().Be(4, "V6 do Apendice A");
+        QuestionarioCatalogo.Versao.Should().Be(5, "V7 do Apendice A");
 
         var parteB = QuestionarioCatalogo.Perguntas
             .Where(p => p.Codigo.StartsWith('B'))
@@ -147,9 +147,18 @@ public sealed class QuestionarioCatalogoTests
             "a afirmacao sobre variaveis externas (sazonalidade, clima, epidemias) era a B6 da V5 e "
             + "saiu na V6: era a unica que perguntava sobre coisas que o artefacto nao faz");
 
-        QuestionarioCatalogo.Pergunta("B11")!.Texto.Should().Contain("operação diária",
-            "esta afirmacao foi B7 na V2, B12 na V5 e e B11 na V6 — e o caso concreto de codigo "
-            + "reaproveitado que impede agrupar respostas por codigo sozinho");
+        // A V7 TROCOU O SENTIDO desta afirmacao: de potencial institucional para INTENCAO DE USO
+        // em primeira pessoa. Travar "Eu utilizaria" e travar a mudanca que importa -- um
+        // instrumento de aceitacao mede intencao pessoal, e a forma anterior permitia concordar
+        // alto sobre a empresa sem se comprometer.
+        //
+        // O codigo B11 tambem e o caso concreto de codigo que muda de dono entre versoes: foi B7
+        // na V2, B12 na V5 e e B11 desde a V6. Por isso a analise agrupa por
+        // (VersaoCatalogo, Codigo), e nao por codigo solto.
+        QuestionarioCatalogo.Pergunta("B11")!.Texto.Should().StartWith("Eu utilizaria",
+            "a V7 poe a intencao de uso em primeira pessoa");
+        QuestionarioCatalogo.Pergunta("B11")!.Texto.Should().NotContain("operação diária",
+            "essa era a forma da V6, sobre a organizacao e nao sobre o participante");
     }
 
     /// <summary>
@@ -168,41 +177,6 @@ public sealed class QuestionarioCatalogoTests
             .And.NotContain("anônima")
             .And.NotContain("permita identificar");
         apresentacao.Should().Contain("confidencial", "o que se promete e confidencialidade");
-    }
-
-    /// <summary>
-    /// O contador do catálogo e o nome do instrumento são coisas diferentes, e a tela precisa
-    /// mostrar o nome.
-    ///
-    /// <para>
-    /// A tabulação exibia <c>4</c> sob o rótulo "Versão do questionário" e o patrocinador
-    /// perguntou por que não era V6 (09/09/2026) — pergunta justa: os dois números nunca
-    /// bateram, e ninguém fora deste código consegue mapear um no outro. Este teste trava o
-    /// mapa, porque errá-lo faria a tela afirmar uma versão do instrumento que não existe.
-    /// </para>
-    /// </summary>
-    [Fact]
-    public void Nome_da_versao_traduz_o_contador_no_nome_do_instrumento()
-    {
-        QuestionarioCatalogo.NomeDaVersao(2).Should().Be("V3");
-        QuestionarioCatalogo.NomeDaVersao(3).Should().Be("V5");
-        QuestionarioCatalogo.NomeDaVersao(4).Should().Be("V6");
-
-        QuestionarioCatalogo.NomeDaVersao(QuestionarioCatalogo.Versao).Should().Be("V6",
-            "o catalogo corrente e o V6; ao subir a Versao, acrescente o nome no mapa");
-    }
-
-    /// <summary>
-    /// Versão desconhecida admite a lacuna em vez de chutar. Resposta gravada sob uma versão
-    /// que este código não conhece existe de verdade — é o que se lê depois de um rollback —, e
-    /// inventar um nome ali seria pior que dizer que não se sabe.
-    /// </summary>
-    [Fact]
-    public void Versao_desconhecida_nao_inventa_nome()
-    {
-        QuestionarioCatalogo.NomeDaVersao(99).Should().Be("catálogo 99");
-        QuestionarioCatalogo.NomeDaVersao(1).Should().Be("provisório",
-            "a versao 1 foi o catalogo provisorio, sem nenhuma resposta coletada");
     }
 
     [Fact]
