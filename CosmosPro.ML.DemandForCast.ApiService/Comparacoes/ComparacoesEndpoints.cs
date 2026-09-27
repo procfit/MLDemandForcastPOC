@@ -1092,6 +1092,15 @@ internal static class ComparacoesEndpoints
                     x.DemandaDiaMl != null && x.DemandaDiaReal != null && x.DemandaDiaReal!.Value > 0m),
                 SomaDemandaRealDiaria = g.Sum(x =>
                     x.DemandaDiaMl != null && x.DemandaDiaReal != null ? x.DemandaDiaReal!.Value : 0m),
+                // Denominador do WAPE, separado da soma assinada acima de proposito. Uma
+                // devolucao liquida deixa DemandaDiaReal negativa, e a soma assinada como
+                // denominador produz WAPE NEGATIVO -- relatado em 27/09/2026 na sugestao
+                // 126479, onde UM item entre 2.951 levou a faixa inteira a -81.863,5%.
+                // ForecastMetrics sempre usou Sigma|real|; era esta ponta que divergia do motor.
+                SomaDemandaRealAbsoluta = g.Sum(x =>
+                    x.DemandaDiaMl != null && x.DemandaDiaReal != null
+                        ? Math.Abs(x.DemandaDiaReal!.Value)
+                        : 0m),
                 SomaErroAbsPbs = g.Sum(x =>
                     x.DemandaDiaMl != null && x.DemandaDiaReal != null
                         ? Math.Abs(x.DemandaDiaPbs - x.DemandaDiaReal!.Value)
@@ -1114,7 +1123,8 @@ internal static class ComparacoesEndpoints
         return [.. brutas
             .Select(f => new SessaoFatiaView(
                 rotulo(f.Chave), f.Itens, f.ComPrevisaoMl, f.ComVendaPositiva,
-                f.SomaDemandaRealDiaria, f.SomaErroAbsPbs, f.SomaErroAbsMl,
+                f.SomaDemandaRealDiaria, f.SomaDemandaRealAbsoluta,
+                f.SomaErroAbsPbs, f.SomaErroAbsMl,
                 f.VitoriasMl, f.VitoriasPbs))
             .OrderByDescending(f => f.Itens)
             .ThenBy(f => f.Chave, StringComparer.OrdinalIgnoreCase)];
@@ -1454,6 +1464,7 @@ internal sealed record SessaoFatiaView(
     int ItensComPrevisaoMl,
     int ItensComVendaPositiva,
     decimal SomaDemandaRealDiaria,
+    decimal SomaDemandaRealAbsoluta,
     decimal SomaErroAbsPbs,
     decimal SomaErroAbsMl,
     int VitoriasMl,

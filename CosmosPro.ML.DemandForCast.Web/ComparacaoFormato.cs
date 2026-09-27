@@ -55,6 +55,38 @@ public static class ComparacaoFormato
         return MaximoDeCasas;
     }
 
+    /// <summary>
+    /// Casas decimais para exibir <paramref name="valor"/> com <b>dois algarismos
+    /// significativos</b>, entre <see cref="MinimoDeCasas"/> e <see cref="MaximoDeCasas"/>.
+    ///
+    /// <para>
+    /// <b>Existe porque <see cref="CasasParaDistinguir"/> resolve outro problema.</b> Aquela
+    /// devolve a precisão que separa DOIS valores; esta, a que descreve UM valor sem mentir
+    /// sobre a magnitude. Aplicar a primeira à diferença entre o par foi o defeito relatado
+    /// em 27/09/2026 nos quadros da HYPERA e da EMS: 0,084892 e 0,087327 já se distinguem com
+    /// duas casas, então a diferença (0,002435) saía formatada com duas casas — <c>"0,00"</c>.
+    /// A tela mostrava dois números diferentes e afirmava, ao lado, que a diferença era nula.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>E por que a magnitude, e não uma busca por texto.</b> A tentativa óbvia — procurar a
+    /// primeira casa em que o número deixa de se parecer com zero — falha por
+    /// <i>arredondamento para cima</i>: 0,006190 com duas casas vira <c>"0,01"</c>, que não é
+    /// zero e passaria no teste, exibindo 62% a mais do que o valor real. A posição do
+    /// primeiro algarismo significativo não tem esse problema.
+    /// </para>
+    /// </summary>
+    public static int CasasParaDiferenca(double valor)
+    {
+        if (valor == 0 || !double.IsFinite(valor)) return MinimoDeCasas;
+
+        // floor(log10) dá a casa do primeiro algarismo significativo: −3 para 0,006190.
+        // Uma casa além dele é o segundo algarismo, que é o que fixa a magnitude.
+        var primeiroSignificativo = (int)Math.Floor(Math.Log10(Math.Abs(valor)));
+
+        return Math.Clamp(1 - primeiroSignificativo, MinimoDeCasas, MaximoDeCasas);
+    }
+
     /// <summary>Unidades por dia — o formato do MAE.</summary>
     public static string Unidades(double valor, int casas) =>
         valor.ToString($"N{casas}");

@@ -170,6 +170,7 @@ public sealed record SessaoFatiaResposta(
     int ItensComPrevisaoMl,
     int ItensComVendaPositiva,
     decimal SomaDemandaRealDiaria,
+    decimal SomaDemandaRealAbsoluta,
     decimal SomaErroAbsPbs,
     decimal SomaErroAbsMl,
     int VitoriasMl,

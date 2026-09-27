@@ -15,6 +15,62 @@ namespace CosmosPro.ML.DemandForCast.Web.Tests;
 /// </summary>
 public sealed class ComparacaoFormatoTests
 {
+    /// <summary>
+    /// Relatado pelo patrocinador em 27/09/2026 nos quadros da HYPERA e da EMS: os dois MAE
+    /// aparecem diferentes na linha e a diferença ao lado sai como <b>0,00</b>.
+    ///
+    /// <para>
+    /// É o efeito colateral da correção de 07/09: a precisão passou a ser derivada do PAR, e
+    /// aplicada à DIFERENÇA — que é, por construção, menor que a distância entre os dois
+    /// valores. HYPERA: 0,084892 e 0,087327 já se distinguem com 2 casas, logo a diferença
+    /// (0,002435) foi formatada com 2 casas e virou "0,00".
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData(0.084892, 0.087327)]   // HYPERA 126122
+    [InlineData(0.183260, 0.186788)]   // EMS 126479
+    // A EXELTIS 125700 NAO entra aqui de proposito: a diferenca dela (0,006190) aparecia
+    // como "0,01", nao como "0,00" -- a premissa deste teste nao vale para ela. O que ela
+    // exercita e a magnitude, e esta em Diferenca_sai_com_dois_algarismos_significativos.
+    public void Diferenca_visivel_nunca_e_exibida_como_zero(double pbs, double ml)
+    {
+        var diferenca = Math.Abs(pbs - ml);
+
+        // A premissa do defeito: a precisão que distingue o par zera a diferença.
+        var casasDoPar = ComparacaoFormato.CasasParaDistinguir(pbs, ml, ComparacaoFormato.Unidades);
+        ComparacaoFormato.Unidades(diferenca, casasDoPar).Should().Be(
+            ComparacaoFormato.Unidades(0, casasDoPar), "é este o defeito que se corrige");
+
+        var casas = ComparacaoFormato.CasasParaDiferenca(diferenca);
+
+        ComparacaoFormato.Unidades(diferenca, casas).Should().NotBe(
+            ComparacaoFormato.Unidades(0, casas),
+            "uma diferença que existe não pode ser exibida como zero");
+    }
+
+    /// <summary>Diferença de facto nula continua sendo zero — não se inventa precisão.</summary>
+    [Fact]
+    public void Diferenca_nula_fica_no_minimo_de_casas()
+    {
+        ComparacaoFormato.CasasParaDiferenca(0)
+            .Should().Be(ComparacaoFormato.MinimoDeCasas);
+    }
+
+    /// <summary>
+    /// A diferença é exibida com DOIS algarismos significativos. Só "deixar de ser zero"
+    /// arredondaria 0,006190 para "0,01" — 62% de erro num número que sustenta o veredito.
+    /// </summary>
+    [Theory]
+    [InlineData(0.006190, "0,0062")]
+    [InlineData(0.002435, "0,0024")]
+    [InlineData(0.003528, "0,0035")]
+    public void Diferenca_sai_com_dois_algarismos_significativos(double diferenca, string esperado)
+    {
+        var casas = ComparacaoFormato.CasasParaDiferenca(diferenca);
+
+        ComparacaoFormato.Unidades(diferenca, casas).Should().Be(esperado);
+    }
+
     [Fact]
     public void O_caso_relatado_deixa_de_mostrar_dois_numeros_iguais()
     {

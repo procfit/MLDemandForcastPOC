@@ -240,7 +240,8 @@ public sealed class ComparacoesApiClientTests
     {
         var fatia = new SessaoFatia(
             "A", Itens: 10, ItensComPrevisaoMl: 4, ItensComVendaPositiva: 4,
-            SomaDemandaRealDiaria: 20m, SomaErroAbsPbs: 2m, SomaErroAbsMl: 6m,
+            SomaDemandaRealDiaria: 20m, SomaDemandaRealAbsoluta: 20m,
+            SomaErroAbsPbs: 2m, SomaErroAbsMl: 6m,
             VitoriasMl: 1, VitoriasPbs: 3);
 
         fatia.MaePbs.Should().BeApproximately(0.5, 1e-9);
@@ -250,11 +251,69 @@ public sealed class ComparacoesApiClientTests
         fatia.MlPerde.Should().BeTrue();
     }
 
+    /// <summary>
+    /// Relatado pelo patrocinador em 27/09/2026, na sugestão 126479: a faixa "sem venda no
+    /// período" exibia <b>−81.863,5%</b> para o PBS e <b>−91.077,5%</b> para o ML sobre 1.662
+    /// registos.
+    ///
+    /// <para>
+    /// A causa era UM item com devolução líquida na janela: a demanda média dele ficou
+    /// negativa, os outros 1.661 somaram zero, e o denominador da faixa virou −0,1429 em vez
+    /// de zero. Dividir erro absoluto por isso produz percentual negativo — e WAPE negativo
+    /// não existe.
+    /// </para>
+    ///
+    /// <para>
+    /// A regra não é um epsilon arbitrário: <b>WAPE só é definido onde houve venda</b>, e a
+    /// fatia já sabe em quantos itens isso aconteceu. Sem item com venda positiva, não há
+    /// denominador — é ausência de medida, não medida ruim.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Fatia_sem_venda_positiva_nao_apura_wape_mesmo_com_devolucao()
+    {
+        var fatia = new SessaoFatia(
+            "sem venda no período", Itens: 1662, ItensComPrevisaoMl: 1662,
+            ItensComVendaPositiva: 0,
+            SomaDemandaRealDiaria: -0.1429m, SomaDemandaRealAbsoluta: 0.1429m,
+            SomaErroAbsPbs: 116.98m, SomaErroAbsMl: 130.15m,
+            VitoriasMl: 594, VitoriasPbs: 1055);
+
+        fatia.WapePbs.Should().BeNull("sem venda no período o WAPE não tem denominador");
+        fatia.WapeMl.Should().BeNull();
+        fatia.MlPerde.Should().BeFalse("sem métrica não há como afirmar que alguém perdeu");
+
+        // O que a faixa TEM de dizer continua definido: o erro médio por item e o placar.
+        fatia.MaePbs.Should().BeApproximately(116.98 / 1662, 1e-9);
+        fatia.MaeMl.Should().BeApproximately(130.15 / 1662, 1e-9);
+    }
+
+    /// <summary>
+    /// O denominador do WAPE é <c>Σ|real|</c>, como em <c>ForecastMetrics</c> — o motor de
+    /// cálculo e a tela têm de responder o mesmo número. Com a soma assinada, uma devolução
+    /// no meio de uma fatia que vendeu encolheria o denominador e inflaria o WAPE.
+    /// </summary>
+    [Fact]
+    public void Wape_usa_o_modulo_da_demanda_no_denominador_como_o_motor()
+    {
+        var fatia = new SessaoFatia(
+            "B", Itens: 10, ItensComPrevisaoMl: 10, ItensComVendaPositiva: 9,
+            SomaDemandaRealDiaria: 18m,          // 20 de venda menos 2 de devolução
+            SomaDemandaRealAbsoluta: 22m,        // 20 de venda mais 2 de devolução
+            SomaErroAbsPbs: 11m, SomaErroAbsMl: 5.5m,
+            VitoriasMl: 7, VitoriasPbs: 3);
+
+        fatia.WapePbs.Should().BeApproximately(11.0 / 22.0, 1e-9,
+            "o denominador é a soma dos módulos, não a soma assinada");
+        fatia.WapeMl.Should().BeApproximately(5.5 / 22.0, 1e-9);
+    }
+
     [Fact]
     public void Fatia_sem_item_medido_nao_apura_metrica_em_vez_de_apurar_zero()
     {
         var fatia = new SessaoFatia("C", Itens: 900, ItensComPrevisaoMl: 0, ItensComVendaPositiva: 0,
-            SomaDemandaRealDiaria: 0m, SomaErroAbsPbs: 0m, SomaErroAbsMl: 0m,
+            SomaDemandaRealDiaria: 0m, SomaDemandaRealAbsoluta: 0m,
+            SomaErroAbsPbs: 0m, SomaErroAbsMl: 0m,
             VitoriasMl: 0, VitoriasPbs: 0);
 
         fatia.MaePbs.Should().BeNull("zero erro sobre zero item não é acerto perfeito");
@@ -784,7 +843,8 @@ public sealed class ComparacoesApiClientTests
     private static SessaoFatia Global(
         decimal somaDemanda, decimal erroPbs, decimal erroMl, int medidos = 4) => new(
         Chave: null, Itens: 10, ItensComPrevisaoMl: medidos, ItensComVendaPositiva: medidos,
-        SomaDemandaRealDiaria: somaDemanda, SomaErroAbsPbs: erroPbs, SomaErroAbsMl: erroMl,
+        SomaDemandaRealDiaria: somaDemanda, SomaDemandaRealAbsoluta: somaDemanda,
+        SomaErroAbsPbs: erroPbs, SomaErroAbsMl: erroMl,
         VitoriasMl: 1, VitoriasPbs: 3);
 
     /// <summary>
@@ -799,8 +859,8 @@ public sealed class ComparacoesApiClientTests
             Itens: 30,
             PorCurva:
             [
-                new("A", 10, 4, 3, 20m, 2m, 6m, 1, 3),
-                new("B", 20, 6, 5, 30m, 3m, 3m, 4, 2),
+                new("A", 10, 4, 3, 20m, 20m, 2m, 6m, 1, 3),
+                new("B", 20, 6, 5, 30m, 30m, 3m, 3m, 4, 2),
             ],
             PorLoja: [],
             ItensComDecisaoMl: 0,

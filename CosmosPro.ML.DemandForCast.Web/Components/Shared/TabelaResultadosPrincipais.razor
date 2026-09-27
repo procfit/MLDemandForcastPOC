@@ -58,7 +58,12 @@
         var g = Analise.Global;
         var (curvasMl, curvasMedidas) = SessaoAnalise.MenorWape(Analise.PorCurva);
         var (lojasMl, lojasMedidas) = SessaoAnalise.MenorWape(Analise.PorLoja);
-        var semVenda = Analise.PorGiro?.FirstOrDefault(f => f.ItensComPrevisaoMl > 0 && f.SomaDemandaRealDiaria == 0m);
+        @* "Sem venda" e nenhum item ter vendido, e nao a soma dar exatamente zero: uma
+           devolucao liquida numa faixa em que ninguem vendeu deixa a soma negativa, a
+           igualdade falha e a faixa some da tabela enquanto a abertura por giro a lista.
+           Foi o que aconteceu na 126479 (27/09/2026). Mesmo portao do WAPE em SessaoFatia. *@
+        var semVenda = Analise.PorGiro?.FirstOrDefault(
+            f => f.ItensComPrevisaoMl > 0 && f.ItensComVendaPositiva == 0);
 
         return
         [
@@ -190,8 +195,12 @@
         if (pbs is not { } p || ml is not { } m) return "Menor é melhor";
         if (p == m) return "Menor é melhor — valores idênticos";
 
-        var casas = ComparacaoFormato.CasasParaDistinguir(pbs, ml, formatar);
-        return $"Menor é melhor — diferença de {formatar(Math.Abs(p - m), casas)}{unidade}";
+        @* A precisao sai da PROPRIA diferenca, nao do par: a que distingue dois valores e
+           menor que a que torna visivel a distancia entre eles, e usar uma pela outra fazia a
+           linha dizer "diferenca de 0,00" ao lado de dois numeros diferentes. *@
+        var diferenca = Math.Abs(p - m);
+        var casas = ComparacaoFormato.CasasParaDiferenca(diferenca);
+        return $"Menor é melhor — diferença de {formatar(diferenca, casas)}{unidade}";
     }
 
     private static string Un(decimal? v) => v is { } d ? $"{d:N0} un." : "sem cálculo do ML";

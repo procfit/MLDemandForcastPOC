@@ -854,6 +854,8 @@ public sealed record SessaoAnalise(
 
     public decimal SomaDemandaRealDiaria => PorCurva?.Sum(f => f.SomaDemandaRealDiaria) ?? 0m;
 
+    public decimal SomaDemandaRealAbsoluta => PorCurva?.Sum(f => f.SomaDemandaRealAbsoluta) ?? 0m;
+
     public decimal SomaErroAbsPbs => PorCurva?.Sum(f => f.SomaErroAbsPbs) ?? 0m;
 
     public decimal SomaErroAbsMl => PorCurva?.Sum(f => f.SomaErroAbsMl) ?? 0m;
@@ -871,7 +873,7 @@ public sealed record SessaoAnalise(
     /// </summary>
     public SessaoFatia Global => new(
         "total", Itens, ItensComPrevisaoMl, ItensComVendaPositiva, SomaDemandaRealDiaria,
-        SomaErroAbsPbs, SomaErroAbsMl, VitoriasMl, VitoriasPbs);
+        SomaDemandaRealAbsoluta, SomaErroAbsPbs, SomaErroAbsMl, VitoriasMl, VitoriasPbs);
 }
 
 /// <summary>
@@ -885,6 +887,7 @@ public sealed record SessaoFatia(
     int ItensComPrevisaoMl,
     int ItensComVendaPositiva,
     decimal SomaDemandaRealDiaria,
+    decimal SomaDemandaRealAbsoluta,
     decimal SomaErroAbsPbs,
     decimal SomaErroAbsMl,
     int VitoriasMl,
@@ -894,11 +897,28 @@ public sealed record SessaoFatia(
 
     public double? MaeMl => ItensComPrevisaoMl == 0 ? null : (double)SomaErroAbsMl / ItensComPrevisaoMl;
 
-    public double? WapePbs =>
-        SomaDemandaRealDiaria == 0m ? null : (double)(SomaErroAbsPbs / SomaDemandaRealDiaria);
+    /// <summary>
+    /// WAPE só existe onde houve venda, e o denominador é <c>Σ|real|</c> — o mesmo de
+    /// <c>ForecastMetrics</c>, para a tela e o motor não responderem números diferentes.
+    ///
+    /// <para>
+    /// <b>O portão é "nenhum item vendeu", e não "a soma deu zero".</b> Relatado em
+    /// 27/09/2026 na sugestão 126479: a faixa "sem venda no período" tinha 1.661 itens com
+    /// demanda exatamente zero e <b>um</b> com devolução líquida, então a soma assinada ficou
+    /// em −0,1429 em vez de zero. Isso furava a igualdade exata por dois lados ao mesmo
+    /// tempo: aqui produzia −81.863,5%, e na Seção A fazia a faixa sumir da tabela. Contar
+    /// itens com venda positiva não depende de epsilon e diz a coisa certa — sem venda, não
+    /// há denominador, e ausência de medida não é medida ruim.
+    /// </para>
+    /// </summary>
+    public double? WapePbs => Wape(SomaErroAbsPbs);
 
-    public double? WapeMl =>
-        SomaDemandaRealDiaria == 0m ? null : (double)(SomaErroAbsMl / SomaDemandaRealDiaria);
+    public double? WapeMl => Wape(SomaErroAbsMl);
+
+    private double? Wape(decimal somaErroAbs) =>
+        ItensComVendaPositiva == 0 || SomaDemandaRealAbsoluta <= 0m
+            ? null
+            : (double)(somaErroAbs / SomaDemandaRealAbsoluta);
 
     /// <summary>
     /// O ML erra mais que o ERP nesta fatia. Média global esconde regressão local

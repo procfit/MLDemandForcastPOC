@@ -539,6 +539,11 @@ public sealed class SessaoResultadoIntegrationTests(AppHostFixture fixture)
             + "WAPE dela fala de itens que venderam ou de itens que nao venderam");
 
         conteudo.PorCurva.Sum(f => f.SomaDemandaRealDiaria).Should().Be(2m);
+
+        // O denominador do WAPE viaja no fio como campo proprio. Com demanda toda positiva
+        // ele coincide com a soma assinada -- o que este assert guarda e a PRESENCA dele:
+        // sem o campo, o cliente derivaria WAPE nulo em toda fatia e a tela ficaria muda.
+        conteudo.PorCurva.Sum(f => f.SomaDemandaRealAbsoluta).Should().Be(2m);
         conteudo.PorCurva.Sum(f => f.SomaErroAbsPbs).Should().Be(0m, "o ERP previu 2 e a real foi 2");
         conteudo.PorCurva.Sum(f => f.SomaErroAbsMl).Should().Be(0.4m, "o ML previu 2,4 e a real foi 2");
         conteudo.PorCurva.Sum(f => f.VitoriasMl).Should().Be(0);
