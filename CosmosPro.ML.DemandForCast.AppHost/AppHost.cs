@@ -130,18 +130,32 @@ var engineDb = sqlServer.AddDatabase("engine");
 // de vendas, estoque, etc.). Persistido em volume; credenciais fixas via
 // ParameterResource (ver bloco de parameters acima).
 var minio = builder.AddMinioContainer("minio", minioAccessKey, minioSecretKey)
-                   // REGISTRY EXPLICITO: a MinIO tirou as imagens publicas do Docker Hub, e
-                   // `docker pull docker.io/minio/minio:<tag>` passou a responder "pull access
-                   // denied ... may require 'docker login'". A mesma tag continua publica no
-                   // quay.io, que e o registry que a propria MinIO publica.
+                   // IMAGEM ESPELHADA NO NOSSO GHCR, e nao puxada da MinIO. A MinIO fechou a
+                   // distribuicao publica das imagens em DOIS passos, com nove dias entre eles:
                    //
-                   // Medido em 19/09/2026: o CI quebrou inteiro sem uma linha de codigo ter
-                   // mudado no caminho do MinIO. Localmente nao aparecia -- a imagem ja estava
-                   // no cache do Docker da maquina, entao o `F5` seguia funcionando e so o
-                   // runner limpo via a falha. O sintoma tambem enganava: `minio` nao subia,
-                   // `apiservice` espera por ele, e o erro que chegava aos testes era
-                   // "apiservice nao ficou saudavel".
-                   .WithImageRegistry("quay.io")
+                   //   19/09/2026 -- Docker Hub passou a responder "pull access denied".
+                   //                 Movido para quay.io, que ainda servia a mesma tag.
+                   //   27/09/2026 -- quay.io passou a responder 401 "Requires authentication",
+                   //                 e `dl.min.io` passou a responder 410 Gone para o binario.
+                   //
+                   // Medido em 27/09: NENHUMA tag e mais publica em registry nenhum -- testadas
+                   // quatro, de 2022 a 2025, no Docker Hub, no quay e na bitnami. Nao e tag
+                   // revogada, e o repositorio inteiro que deixou de ser legivel sem conta.
+                   // Fixar uma tag antiga nao resolve porque nao sobrou artefato de nenhuma.
+                   //
+                   // O codigo continua AGPL-3.0 e publico no GitHub nesta mesma tag, entao o
+                   // uso e legitimo; o que acabou foi a hospedagem gratuita do binario pronto.
+                   // Em vez de compilar do fonte, espelhamos a imagem que ja estava em uso --
+                   // byte a byte a mesma que roda em producao desde 19/09.
+                   //
+                   // Por que isto encerra o problema: a tag e imutavel e o registry e nosso.
+                   // As duas quebras anteriores chegaram como "apiservice nao ficou saudavel",
+                   // porque o `apiservice` espera pelo `minio`, e nenhuma aparecia localmente
+                   // -- a imagem ja estava no cache da maquina, entao o `F5` seguia verde e so
+                   // o runner limpo via a falha.
+                   .WithImage("procfit/mldemandforcastpoc/minio")
+                   .WithImageTag("RELEASE.2025-09-07T16-13-09Z")
+                   .WithImageRegistry("ghcr.io")
                    .WithLifetime(ContainerLifetime.Persistent)
                    .WithDataVolume();
 

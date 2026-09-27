@@ -151,9 +151,26 @@ jobs:
     # baixam SQL Server e MinIO e esperam os bancos ficarem saudáveis, e num
     # runner frio isso é medido em minutos, não em segundos.
     timeout-minutes: 120
+    permissions:
+      contents: read
+      # LEITURA, não escrita: este job não publica nada. Precisa do escopo porque a
+      # imagem do MinIO passou a vir do nosso GHCR privado (ver o comentário no
+      # AppHost). Sem isto o `minio` não sobe, o `apiservice` fica esperando por ele,
+      # e o erro que chega aos testes é "apiservice não ficou saudável" — que não diz
+      # nada sobre registry e já custou meia hora duas vezes.
+      packages: read
 
     steps:
       - uses: actions/checkout@v4
+
+      # Antes de qualquer `docker pull`: o AppHost dos testes de integração e E2E sobe
+      # o MinIO a partir de ghcr.io/procfit/mldemandforcastpoc, que é privado.
+      - name: Autenticar no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Instalar .NET
         uses: actions/setup-dotnet@v4
@@ -239,7 +256,7 @@ jobs:
         run: |
           for imagem in \
             mcr.microsoft.com/mssql/server:2022-latest \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+            ghcr.io/procfit/mldemandforcastpoc/minio:RELEASE.2025-09-07T16-13-09Z
           do
             docker pull "$imagem" || true
           done
