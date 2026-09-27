@@ -58,17 +58,25 @@ public sealed class ComparacaoFormatoTests
 
     /// <summary>
     /// A diferença é exibida com DOIS algarismos significativos. Só "deixar de ser zero"
-    /// arredondaria 0,006190 para "0,01" — 62% de erro num número que sustenta o veredito.
+    /// arredondaria 0,006190 para 0,01 — 62% de erro num número que sustenta o veredito.
+    ///
+    /// <para>
+    /// A asserção é sobre o NÚMERO DE CASAS, e não sobre o texto formatado: o separador
+    /// decimal depende da cultura (vírgula aqui, ponto no runner invariante do CI), e um
+    /// literal com vírgula passa na máquina do desenvolvedor e quebra no CI. Mesma
+    /// armadilha anotada em <c>ComparisonApiClientTests</c>.
+    /// </para>
     /// </summary>
     [Theory]
-    [InlineData(0.006190, "0,0062")]
-    [InlineData(0.002435, "0,0024")]
-    [InlineData(0.003528, "0,0035")]
-    public void Diferenca_sai_com_dois_algarismos_significativos(double diferenca, string esperado)
+    [InlineData(0.006190, 4)]   // EXELTIS 125700 — o caso que "so nao ser zero" estragava
+    [InlineData(0.002435, 4)]   // HYPERA 126122
+    [InlineData(0.003528, 4)]   // EMS 126479
+    [InlineData(0.05, 3)]
+    [InlineData(1.5, 2)]        // piso: dois algarismos ja cabem no minimo de casas
+    [InlineData(1e-9, 6)]       // teto: precisao alem disso nao serve a leitura
+    public void Diferenca_sai_com_dois_algarismos_significativos(double diferenca, int casasEsperadas)
     {
-        var casas = ComparacaoFormato.CasasParaDiferenca(diferenca);
-
-        ComparacaoFormato.Unidades(diferenca, casas).Should().Be(esperado);
+        ComparacaoFormato.CasasParaDiferenca(diferenca).Should().Be(casasEsperadas);
     }
 
     [Fact]
